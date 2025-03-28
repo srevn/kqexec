@@ -264,6 +264,7 @@ bool config_parse_file(config_t *config, const char *filename) {
 			
 			current_watch->name = strdup(str + 1);
 			current_watch->recursive = true;  /* Default to recursive for directories */
+			current_watch->hidden = false;	/* Default to not including hidden files */
 			state = SECTION_ENTRY;
 			
 			continue;
@@ -309,6 +310,15 @@ bool config_parse_file(config_t *config, const char *filename) {
 					current_watch->recursive = false;
 				} else {
 					log_message(LOG_LEVEL_WARNING, "Invalid value for recursive at line %d: %s", 
+							  line_number, value);
+				}
+			} else if (strcasecmp(key, "hidden") == 0 || strcasecmp(key, "include_hidden") == 0) {
+				if (strcasecmp(value, "true") == 0 || strcmp(value, "1") == 0) {
+					current_watch->hidden = true;
+				} else if (strcasecmp(value, "false") == 0 || strcmp(value, "0") == 0) {
+					current_watch->hidden = false;
+				} else {
+					log_message(LOG_LEVEL_WARNING, "Invalid value for hidden at line %d: %s", 
 							  line_number, value);
 				}
 			} else {

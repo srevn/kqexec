@@ -27,6 +27,7 @@ typedef struct {
 	event_type_t events;    /* Events to monitor */
 	char *command;          /* Command to execute */
 	bool recursive;         /* Whether to recursively monitor (for directories) */
+	bool hidden;    		/* Whether to monitor hidden files/directories */
 } watch_entry_t;
 
 /* Global configuration structure */

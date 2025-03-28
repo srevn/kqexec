@@ -48,6 +48,8 @@ kqexec.conf.sample:
 	@echo "directory = /usr/local/etc" >> $@
 	@echo "events = MODIFY" >> $@
 	@echo "command = logger -p daemon.notice \"Configuration changed in %p\"" >> $@
+	@echo "recursive = true" >> $@
+	@echo "hidden = false" >> $@
 	@echo "" >> $@
 	@echo "[Log File]" >> $@
 	@echo "" >> $@
@@ -55,6 +57,15 @@ kqexec.conf.sample:
 	@echo "file = /var/log/kqexec.log" >> $@
 	@echo "events = MODIFY" >> $@
 	@echo "command = echo \"Log file %p was modified at %t by user %u (event: %e)\" >> /var/log/kqexec_activity.log" >> $@
+	@echo "" >> $@
+	@echo "[User Config]" >> $@
+	@echo "" >> $@
+	@echo "# Monitor user configuration directory including hidden files" >> $@
+	@echo "directory = /home/user/.config" >> $@
+	@echo "events = MODIFY,CREATE,DELETE" >> $@
+	@echo "command = logger -p user.notice \"User configuration changed in %p\"" >> $@
+	@echo "recursive = true" >> $@
+	@echo "hidden = true" >> $@
 
 # Generate sample configuration
 config: kqexec.conf.sample

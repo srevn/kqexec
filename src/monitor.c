@@ -161,10 +161,30 @@ static bool monitor_add_kqueue_watch(monitor_t *monitor, watch_info_t *info) {
 	return true;
 }
 
+/* Helper function to check if a path is hidden */
+static bool is_hidden_path(const char *path) {
+	/* Get the basename from the path */
+	const char *basename = strrchr(path, '/');
+	if (basename) {
+		basename++; /* Skip the slash */
+	} else {
+		basename = path; /* No slash, use the whole path */
+	}
+
+	/* Check if the basename starts with a dot (hidden) */
+	return basename[0] == '.';
+}
+
 /* Recursively add watches for a directory */
 static bool monitor_add_dir_recursive(monitor_t *monitor, const char *dir_path, watch_entry_t *watch, bool skip_existing) {
 	DIR *dir;
 	struct dirent *entry;
+	
+	/* Skip hidden directories unless hidden is true */
+	if (!watch->hidden && is_hidden_path(dir_path)) {
+		log_message(LOG_LEVEL_DEBUG, "Skipping hidden directory: %s", dir_path);
+		return true; /* Not an error, just skipping */
+	}
 	
 	dir = opendir(dir_path);
 	if (dir == NULL) {
@@ -207,7 +227,7 @@ static bool monitor_add_dir_recursive(monitor_t *monitor, const char *dir_path, 
 		}
 		
 		if (!skip_existing) {
-			log_message(LOG_LEVEL_INFO, "Added watch for %s", dir_path);
+			log_message(LOG_LEVEL_DEBUG, "Added watch for %s", dir_path);
 		} else {
 			log_message(LOG_LEVEL_DEBUG, "Added new directory to monitoring: %s", dir_path);
 		}
@@ -221,6 +241,12 @@ static bool monitor_add_dir_recursive(monitor_t *monitor, const char *dir_path, 
 			
 			/* Skip . and .. */
 			if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+				continue;
+			}
+			
+			/* Skip hidden files/directories unless hidden is true */
+			if (!watch->hidden && entry->d_name[0] == '.') {
+				log_message(LOG_LEVEL_DEBUG, "Skipping hidden file/directory: %s/%s", dir_path, entry->d_name);
 				continue;
 			}
 			
