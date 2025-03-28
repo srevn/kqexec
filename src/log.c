@@ -1,0 +1,95 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdarg.h>
+#include <string.h>
+#include <syslog.h>
+#include <time.h>
+#include "log.h"
+
+/* Global log level */
+static log_level_t current_log_level = LOG_LEVEL_NOTICE;
+
+/* Flag indicating whether syslog is initialized */
+static int syslog_initialized = 0;
+
+/* Initialize logging */
+void log_init(const char *ident, int facility, log_level_t level) {
+	current_log_level = level;
+	
+	/* Open syslog connection */
+	openlog(ident, LOG_PID, facility);
+	syslog_initialized = 1;
+}
+
+/* Close logging */
+void log_close(void) {
+	if (syslog_initialized) {
+		closelog();
+		syslog_initialized = 0;
+	}
+}
+
+/* Log a message */
+void log_message(log_level_t level, const char *format, ...) {
+	va_list args;
+	
+	/* Check if we should log this message */
+	if (level > current_log_level) {
+		return;
+	}
+	
+	va_start(args, format);
+	
+	if (syslog_initialized) {
+		vsyslog(level, format, args);
+	} else {
+		char timestamp[32];
+		time_t now;
+		struct tm tm_now;
+		
+		/* Get current time */
+		time(&now);
+		localtime_r(&now, &tm_now);
+		strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", &tm_now);
+		
+		/* Print to stderr */
+		fprintf(stderr, "[%s] ", timestamp);
+		
+		/* Print log level */
+		switch (level) {
+			case LOG_LEVEL_EMERG:
+				fprintf(stderr, "[EMERG] ");
+				break;
+			case LOG_LEVEL_ALERT:
+				fprintf(stderr, "[ALERT] ");
+				break;
+			case LOG_LEVEL_CRIT:
+				fprintf(stderr, "[CRIT] ");
+				break;
+			case LOG_LEVEL_ERR:
+				fprintf(stderr, "[ERROR] ");
+				break;
+			case LOG_LEVEL_WARNING:
+				fprintf(stderr, "[WARNING] ");
+				break;
+			case LOG_LEVEL_NOTICE:
+				fprintf(stderr, "[NOTICE] ");
+				break;
+			case LOG_LEVEL_INFO:
+				fprintf(stderr, "[INFO] ");
+				break;
+			case LOG_LEVEL_DEBUG:
+				fprintf(stderr, "[DEBUG] ");
+				break;
+			default:
+				fprintf(stderr, "[UNKNOWN] ");
+				break;
+		}
+		
+		/* Print message */
+		vfprintf(stderr, format, args);
+		fprintf(stderr, "\n");
+	}
+	
+	va_end(args);
+}

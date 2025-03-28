@@ -1,0 +1,24 @@
+#!/bin/sh
+#
+# PROVIDE: kqexec
+# REQUIRE: DAEMON
+# KEYWORD: shutdown
+#
+# Add the following line to /etc/rc.conf to enable kqexec:
+# kqexec_enable="YES"
+#
+
+. /etc/rc.subr
+
+name=kqexec
+rcvar=kqexec_enable
+
+load_rc_config $name
+
+: ${kqexec_enable:="NO"}
+: ${kqexec_config:="/usr/local/etc/kqexec.conf"}
+
+command="/usr/local/bin/kqexec"
+command_args="-d -c ${kqexec_config}"
+
+run_rc_command "$1"

@@ -1,0 +1,62 @@
+# Compiler and flags
+CC = cc
+CFLAGS = -Wall -Wextra -std=c99 -pedantic -g
+LDFLAGS =
+
+# Source files
+SRCS = src/main.c \
+	   src/config.c \
+	   src/monitor.c \
+	   src/command.c \
+	   src/daemon.c \
+	   src/log.c
+
+# Object files
+OBJS = $(SRCS:.c=.o)
+
+# Binary name
+TARGET = kqexec
+
+# Default target
+all: $(TARGET)
+
+# Compile source files
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# Link object files
+$(TARGET): $(OBJS)
+	$(CC) $(LDFLAGS) $(OBJS) -o $(TARGET)
+
+# Clean up
+clean:
+	rm -f $(OBJS) $(TARGET)
+
+# Install
+install: $(TARGET)
+	install -s $(TARGET) /usr/local/bin/
+	mkdir -p /usr/local/etc
+	[ -f /usr/local/etc/kqexec.conf ] || \
+		install -m 644 kqexec.conf.sample /usr/local/etc/kqexec.conf
+
+# Create sample configuration
+kqexec.conf.sample:
+	@echo "[Configuration]" > $@
+	@echo "" >> $@
+	@echo "# Monitor system config files" >> $@
+	@echo "directory = /usr/local/etc" >> $@
+	@echo "events = MODIFY" >> $@
+	@echo "command = logger -p daemon.notice \"Configuration changed in %p\"" >> $@
+	@echo "" >> $@
+	@echo "[Log File]" >> $@
+	@echo "" >> $@
+	@echo "# Monitor file" >> $@
+	@echo "file = /var/log/kqexec.log" >> $@
+	@echo "events = MODIFY" >> $@
+	@echo "command = echo \"Log file %p was modified at %t by user %u (event: %e)\" >> /var/log/kqexec_activity.log" >> $@
+
+# Generate sample configuration
+config: kqexec.conf.sample
+
+# Phony targets
+.PHONY: all clean install config
