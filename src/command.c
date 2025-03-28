@@ -6,6 +6,7 @@
 #include <pwd.h>
 #include <errno.h>
 #include <sys/wait.h>
+
 #include "command.h"
 #include "log.h"
 
@@ -17,6 +18,9 @@ static command_entry_t *command_hash[COMMAND_HASH_SIZE] = {NULL};
 
 /* Debounce time in milliseconds */
 static int debounce_time_ms = DEFAULT_DEBOUNCE_TIME_MS;
+
+/* Track if the last command was debounced */
+static bool last_command_debounced = false;
 
 /* Initialize command subsystem */
 void command_init(void) {
@@ -40,12 +44,24 @@ void command_cleanup(void) {
 	}
 }
 
+/* Function to check if the last command was debounced */
+bool command_was_debounced(void) {
+	bool result = last_command_debounced;
+	last_command_debounced = false;  /* Reset after read */
+	return result;
+}
+
 /* Set debounce time */
 void command_debounce_time(int milliseconds) {
 	if (milliseconds >= 0) {
 		debounce_time_ms = milliseconds;
 		log_message(LOG_LEVEL_INFO, "Command debounce time set to %d ms", debounce_time_ms);
 	}
+}
+
+/* Get debounce time */
+int command_get_debounce_time(void) {
+	return debounce_time_ms;
 }
 
 /* Calculate simple hash for a command key */
@@ -95,11 +111,13 @@ static bool should_execute_command(const char *path, event_type_t event_type, co
 			if (elapsed_ms < debounce_time_ms) {
 				log_message(LOG_LEVEL_DEBUG, "Debouncing command for %s (elapsed: %ld ms, required: %d ms)",
 						  path, elapsed_ms, debounce_time_ms);
+				last_command_debounced = true;  /* Set the debounce flag */
 				return false;
 			}
 			
 			/* Update last execution time */
 			entry->last_exec = now;
+			last_command_debounced = false;  /* Clear the debounce flag */
 			return true;
 		}
 		
@@ -111,6 +129,7 @@ static bool should_execute_command(const char *path, event_type_t event_type, co
 	entry = malloc(sizeof(command_entry_t));
 	if (entry == NULL) {
 		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for command entry");
+		last_command_debounced = false;  /* Clear the debounce flag */
 		return true; /* Execute anyway */
 	}
 	
@@ -127,6 +146,7 @@ static bool should_execute_command(const char *path, event_type_t event_type, co
 		prev->next = entry;
 	}
 	
+	last_command_debounced = false;  /* Clear the debounce flag */
 	return true;
 }
 
@@ -175,7 +195,7 @@ char *command_substitute_placeholders(const char *command, const file_event_t *e
 	}
 	
 	/* Substitute %t with the time */
-	localtime_r(&event->time.tv_sec, &tm);
+	localtime_r(&event->wall_time.tv_sec, &tm);
 	strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", &tm);
 	
 	while ((pos = strstr(result, "%t")) != NULL) {
@@ -236,27 +256,29 @@ char *command_substitute_placeholders(const char *command, const file_event_t *e
 
 /* Execute a command */
 bool command_execute(const watch_entry_t *watch, const file_event_t *event) {
-	pid_t pid;
-	char *command;
-	
-	if (watch == NULL || event == NULL) {
-		log_message(LOG_LEVEL_ERR, "Invalid arguments to command_execute");
-		return false;
-	}
-	
-	/* Substitute placeholders in the command */
-	command = command_substitute_placeholders(watch->command, event);
-	if (command == NULL) {
-		return false;
-	}
-	
-	/* Check if we should execute this command (debouncing) */
-	if (!should_execute_command(event->path, event->type, command)) {
-		free(command);
-		return true; /* Return true because debouncing is not an error */
-	}
-	
-	log_message(LOG_LEVEL_INFO, "Executing command: %s", command);
+    pid_t pid;
+    char *command;
+    
+    if (watch == NULL || event == NULL) {
+        log_message(LOG_LEVEL_ERR, "Invalid arguments to command_execute");
+        last_command_debounced = false;  /* Clear the debounce flag */
+        return false;
+    }
+    
+    /* Substitute placeholders in the command */
+    command = command_substitute_placeholders(watch->command, event);
+    if (command == NULL) {
+        last_command_debounced = false;  /* Clear the debounce flag */
+        return false;
+    }
+    
+    /* Check if we should execute this command (debouncing) */
+    if (!should_execute_command(event->path, event->type, command)) {
+        free(command);
+        return false;  /* Return false, but last_command_debounced will be set */
+    }
+    
+    log_message(LOG_LEVEL_INFO, "Executing command: %s", command);
 	
 	/* Fork a child process */
 	pid = fork();

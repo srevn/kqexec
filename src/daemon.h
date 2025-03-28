@@ -2,6 +2,7 @@
 #define DAEMON_H
 
 #include <stdbool.h>
+
 #include "config.h"
 
 /* Function prototypes */

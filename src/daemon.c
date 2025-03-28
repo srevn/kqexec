@@ -7,6 +7,7 @@
 #include <sys/types.h>
 #include <errno.h>
 #include <string.h>
+
 #include "daemon.h"
 #include "log.h"
 

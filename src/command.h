@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <time.h>
+
 #include "config.h"
 #include "monitor.h"
 
@@ -14,16 +15,16 @@
 
 /* Key structure for command execution tracking */
 typedef struct {
-	char *path;              	/* Path where the event occurred */
-	event_type_t event_type; 	/* Type of event */
-	char *command;           	/* Command that was executed */
+	char *path;              /* Path where the event occurred */
+	event_type_t event_type; /* Type of event */
+	char *command;           /* Command that was executed */
 } command_key_t;
 
 /* Command execution entry for debouncing */
 typedef struct command_entry {
-	command_key_t key;       	 /* Command identification key */
-	struct timespec last_exec; 	 /* Time of last execution */
-	struct command_entry *next;  /* Next entry in hash chain */
+	command_key_t key;          /* Command identification key */
+	struct timespec last_exec;  /* Time of last execution */
+	struct command_entry *next; /* Next entry in hash chain */
 } command_entry_t;
 
 /* Function prototypes */
@@ -32,6 +33,12 @@ char *command_substitute_placeholders(const char *command, const file_event_t *e
 
 /* Initialize command subsystem */
 void command_init(void);
+
+/* Get debounce time */
+int command_get_debounce_time(void);
+
+/* Indicates if the last command execution was skipped due to debouncing */
+bool command_was_debounced(void);
 
 /* Clean up command subsystem */
 void command_cleanup(void);

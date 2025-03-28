@@ -5,9 +5,11 @@
 #include <getopt.h>
 #include <signal.h>
 #include <syslog.h>
+
 #include "config.h"
 #include "monitor.h"
 #include "command.h"
+#include "states.h"
 #include "daemon.h"
 #include "log.h"
 
@@ -82,7 +84,7 @@ int main(int argc, char *argv[]) {
 		{0, 0, 0, 0}
 	};
 	
-	while ((c = getopt_long(argc, argv, "c:dl:b:h", long_options, &option_index)) != -1) {
+	while ((c = getopt_long(argc, argv, "c:dl:b:w:h", long_options, &option_index)) != -1) {
 		switch (c) {
 			case 'c':
 				config_file = optarg;
@@ -153,8 +155,11 @@ int main(int argc, char *argv[]) {
 		log_init(program_name, LOG_DAEMON, log_level, 0);
 	}
 	
-	/* Conmmand init */
+	/* Initialize command subsystem */
 	command_init();
+	
+	/* Initialize entity states */
+	entity_state_init();
 	
 	/* Create monitor */
 	monitor = monitor_create(config);
@@ -189,6 +194,7 @@ int main(int argc, char *argv[]) {
 	/* Clean up */
 	monitor_destroy(monitor);
 	config_destroy(config);
+	entity_state_cleanup();
 	command_cleanup();
 	log_close();
 	

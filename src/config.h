@@ -7,12 +7,10 @@
 /* Event types that can be monitored */
 typedef enum {
 	EVENT_NONE = 0,
-	EVENT_MODIFY = 1 << 0,
-	EVENT_DELETE = 1 << 1,
-	EVENT_CREATE = 1 << 2,
-	EVENT_ATTRIB = 1 << 3,
-	EVENT_RENAME = 1 << 4,
-	EVENT_ALL = EVENT_MODIFY | EVENT_DELETE | EVENT_CREATE | EVENT_ATTRIB | EVENT_RENAME
+	EVENT_CONTENT = 1 << 0,    /* File content changes (WRITE, EXTEND) */
+	EVENT_METADATA = 1 << 1,   /* Metadata changes (ATTRIB, LINK) */
+	EVENT_MODIFY = 1 << 2,     /* Modification events (CREATE, DELETE, RENAME) */
+	EVENT_ALL = EVENT_CONTENT | EVENT_METADATA | EVENT_MODIFY
 } event_type_t;
 
 /* Type of the watch entry */

@@ -9,8 +9,9 @@
 #include <sys/event.h>
 #include <sys/time.h>
 #include <sys/stat.h>
+
 #include "monitor.h"
-#include "command.h"
+#include "states.h"
 #include "log.h"
 
 /* Maximum number of events to process at once */
@@ -137,18 +138,15 @@ static bool monitor_add_kqueue_watch(monitor_t *monitor, watch_info_t *info) {
 	struct kevent changes[1];
 	int flags = 0;
 	
-	/* Set up flags based on events */
+	/* Set up flags based on consolidated events */
+	if (info->watch->events & EVENT_CONTENT) {
+		flags |= NOTE_WRITE | NOTE_EXTEND;
+	}
+	if (info->watch->events & EVENT_METADATA) {
+		flags |= NOTE_ATTRIB | NOTE_LINK;
+	}
 	if (info->watch->events & EVENT_MODIFY) {
-		flags |= NOTE_WRITE;
-	}
-	if (info->watch->events & EVENT_DELETE) {
-		flags |= NOTE_DELETE;
-	}
-	if (info->watch->events & EVENT_ATTRIB) {
-		flags |= NOTE_ATTRIB;
-	}
-	if (info->watch->events & EVENT_RENAME) {
-		flags |= NOTE_RENAME;
+		flags |= NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE;
 	}
 	
 	/* Register for events */
@@ -339,17 +337,19 @@ bool monitor_setup(monitor_t *monitor) {
 static event_type_t flags_to_event_type(uint32_t flags) {
 	event_type_t event = EVENT_NONE;
 	
-	if (flags & NOTE_WRITE) {
+	/* Content changes */
+	if (flags & (NOTE_WRITE | NOTE_EXTEND)) {
+		event |= EVENT_CONTENT;
+	}
+	
+	/* Metadata changes */
+	if (flags & (NOTE_ATTRIB | NOTE_LINK)) {
+		event |= EVENT_METADATA;
+	}
+	
+	/* Modification events */
+	if (flags & (NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE)) {
 		event |= EVENT_MODIFY;
-	}
-	if (flags & NOTE_DELETE) {
-		event |= EVENT_DELETE;
-	}
-	if (flags & NOTE_ATTRIB) {
-		event |= EVENT_ATTRIB;
-	}
-	if (flags & NOTE_RENAME) {
-		event |= EVENT_RENAME;
 	}
 	
 	return event;
@@ -358,7 +358,6 @@ static event_type_t flags_to_event_type(uint32_t flags) {
 /* Process events from kqueue */
 bool monitor_process_events(monitor_t *monitor) {
 	struct kevent events[MAX_EVENTS];
-	struct timespec timeout = { 1, 0 }; /* 1 second timeout */
 	int nev;
 	
 	if (monitor == NULL || monitor->kq < 0) {
@@ -367,7 +366,7 @@ bool monitor_process_events(monitor_t *monitor) {
 	}
 	
 	/* Wait for events */
-	nev = kevent(monitor->kq, NULL, 0, events, MAX_EVENTS, &timeout);
+	nev = kevent(monitor->kq, NULL, 0, events, MAX_EVENTS, NULL);
 	if (nev == -1) {
 		if (errno == EINTR) {
 			/* Interrupted, probably by a signal - just return */
@@ -393,16 +392,16 @@ bool monitor_process_events(monitor_t *monitor) {
 		
 		event.path = info->path;
 		event.type = flags_to_event_type(events[i].fflags);
-		clock_gettime(CLOCK_REALTIME, &event.time);
+		clock_gettime(CLOCK_MONOTONIC, &event.time);
+		clock_gettime(CLOCK_REALTIME, &event.wall_time);
 		event.user_id = getuid(); /* In a real application, we might want to get the actual user ID */
 		
-		/* Check if the event matches the watch's event mask */
-		if ((info->watch->events & event.type) != 0) {
-			/* Execute command */
-			if (!command_execute(info->watch, &event)) {
-				log_message(LOG_LEVEL_ERR, "Failed to execute command for %s", info->path);
-			}
-		}
+		/* Determine entity type from watch info */
+		entity_type_t entity_type = (info->watch->type == WATCH_FILE) ? 
+								  ENTITY_FILE : ENTITY_DIRECTORY;
+		
+		/* Process event */
+		process_event(info->watch, &event, entity_type);
 		
 		/* If the file was deleted, we need to re-add the watch */
 		if (events[i].fflags & NOTE_DELETE) {

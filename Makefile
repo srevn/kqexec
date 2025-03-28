@@ -1,6 +1,6 @@
 # Compiler and flags
 CC = cc
-CFLAGS = -Wall -Wextra -std=c99 -pedantic -g
+CFLAGS = -Wall -Wextra -std=c11 -pedantic -g
 LDFLAGS =
 
 # Source files
@@ -8,6 +8,7 @@ SRCS = src/main.c \
 	   src/config.c \
 	   src/monitor.c \
 	   src/command.c \
+	   src/states.c \
 	   src/daemon.c \
 	   src/log.c
 

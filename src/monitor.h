@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <sys/types.h>
+
 #include "config.h"
 
 /* Structure to hold monitoring context */
@@ -10,10 +11,11 @@ typedef struct monitor monitor_t;
 
 /* Structure for file/directory event */
 typedef struct {
-	char *path;             /* Path where event occurred */
-	event_type_t type;      /* Type of event */
-	struct timespec time;   /* Time of event */
-	uid_t user_id;          /* User ID associated with event */
+	char *path;             	/* Path where event occurred */
+	event_type_t type;      	/* Type of event */
+	struct timespec time;   	/* Time of event (MONOTONIC for internal use) */
+	struct timespec wall_time; 	/* Wall clock time (REALTIME for display) */
+	uid_t user_id;          	/* User ID associated with event */
 } file_event_t;
 
 /* Function prototypes */

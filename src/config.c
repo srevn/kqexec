@@ -3,6 +3,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
+
 #include "config.h"
 #include "log.h"
 
@@ -62,16 +63,12 @@ event_type_t config_parse_events(const char *events_str) {
 	while (token != NULL) {
 		char *trimmed_token = trim(token);
 		
-		if (strcasecmp(trimmed_token, "MODIFY") == 0) {
+		if (strcasecmp(trimmed_token, "CONTENT") == 0) {
+			events |= EVENT_CONTENT;
+		} else if (strcasecmp(trimmed_token, "METADATA") == 0) {
+			events |= EVENT_METADATA;
+		} else if (strcasecmp(trimmed_token, "MODIFY") == 0) {
 			events |= EVENT_MODIFY;
-		} else if (strcasecmp(trimmed_token, "DELETE") == 0) {
-			events |= EVENT_DELETE;
-		} else if (strcasecmp(trimmed_token, "CREATE") == 0) {
-			events |= EVENT_CREATE;
-		} else if (strcasecmp(trimmed_token, "ATTRIB") == 0) {
-			events |= EVENT_ATTRIB;
-		} else if (strcasecmp(trimmed_token, "RENAME") == 0) {
-			events |= EVENT_RENAME;
 		} else if (strcasecmp(trimmed_token, "ALL") == 0) {
 			events |= EVENT_ALL;
 		} else {
@@ -87,14 +84,28 @@ event_type_t config_parse_events(const char *events_str) {
 
 /* Convert event type to string representation */
 const char *event_type_to_string(event_type_t event) {
-	switch (event) {
-		case EVENT_MODIFY: return "MODIFY";
-		case EVENT_DELETE: return "DELETE";
-		case EVENT_CREATE: return "CREATE";
-		case EVENT_ATTRIB: return "ATTRIB";
-		case EVENT_RENAME: return "RENAME";
-		default: return "UNKNOWN";
+	if (event == EVENT_NONE) return "NONE";
+	
+	/* Handle composite event types by listing all that apply */
+	static char buffer[64];
+	buffer[0] = '\0';
+	
+	if (event & EVENT_CONTENT) {
+		strcat(buffer, "CONTENT ");
 	}
+	if (event & EVENT_METADATA) {
+		strcat(buffer, "METADATA ");
+	}
+	if (event & EVENT_MODIFY) {
+		strcat(buffer, "MODIFY ");
+	}
+	
+	/* Remove trailing space if any */
+	if (buffer[0] != '\0') {
+		buffer[strlen(buffer) - 1] = '\0';
+	}
+	
+	return buffer;
 }
 
 /* Create a new configuration structure */
