@@ -7,6 +7,7 @@
 #include <syslog.h>
 #include "config.h"
 #include "monitor.h"
+#include "command.h"
 #include "daemon.h"
 #include "log.h"
 
@@ -23,10 +24,11 @@ static monitor_t *g_monitor = NULL;
 static void print_usage(void) {
 	fprintf(stderr, "Usage: %s [options]\n", program_name);
 	fprintf(stderr, "Options:\n");
-	fprintf(stderr, "  -c, --config=FILE    Configuration file (default: %s)\n", DEFAULT_CONFIG_FILE);
-	fprintf(stderr, "  -d, --daemon         Run as daemon\n");
-	fprintf(stderr, "  -l, --loglevel=LEVEL Set log level (0-7, default: 5)\n");
-	fprintf(stderr, "  -h, --help           Print this help message\n");
+	fprintf(stderr, "  -c, --config=FILE      Configuration file (default: %s)\n", DEFAULT_CONFIG_FILE);
+	fprintf(stderr, "  -d, --daemon           Run as daemon\n");
+	fprintf(stderr, "  -l, --loglevel=LEVEL   Set log level (0-7, default: 5)\n");
+	fprintf(stderr, "  -b, --debounce=MS      Set command debounce time in milliseconds (default: 500)\n");
+	fprintf(stderr, "  -h, --help             Print this help message\n");
 }
 
 /* Signal handler */
@@ -75,11 +77,12 @@ int main(int argc, char *argv[]) {
 		{"config", required_argument, 0, 'c'},
 		{"daemon", no_argument, 0, 'd'},
 		{"loglevel", required_argument, 0, 'l'},
+		{"debounce", required_argument, 0, 'b'},
 		{"help", no_argument, 0, 'h'},
 		{0, 0, 0, 0}
 	};
 	
-	while ((c = getopt_long(argc, argv, "c:dl:h", long_options, &option_index)) != -1) {
+	while ((c = getopt_long(argc, argv, "c:dl:b:h", long_options, &option_index)) != -1) {
 		switch (c) {
 			case 'c':
 				config_file = optarg;
@@ -93,6 +96,9 @@ int main(int argc, char *argv[]) {
 					fprintf(stderr, "Invalid log level: %d (valid range: 0-7)\n", log_level);
 					return EXIT_FAILURE;
 				}
+				break;
+			case 'b':
+				command_debounce_time(atoi(optarg));
 				break;
 			case 'h':
 				print_usage();
@@ -147,6 +153,9 @@ int main(int argc, char *argv[]) {
 		log_init(program_name, LOG_DAEMON, log_level, 0);
 	}
 	
+	/* Conmmand init */
+	command_init();
+	
 	/* Create monitor */
 	monitor = monitor_create(config);
 	if (monitor == NULL) {
@@ -180,6 +189,7 @@ int main(int argc, char *argv[]) {
 	/* Clean up */
 	monitor_destroy(monitor);
 	config_destroy(config);
+	command_cleanup();
 	log_close();
 	
 	return EXIT_SUCCESS;
