@@ -12,9 +12,13 @@ static log_level_t current_log_level = LOG_LEVEL_NOTICE;
 /* Flag indicating whether syslog is initialized */
 static int syslog_initialized = 0;
 
+/* Flag indicating whether to use console output */
+static int console_output = 0;
+
 /* Initialize logging */
-void log_init(const char *ident, int facility, log_level_t level) {
+void log_init(const char *ident, int facility, log_level_t level, int use_console) {
 	current_log_level = level;
+	console_output = use_console;
 	
 	/* Open syslog connection */
 	openlog(ident, LOG_PID, facility);
@@ -40,9 +44,16 @@ void log_message(log_level_t level, const char *format, ...) {
 	
 	va_start(args, format);
 	
+	/* Always log to syslog if initialized */
 	if (syslog_initialized) {
-		vsyslog(level, format, args);
-	} else {
+		va_list syslog_args;
+		va_copy(syslog_args, args);
+		vsyslog(level, format, syslog_args);
+		va_end(syslog_args);
+	}
+	
+	/* Also log to console if requested */
+	if (console_output || !syslog_initialized) {
 		char timestamp[32];
 		time_t now;
 		struct tm tm_now;

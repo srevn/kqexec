@@ -111,7 +111,7 @@ int main(int argc, char *argv[]) {
 	}
 	
 	/* Initialize logging */
-	log_init(program_name, LOG_DAEMON, log_level);
+	log_init(program_name, LOG_DAEMON, log_level, !daemon_mode);
 	
 	/* Create configuration */
 	config = config_create();
@@ -141,6 +141,10 @@ int main(int argc, char *argv[]) {
 			log_close();
 			return EXIT_FAILURE;
 		}
+		
+		/* Re-initialize logging without console output after daemonizing */
+		log_close();
+		log_init(program_name, LOG_DAEMON, log_level, 0);
 	}
 	
 	/* Create monitor */

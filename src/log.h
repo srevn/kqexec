@@ -17,7 +17,7 @@ typedef enum {
 } log_level_t;
 
 /* Function prototypes */
-void log_init(const char *ident, int facility, log_level_t level);
+void log_init(const char *ident, int facility, log_level_t level, int use_console);
 void log_close(void);
 void log_message(log_level_t level, const char *format, ...);
 
