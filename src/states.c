@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <limits.h> 
 #include <sys/stat.h>
 #include <libgen.h>
 #include <unistd.h>
@@ -54,25 +55,115 @@ void entity_state_cleanup(void) {
 	entity_states = NULL;
 }
 
-/* Calculate hash for a path */
-static unsigned int hash_path(const char *path) {
+/* Initialize activity tracking for a new entity state */
+static void init_activity_tracking(entity_state_t *state, watch_entry_t *watch) {
+	state->activity_sample_count = 0;
+	state->activity_index = 0;
+	state->activity_in_progress = false;
+	state->watch = watch;  // Store watch reference for command association
+}
+
+/* Record a new event in the activity history */
+static void record_activity(entity_state_t *state, operation_type_t op) {
+	/* Store in circular buffer */
+	state->recent_activity[state->activity_index].timestamp = state->last_update;
+	state->recent_activity[state->activity_index].operation = op;
+	
+	/* Update circular buffer index */
+	state->activity_index = (state->activity_index + 1) % MAX_ACTIVITY_SAMPLES;
+	
+	/* Increment count up to the maximum */
+	if (state->activity_sample_count < MAX_ACTIVITY_SAMPLES) {
+		state->activity_sample_count++;
+	}
+	
+	/* Mark activity as in progress */
+	state->activity_in_progress = true;
+}
+
+/* Calculate time between last two activities in milliseconds */
+static long get_activity_interval_ms(entity_state_t *state) {
+	if (state->activity_sample_count < 2) {
+		return LONG_MAX;  /* No interval if fewer than 2 samples */
+	}
+	
+	/* Calculate indices of the two most recent samples */
+	int latest_idx = (state->activity_index + MAX_ACTIVITY_SAMPLES - 1) % MAX_ACTIVITY_SAMPLES;
+	int prev_idx = (latest_idx + MAX_ACTIVITY_SAMPLES - 1) % MAX_ACTIVITY_SAMPLES;
+	
+	/* Calculate time difference in milliseconds */
+	struct timespec *newer = &state->recent_activity[latest_idx].timestamp;
+	struct timespec *older = &state->recent_activity[prev_idx].timestamp;
+	
+	return (newer->tv_sec - older->tv_sec) * 1000 + 
+		   (newer->tv_nsec - older->tv_nsec) / 1000000;
+}
+
+/* Analyze activity to detect bursts by checking frequency of recent events */
+static bool is_activity_burst(entity_state_t *state) {
+	if (state->activity_sample_count < 2) {
+		return false;  /* Need at least 2 samples to detect a burst */
+	}
+	
+	/* Check if the interval between recent events is short (indicating a burst) */
+	long interval_ms = get_activity_interval_ms(state);
+	return interval_ms < QUIET_PERIOD_MS / 2;  /* Bursts have events close together */
+}
+
+/* Check if enough quiet time has passed since the last activity */
+bool is_quiet_period_elapsed(entity_state_t *state, struct timespec *now) {
+	if (state->activity_sample_count == 0) {
+		return true;  /* No activity recorded yet */
+	}
+	
+	/* Get most recent activity timestamp */
+	int latest_idx = (state->activity_index + MAX_ACTIVITY_SAMPLES - 1) % MAX_ACTIVITY_SAMPLES;
+	struct timespec *last_activity = &state->recent_activity[latest_idx].timestamp;
+	
+	/* Calculate time difference in milliseconds */
+	long elapsed_ms = (now->tv_sec - last_activity->tv_sec) * 1000 + 
+					  (now->tv_nsec - last_activity->tv_nsec) / 1000000;
+	
+	/* Determine appropriate quiet period based on entity type and burst detection */
+	long required_quiet_period = QUIET_PERIOD_MS;
+	
+	/* Use longer quiet period for directory operations with bursts of activity */
+	if (state->type == ENTITY_DIRECTORY && is_activity_burst(state)) {
+		required_quiet_period = DIR_QUIET_PERIOD_MS;
+		
+		/* Adaptive quiet period - the busier the directory, the longer we wait */
+		if (state->activity_sample_count == MAX_ACTIVITY_SAMPLES) {
+			required_quiet_period *= 1.5;  /* Even longer for very busy directories */
+		}
+	}
+	
+	/* Return true if enough quiet time has elapsed */
+	return elapsed_ms >= required_quiet_period;
+}
+
+/* Calculate hash for a path and watch entry combination */
+static unsigned int hash_path_watch(const char *path, watch_entry_t *watch) {
 	unsigned int hash = 0;
 	
+	/* Hash the path */
 	for (const char *p = path; *p; p++) {
 		hash = hash * 31 + *p;
 	}
+	
+	/* Incorporate the watch pointer for uniqueness */
+	hash = hash * 31 + (uintptr_t)watch;
 	
 	return hash % ENTITY_HASH_SIZE;
 }
 
 /* Get or create entity state */
-entity_state_t *get_entity_state(const char *path, entity_type_t type) {
-	unsigned int hash = hash_path(path);
+entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_entry_t *watch) {
+	unsigned int hash = hash_path_watch(path, watch);
 	entity_state_t *state = entity_states[hash];
 	
-	/* Look for existing state */
+	/* Look for existing state matching both path AND watch */
 	while (state) {
-		if (strcmp(state->path, path) == 0) {
+		if (strcmp(state->path, path) == 0 && state->watch == watch) {
 			/* Update entity type if it was unknown */
 			if (state->type == ENTITY_UNKNOWN && type != ENTITY_UNKNOWN) {
 				state->type = type;
@@ -96,6 +187,7 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type) {
 	}
 	
 	state->type = type;
+	state->watch = watch;  /* Store watch entry reference */
 	
 	/* Initialize state */
 	struct stat st;
@@ -104,6 +196,9 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type) {
 	/* Set default timestamps */
 	clock_gettime(CLOCK_MONOTONIC, &state->last_update);
 	clock_gettime(CLOCK_REALTIME, &state->wall_time);
+	
+	/* Initialize activity tracking */
+	init_activity_tracking(state, watch);
 	
 	/* Initialize to zero command time */
 	state->last_command_time = 0;
@@ -199,18 +294,32 @@ event_type_t operation_to_event_type(operation_type_t op) {
 /* Check if command should be executed based on debouncing rules */
 bool should_execute_command(entity_state_t *state, operation_type_t op, int default_debounce_ms) {
 	struct timespec now;
-	long elapsed_ms;
 	
 	/* Get current time */
 	clock_gettime(CLOCK_MONOTONIC, &now);
 	
-	/* Calculate time since last command */
-	elapsed_ms = (now.tv_sec - state->last_command_time) * 1000;
+	/* Record this activity */
+	record_activity(state, op);
 	
-	/* Different debounce times for different operations */
-	int debounce_ms = default_debounce_ms;
+	/* For directory content operations, enforce a quiet period */
+	if (op == OP_DIR_CONTENT_CHANGED) {
+		/* If we're still detecting activity, don't execute yet */
+		if (!is_quiet_period_elapsed(state, &now)) {
+			log_message(LOG_LEVEL_DEBUG, "Activity in progress for %s, deferring command execution",
+					  state->path);
+			return false;
+		}
+		
+		/* Quiet period has elapsed, mark activity as complete */
+		state->activity_in_progress = false;
+	}
+	
+	/* Continue with standard debounce logic */
+	long elapsed_ms = (now.tv_sec - state->last_command_time) * 1000;
 	
 	/* Adjust debounce based on operation importance */
+	int debounce_ms = default_debounce_ms;
+	
 	switch (op) {
 		case OP_FILE_DELETED:
 		case OP_DIR_DELETED:
@@ -252,13 +361,11 @@ bool process_event(watch_entry_t *watch, file_event_t *event, entity_type_t enti
 	}
 	
 	/* Log the incoming event */
-	log_message(LOG_LEVEL_DEBUG, "Processing event for %s (entity_type: %s, event_type: %s)", 
-			   event->path, 
-			   entity_type == ENTITY_FILE ? "FILE" : "DIRECTORY", 
-			   event_type_to_string(event->type));
+	log_message(LOG_LEVEL_DEBUG, "Processing event for %s (watch: %s, event_type: %s)", 
+			   event->path, watch->name, event_type_to_string(event->type));
 	
-	/* Get entity state */
-	entity_state_t *state = get_entity_state(event->path, entity_type);
+	/* Get entity state - now also passing the watch entry */
+	entity_state_t *state = get_entity_state(event->path, entity_type, watch);
 	if (state == NULL) {
 		log_message(LOG_LEVEL_ERR, "Failed to get entity state for %s", event->path);
 		return false;
@@ -270,13 +377,15 @@ bool process_event(watch_entry_t *watch, file_event_t *event, entity_type_t enti
 	
 	/* Determine operation type */
 	operation_type_t op = determine_operation(state, event->type);
-	log_message(LOG_LEVEL_DEBUG, "Determined operation %d for %s", op, event->path);
 	
 	/* If no operation detected, skip */
 	if (op == OP_NONE) {
 		log_message(LOG_LEVEL_DEBUG, "No operation detected for %s", event->path);
 		return false;
 	}
+	
+	log_message(LOG_LEVEL_DEBUG, "Determined operation %d for %s (watch: %s)", 
+			   op, event->path, watch->name);
 	
 	/* Convert operation to event type */
 	event_type_t event_type = operation_to_event_type(op);
@@ -300,8 +409,8 @@ bool process_event(watch_entry_t *watch, file_event_t *event, entity_type_t enti
 		};
 		
 		/* Execute command */
-		log_message(LOG_LEVEL_INFO, "Executing command for %s (operation: %d)", 
-				   state->path, op);
+		log_message(LOG_LEVEL_INFO, "Executing command for %s (watch: %s, operation: %d)", 
+				   state->path, watch->name, op);
 		bool result = command_execute(watch, &synthetic_event);
 		
 		if (result) {

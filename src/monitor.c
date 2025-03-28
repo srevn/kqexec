@@ -11,6 +11,7 @@
 #include <sys/stat.h>
 
 #include "monitor.h"
+#include "command.h"
 #include "states.h"
 #include "log.h"
 
@@ -173,6 +174,21 @@ static bool is_hidden_path(const char *path) {
 
 	/* Check if the basename starts with a dot (hidden) */
 	return basename[0] == '.';
+}
+
+/* Check if a path is contained within a watch path */
+static bool is_path_in_watch(const char *path, const char *watch_path) {
+	size_t watch_len = strlen(watch_path);
+	
+	/* Check if the path starts with the watch path */
+	if (strncmp(path, watch_path, watch_len) == 0) {
+		/* Make sure it's a complete match or the watch path is followed by a slash */
+		if (path[watch_len] == '\0' || path[watch_len] == '/') {
+			return true;
+		}
+	}
+	
+	return false;
 }
 
 /* Recursively add watches for a directory */
@@ -394,18 +410,116 @@ static event_type_t flags_to_event_type(uint32_t flags) {
 	return event;
 }
 
+/* Process deferred directory scans after quiet periods */
+static void process_deferred_dir_scans(monitor_t *monitor) {
+	struct timespec now;
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	
+	/* Tracking variables for debugging */
+	int total_dir_watches = 0;
+	int watches_with_activity = 0;
+	int commands_executed = 0;
+	
+	/* Process watches in order - this allows us to execute commands in a predictable order */
+	for (int i = 0; i < monitor->config->watch_count; i++) {
+		watch_entry_t *watch = monitor->config->watches[i];
+		
+		/* Skip non-directory watches */
+		if (watch->type != WATCH_DIRECTORY) {
+			continue;
+		}
+		
+		total_dir_watches++;
+		
+		/* Get the entity state for this directory */
+		entity_state_t *state = get_entity_state(watch->path, ENTITY_DIRECTORY, watch);
+		if (!state) {
+			log_message(LOG_LEVEL_WARNING, "Failed to get entity state for %s (watch: %s)", 
+					  watch->path, watch->name);
+			continue;
+		}
+		
+		/* Log the state we found */
+		log_message(LOG_LEVEL_DEBUG, 
+				  "Checking deferred watch %s: path=%s, in_progress=%s", 
+				  watch->name, watch->path, 
+				  state->activity_in_progress ? "true" : "false");
+		
+		/* Check if this directory has deferred activity */
+		if (state->activity_in_progress) {
+			watches_with_activity++;
+			
+			/* Check if quiet period has elapsed */
+			if (is_quiet_period_elapsed(state, &now)) {
+				log_message(LOG_LEVEL_INFO, 
+						  "Quiet period elapsed for %s (watch: %s), processing deferred events", 
+						  watch->path, watch->name);
+				
+				/* Mark activity as complete */
+				state->activity_in_progress = false;
+				
+				/* For recursive directories, scan for new entries */
+				if (watch->recursive) {
+					log_message(LOG_LEVEL_DEBUG, "Scanning directory %s for new entries", watch->path);
+					monitor_add_dir_recursive(monitor, watch->path, watch, true);  /* true = skip existing */
+				}
+				
+				/* Create synthetic event for command execution */
+				file_event_t synthetic_event = {
+					.path = state->path,
+					.type = EVENT_CONTENT,  /* Directory content change */
+					.time = state->last_update,
+					.wall_time = state->wall_time,
+					.user_id = getuid()
+				};
+				
+				/* Execute command */
+				log_message(LOG_LEVEL_INFO, "Executing deferred command for %s (watch: %s) after quiet period", 
+						  watch->path, watch->name);
+				
+				if (command_execute(watch, &synthetic_event)) {
+					commands_executed++;
+					log_message(LOG_LEVEL_INFO, "Command execution successful");
+				} else {
+					log_message(LOG_LEVEL_WARNING, "Command execution failed");
+				}
+				
+				/* Reset state flags after execution */
+				state->content_changed = false;
+				state->metadata_changed = false;
+				state->structure_changed = false;
+			} else {
+				log_message(LOG_LEVEL_DEBUG, "Quiet period not yet elapsed for %s (watch: %s)", 
+						  watch->path, watch->name);
+			}
+		}
+	}
+	
+	/* Log summary of deferred processing */
+	if (watches_with_activity > 0 || commands_executed > 0) {
+		log_message(LOG_LEVEL_DEBUG, 
+				  "Deferred processing summary: total_dir_watches=%d, with_activity=%d, commands_executed=%d",
+				  total_dir_watches, watches_with_activity, commands_executed);
+	}
+}
+
 /* Process events from kqueue */
 bool monitor_process_events(monitor_t *monitor) {
 	struct kevent events[MAX_EVENTS];
 	int nev;
+	struct timespec timeout;
 	
 	if (monitor == NULL || monitor->kq < 0) {
 		log_message(LOG_LEVEL_ERR, "Invalid monitor state");
 		return false;
 	}
 	
-	/* Wait for events */
-	nev = kevent(monitor->kq, NULL, 0, events, MAX_EVENTS, NULL);
+	/* Set timeout for kevent to be responsive but not too CPU-intensive */
+	timeout.tv_sec = 0;
+	timeout.tv_nsec = 100000000;  /* 100ms timeout */
+	
+	/* Wait for events with timeout */
+	nev = kevent(monitor->kq, NULL, 0, events, MAX_EVENTS, &timeout);
 	if (nev == -1) {
 		if (errno == EINTR) {
 			/* Interrupted, probably by a signal - just return */
@@ -433,33 +547,51 @@ bool monitor_process_events(monitor_t *monitor) {
 		event.type = flags_to_event_type(events[i].fflags);
 		clock_gettime(CLOCK_MONOTONIC, &event.time);
 		clock_gettime(CLOCK_REALTIME, &event.wall_time);
-		event.user_id = getuid(); /* In a real application, we might want to get the actual user ID */
+		event.user_id = getuid();
 		
 		/* Determine entity type from watch info */
 		entity_type_t entity_type = (info->watch->type == WATCH_FILE) ? 
 								  ENTITY_FILE : ENTITY_DIRECTORY;
 		
-		/* Process event */
-		process_event(info->watch, &event, entity_type);
+		/* Track if we've processed this as a direct watch or parent watch */
+		bool direct_processed = false;
+		bool parent_match_found = false;
 		
-		/* Special handling for directory content changes - scan for new entries */
-		if (entity_type == ENTITY_DIRECTORY && 
-			(events[i].fflags & NOTE_WRITE) &&  /* Directory content changed */
-			info->watch->recursive) {
+		/* Process for all parent watches that match this path */
+		for (int j = 0; j < monitor->config->watch_count; j++) {
+			watch_entry_t *watch = monitor->config->watches[j];
 			
-			/* Check if we should scan (debounce) */
-			entity_state_t *state = get_entity_state(info->path, entity_type);
-			if (state && should_execute_command(state, OP_DIR_CONTENT_CHANGED, 100)) {
-				/* Delay slightly to allow file system to stabilize */
-				struct timespec delay = {0, 50000000};  /* 50 ms */
-				nanosleep(&delay, NULL);
+			/* Check if this path matches direct watch (exact path match) */
+			if (strcmp(watch->path, event.path) == 0) {
+				log_message(LOG_LEVEL_DEBUG, "Processing direct event for %s (watch: %s)", 
+						  event.path, watch->name);
+				process_event(watch, &event, entity_type);
+				direct_processed = true;
+				continue;
+			}
+			
+			/* Check for parent directory relationship */
+			if (watch->type == WATCH_DIRECTORY && is_path_in_watch(event.path, watch->path)) {
+				parent_match_found = true;
+				log_message(LOG_LEVEL_DEBUG, "Found parent watch for event in %s: %s (path: %s)", 
+						  event.path, watch->name, watch->path);
 				
-				log_message(LOG_LEVEL_DEBUG, "Directory content changed, scanning for new entries: %s", info->path);
-				monitor_add_dir_recursive(monitor, info->path, info->watch, true);  /* true = skip existing */
+				/* Create a modified event with the watch path (not the actual event path) */
+				file_event_t parent_event = event;
+				parent_event.path = watch->path;  /* Use the watch path for parent directory */
+				
+				/* Process event for this parent watch */
+				process_event(watch, &parent_event, ENTITY_DIRECTORY);
 			}
 		}
 		
-		/* If the file was deleted, we need to re-add the watch */
+		/* If it's a direct event for the watch that received it and wasn't processed yet */
+		if (!direct_processed && !parent_match_found) {
+			/* Process it for the direct watch that received it */
+			process_event(info->watch, &event, entity_type);
+		}
+		
+		/* Handle file deletion if needed */
 		if (events[i].fflags & NOTE_DELETE) {
 			/* Close the file descriptor */
 			close(info->wd);
@@ -479,6 +611,9 @@ bool monitor_process_events(monitor_t *monitor) {
 			}
 		}
 	}
+	
+	/* Always process deferred directory scans */
+	process_deferred_dir_scans(monitor);
 	
 	return true;
 }

@@ -6,6 +6,9 @@
 
 #include "config.h"
 
+/* Maximum number of watches */
+#define MAX_WATCHES 128
+
 /* Structure to hold monitoring context */
 typedef struct monitor monitor_t;
 
