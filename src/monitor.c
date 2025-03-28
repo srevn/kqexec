@@ -162,7 +162,7 @@ static bool monitor_add_kqueue_watch(monitor_t *monitor, watch_info_t *info) {
 }
 
 /* Recursively add watches for a directory */
-static bool monitor_add_dir_recursive(monitor_t *monitor, const char *dir_path, watch_entry_t *watch) {
+static bool monitor_add_dir_recursive(monitor_t *monitor, const char *dir_path, watch_entry_t *watch, bool skip_existing) {
 	DIR *dir;
 	struct dirent *entry;
 	
@@ -173,36 +173,44 @@ static bool monitor_add_dir_recursive(monitor_t *monitor, const char *dir_path, 
 		return false;
 	}
 	
-	/* First, add a watch for the directory itself */
-	int fd = open(dir_path, O_RDONLY);
-	if (fd == -1) {
-		log_message(LOG_LEVEL_ERR, "Failed to open %s: %s", 
-				  dir_path, strerror(errno));
-		closedir(dir);
-		return false;
-	}
-	
-	watch_info_t *info = calloc(1, sizeof(watch_info_t));
-	if (info == NULL) {
-		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for watch info");
-		close(fd);
-		closedir(dir);
-		return false;
-	}
-	
-	info->wd = fd;
-	info->path = strdup(dir_path);
-	info->watch = watch;
-	
-	if (!monitor_add_watch_info(monitor, info)) {
-		watch_info_destroy(info);
-		closedir(dir);
-		return false;
-	}
-	
-	if (!monitor_add_kqueue_watch(monitor, info)) {
-		closedir(dir);
-		return false;
+	/* First, add a watch for the directory itself, unless we're skipping existing and it's already monitored */
+	if (!skip_existing || monitor_find_watch_info_by_path(monitor, dir_path) == NULL) {
+		int fd = open(dir_path, O_RDONLY);
+		if (fd == -1) {
+			log_message(LOG_LEVEL_ERR, "Failed to open %s: %s", 
+					  dir_path, strerror(errno));
+			closedir(dir);
+			return false;
+		}
+		
+		watch_info_t *info = calloc(1, sizeof(watch_info_t));
+		if (info == NULL) {
+			log_message(LOG_LEVEL_ERR, "Failed to allocate memory for watch info");
+			close(fd);
+			closedir(dir);
+			return false;
+		}
+		
+		info->wd = fd;
+		info->path = strdup(dir_path);
+		info->watch = watch;
+		
+		if (!monitor_add_watch_info(monitor, info)) {
+			watch_info_destroy(info);
+			closedir(dir);
+			return false;
+		}
+		
+		if (!monitor_add_kqueue_watch(monitor, info)) {
+			closedir(dir);
+			return false;
+		}
+		
+		if (!skip_existing) {
+			log_message(LOG_LEVEL_INFO, "Added watch for %s", dir_path);
+		} else {
+			log_message(LOG_LEVEL_DEBUG, "Added new directory to monitoring: %s", dir_path);
+		}
 	}
 	
 	/* If recursive monitoring is enabled, process subdirectories */
@@ -218,6 +226,11 @@ static bool monitor_add_dir_recursive(monitor_t *monitor, const char *dir_path, 
 			
 			snprintf(path, sizeof(path), "%s/%s", dir_path, entry->d_name);
 			
+			/* Skip if we're ignoring existing paths and this one is already monitored */
+			if (skip_existing && monitor_find_watch_info_by_path(monitor, path) != NULL) {
+				continue;
+			}
+			
 			if (stat(path, &st) == -1) {
 				log_message(LOG_LEVEL_WARNING, "Failed to stat %s: %s", 
 						  path, strerror(errno));
@@ -226,7 +239,7 @@ static bool monitor_add_dir_recursive(monitor_t *monitor, const char *dir_path, 
 			
 			if (S_ISDIR(st.st_mode)) {
 				/* Recursively add subdirectory */
-				if (!monitor_add_dir_recursive(monitor, path, watch)) {
+				if (!monitor_add_dir_recursive(monitor, path, watch, skip_existing)) {
 					log_message(LOG_LEVEL_WARNING, "Failed to add recursive watch for %s", path);
 					/* Continue with other directories */
 				}
@@ -266,7 +279,7 @@ bool monitor_add_watch(monitor_t *monitor, watch_entry_t *watch) {
 			watch->type = WATCH_DIRECTORY;
 		}
 		
-		return monitor_add_dir_recursive(monitor, watch->path, watch);
+		return monitor_add_dir_recursive(monitor, watch->path, watch, false);  // false = don't skip existing
 	} 
 	/* Handle regular files */
 	else if (S_ISREG(st.st_mode)) {
@@ -402,6 +415,23 @@ bool monitor_process_events(monitor_t *monitor) {
 		
 		/* Process event */
 		process_event(info->watch, &event, entity_type);
+		
+		/* Special handling for directory content changes - scan for new entries */
+		if (entity_type == ENTITY_DIRECTORY && 
+			(events[i].fflags & NOTE_WRITE) &&  /* Directory content changed */
+			info->watch->recursive) {
+			
+			/* Check if we should scan (debounce) */
+			entity_state_t *state = get_entity_state(info->path, entity_type);
+			if (state && should_execute_command(state, OP_DIR_CONTENT_CHANGED, 100)) {
+				/* Delay slightly to allow file system to stabilize */
+				struct timespec delay = {0, 50000000};  /* 50 ms */
+				nanosleep(&delay, NULL);
+				
+				log_message(LOG_LEVEL_DEBUG, "Directory content changed, scanning for new entries: %s", info->path);
+				monitor_add_dir_recursive(monitor, info->path, info->watch, true);  /* true = skip existing */
+			}
+		}
 		
 		/* If the file was deleted, we need to re-add the watch */
 		if (events[i].fflags & NOTE_DELETE) {
