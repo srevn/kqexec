@@ -108,17 +108,6 @@ static watch_info_t *monitor_find_watch_info_by_path(monitor_t *monitor, const c
 	return NULL;
 }
 
-/* Find a watch info entry by watch descriptor */
-static watch_info_t *monitor_find_watch_info_by_wd(monitor_t *monitor, int wd) {
-	for (int i = 0; i < monitor->watch_count; i++) {
-		if (monitor->watches[i]->wd == wd) {
-			return monitor->watches[i];
-		}
-	}
-	
-	return NULL;
-}
-
 /* Set up kqueue monitoring for a file or directory */
 static bool monitor_add_kqueue_watch(monitor_t *monitor, watch_info_t *info) {
 	struct kevent changes[1];
@@ -698,7 +687,7 @@ bool monitor_process_events(monitor_t *monitor) {
 			for (int j = 0; j < monitor->watch_count; j++) {
 				watch_info_t *info = monitor->watches[j];
 				
-				if (info->wd == events[i].ident) {
+				if ((uintptr_t)info->wd == events[i].ident) {
 					file_event_t event;
 					memset(&event, 0, sizeof(event));
 					event.path = info->path;
@@ -722,7 +711,7 @@ bool monitor_process_events(monitor_t *monitor) {
 			/* We need to find the first watch info for this FD to handle reopening */
 			watch_info_t *primary_info = NULL;
 			for (int j = 0; j < monitor->watch_count; j++) {
-				if (monitor->watches[j]->wd == events[i].ident) {
+				if ((uintptr_t)monitor->watches[j]->wd == events[i].ident) {
 					primary_info = monitor->watches[j];
 					break;
 				}
@@ -736,7 +725,7 @@ bool monitor_process_events(monitor_t *monitor) {
 				if (new_fd != -1) {
 					/* Update all watch_info structures that share this FD */
 					for (int j = 0; j < monitor->watch_count; j++) {
-						if (monitor->watches[j]->wd == events[i].ident) {
+						if ((uintptr_t)monitor->watches[j]->wd == events[i].ident) {
 							monitor->watches[j]->wd = new_fd;
 						}
 					}
@@ -749,7 +738,7 @@ bool monitor_process_events(monitor_t *monitor) {
 						/* Close and invalidate all related watch descriptors */
 						close(new_fd);
 						for (int j = 0; j < monitor->watch_count; j++) {
-							if (monitor->watches[j]->wd == new_fd) {
+							if ((uintptr_t)monitor->watches[j]->wd == events[i].ident) {
 								monitor->watches[j]->wd = -1;
 							}
 						}
@@ -763,7 +752,7 @@ bool monitor_process_events(monitor_t *monitor) {
 					}
 					/* Invalidate all watch descriptors for this path */
 					for (int j = 0; j < monitor->watch_count; j++) {
-						if (monitor->watches[j]->wd == events[i].ident) {
+						if ((uintptr_t)monitor->watches[j]->wd == events[i].ident) {
 							monitor->watches[j]->wd = -1;
 						}
 					}
