@@ -169,7 +169,7 @@ bool is_system_file_to_ignore(const char *filename) {
 }
 
 /* Collect statistics about a directory and its contents */
-bool verify_directory_stability(const char *dir_path, dir_stats_t *stats) {
+bool verify_directory_stability(const char *dir_path, dir_stats_t *stats, int recursion_depth) {
 	DIR *dir;
 	struct dirent *entry;
 	struct stat st;
@@ -218,7 +218,6 @@ bool verify_directory_stability(const char *dir_path, dir_stats_t *stats) {
 			
 			/* Skip known system files */
 			if (is_system_file_to_ignore(entry->d_name)) {
-				log_message(LOG_LEVEL_DEBUG, "Ignoring system file %s in stability check", entry->d_name);
 				continue;
 			}
 			
@@ -242,28 +241,16 @@ bool verify_directory_stability(const char *dir_path, dir_stats_t *stats) {
 		} else if (S_ISDIR(st.st_mode)) {
 			stats->dir_count++;
 			
-			/* Don't recursively scan if this directory is too deep or we already know it's unstable */
-			if (stats->has_temp_files) {
-				continue;
-			}
-			
-			/* Recursively check subdirectory, but limit recursion depth for performance */
-			static int recursion_depth = 0;
-			recursion_depth++;
-			
 			/* Skip deep recursion but don't mark as unstable */
 			if (recursion_depth > 10) {
-				recursion_depth--;
 				continue;
 			}
 			
 			dir_stats_t subdir_stats;
-			if (!verify_directory_stability(path, &subdir_stats)) {
-				recursion_depth--;
+			if (!verify_directory_stability(path, &subdir_stats, recursion_depth + 1)) {
 				closedir(dir);
 				return false;
 			}
-			recursion_depth--;
 			
 			/* Incorporate subdirectory stats */
 			stats->file_count += subdir_stats.file_count;
@@ -278,7 +265,7 @@ bool verify_directory_stability(const char *dir_path, dir_stats_t *stats) {
 	}
 	
 	closedir(dir);
-	return true;
+	return !stats->has_temp_files;
 }
 
 /* Find the state corresponding to the root path of a watch */

@@ -513,24 +513,37 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 				
 				/* Perform recursive stability verification */
 				dir_stats_t current_stats;
-				bool is_stable = verify_directory_stability(root_state->path, &current_stats);
+				bool scan_completed = verify_directory_stability(root_state->path, &current_stats, 0);
 				
-				/* If directory scan completed, compare with previous stats */
-				if (is_stable && root_state->stability_check_count > 0) {
-					is_stable = compare_dir_stats(&root_state->prev_stats, &current_stats);
+				/* Always store the stats, regardless of stability */
+				root_state->dir_stats = current_stats;
+				
+				/* Log the scan results */
+				log_message(LOG_LEVEL_DEBUG, 
+					"Stability check #%d for %s: files=%d, dirs=%d, size=%zu, stable=%s",
+					root_state->stability_check_count + 1, root_state->path, 
+					current_stats.file_count, current_stats.dir_count, 
+					current_stats.total_size, scan_completed ? "yes" : "no");
+				
+				/* Determine stability based on scan result and comparison */
+				bool is_stable = scan_completed;  /* Initially use scan result */
+				
+				/* Only compare with previous stats if we have a previous scan */
+				if (scan_completed && root_state->stability_check_count > 0) {
+					bool counts_stable = compare_dir_stats(&root_state->prev_stats, &current_stats);
+					if (!counts_stable) {
+						log_message(LOG_LEVEL_DEBUG, "Directory unstable: file/dir count changed from %d/%d to %d/%d",
+								   root_state->prev_stats.file_count, root_state->prev_stats.dir_count, 
+								   current_stats.file_count, current_stats.dir_count);
+						is_stable = false;
+					}
 				}
 				
-				/* Log stability status */
-				log_message(LOG_LEVEL_DEBUG, 
-						  "Stability check #%d for %s: files=%d, dirs=%d, size=%zu, stable=%s",
-						  root_state->stability_check_count + 1, root_state->path, 
-						  current_stats.file_count, current_stats.dir_count, 
-						  current_stats.total_size, is_stable ? "yes" : "no");
+				/* Always update previous stats for next comparison */
+				root_state->prev_stats = current_stats;
 				
 				if (is_stable) {
-					/* Store current stats and increment stability counter only if stable */
-					root_state->prev_stats = current_stats;
-					root_state->dir_stats = current_stats;
+					/* Only increment stability counter if stable */
 					root_state->stability_check_count++;
 					
 					/* Determine if we've reached enough consecutive stable checks */

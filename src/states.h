@@ -10,8 +10,8 @@
 #include "monitor.h"
 
 /* Activity window size for detecting quiet periods (in milliseconds) */
-#define QUIET_PERIOD_MS 1000      /* Default quiet period */
-#define DIR_QUIET_PERIOD_MS 2000  /* Longer quiet period for directory operations */
+#define QUIET_PERIOD_MS 500       /* Default quiet period */
+#define DIR_QUIET_PERIOD_MS 1000  /* Longer quiet period for directory operations */
 #define MAX_ACTIVITY_SAMPLES 5    /* Number of recent events to track for activity analysis */
 
 /* Entity type for clarity in handling */
@@ -105,7 +105,7 @@ long get_required_quiet_period(entity_state_t *state);
 bool is_activity_burst(entity_state_t *state);
 entity_state_t *find_root_state(entity_state_t *state);
 long get_required_quiet_period(entity_state_t *state);
-bool verify_directory_stability(const char *dir_path, dir_stats_t *stats);
+bool verify_directory_stability(const char *dir_path, dir_stats_t *stats, int recursion_depth);
 bool compare_dir_stats(dir_stats_t *prev, dir_stats_t *current);
 int calculate_path_depth(const char *path);
 
