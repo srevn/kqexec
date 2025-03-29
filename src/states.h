@@ -67,6 +67,8 @@ typedef struct entity_state {
     int activity_index;             /* Circular buffer index */
     bool activity_in_progress;      /* Flag indicating a burst of activity */
     
+    struct timespec last_activity_in_tree;
+    
     /* Hash table linkage */
     struct entity_state *next;       /* Next entity in hash bucket */
 } entity_state_t;
@@ -80,6 +82,10 @@ event_type_t operation_to_event_type(operation_type_t op);
 bool should_execute_command(entity_state_t *state, operation_type_t op, int debounce_ms);
 bool process_event(watch_entry_t *watch, file_event_t *event, entity_type_t entity_type);
 bool is_quiet_period_elapsed(entity_state_t *state, struct timespec *now);
+long get_required_quiet_period(entity_state_t *state);
+bool is_activity_burst(entity_state_t *state);
+entity_state_t *find_root_state(entity_state_t *state);
+long get_required_quiet_period(entity_state_t *state);
 void set_quiet_period(int milliseconds);
 int get_quiet_period(void);
 

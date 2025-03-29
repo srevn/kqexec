@@ -3,14 +3,28 @@
 
 #include <stdbool.h>
 #include <sys/types.h>
+#include <time.h>
 
 #include "config.h"
 
 /* Maximum number of watches */
 #define MAX_WATCHES 128
 
+/* Watched file/directory information */
+typedef struct {
+	int wd;                 	/* Watch descriptor (file descriptor) */
+	char *path;             	/* Full path */
+	watch_entry_t *watch;   	/* Associated watch entry */
+} watch_info_t;
+
 /* Structure to hold monitoring context */
-typedef struct monitor monitor_t;
+typedef struct monitor {
+	int kq;                 	/* Kqueue descriptor */
+	config_t *config;       	/* Configuration */
+	watch_info_t **watches; 	/* Array of watch information */
+	int watch_count;        	/* Number of watches */
+	bool running;           	/* Monitor running flag */
+} monitor_t;
 
 /* Structure for file/directory event */
 typedef struct {
