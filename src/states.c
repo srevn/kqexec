@@ -143,6 +143,31 @@ bool compare_dir_stats(dir_stats_t *prev, dir_stats_t *current) {
 	return true;
 }
 
+/* Function to check if a file should be ignored in stability checks */
+bool is_system_file_to_ignore(const char *filename) {
+	/* List of known system files that should not be treated as temporary */
+	static const char *system_files[] = {
+		".localized",        /* macOS localization file */
+		".DS_Store",         /* macOS folder metadata */
+		"desktop.ini",       /* Windows folder customization */
+		"Thumbs.db",         /* Windows thumbnail cache */
+		".directory",        /* KDE folder metadata */
+		"folder.jpg",        /* Folder image for media folders */
+		".hidden",           /* Hidden file marker on some systems */
+		"Icon\r",            /* macOS custom folder icon marker */
+		NULL                 /* End of list marker */
+	};
+	
+	/* Check against our list of known system files */
+	for (int i = 0; system_files[i] != NULL; i++) {
+		if (strcmp(filename, system_files[i]) == 0) {
+			return true;
+		}
+	}
+	
+	return false;
+}
+
 /* Collect statistics about a directory and its contents */
 bool verify_directory_stability(const char *dir_path, dir_stats_t *stats) {
 	DIR *dir;
@@ -191,6 +216,12 @@ bool verify_directory_stability(const char *dir_path, dir_stats_t *stats) {
 				stats->latest_mtime = st.st_mtime;
 			}
 			
+			/* Skip known system files */
+			if (is_system_file_to_ignore(entry->d_name)) {
+				log_message(LOG_LEVEL_DEBUG, "Ignoring system file %s in stability check", entry->d_name);
+				continue;
+			}
+			
 			/* Check for very recent file modifications (< 3 seconds) */
 			if (difftime(now, st.st_mtime) < 3.0) {
 				log_message(LOG_LEVEL_DEBUG, "Directory %s unstable: recent file modification (%s, %.1f seconds ago)", 
@@ -202,7 +233,9 @@ bool verify_directory_stability(const char *dir_path, dir_stats_t *stats) {
 			if (st.st_size == 0 || 
 				strstr(entry->d_name, ".tmp") != NULL || 
 				strstr(entry->d_name, ".part") != NULL || 
-				strstr(entry->d_name, ".~") != NULL) {
+				strstr(entry->d_name, ".~") != NULL ||
+				strstr(entry->d_name, ".crdownload") != NULL ||
+				strstr(entry->d_name, ".download") != NULL) {
 				log_message(LOG_LEVEL_DEBUG, "Directory %s unstable: temp file detected (%s)", dir_path, entry->d_name);
 				stats->has_temp_files = true;
 			}
