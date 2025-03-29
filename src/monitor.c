@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <limits.h>
 #include <sys/types.h>
 #include <sys/event.h>
 #include <sys/time.h>
@@ -536,25 +537,24 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 					bool ready_for_command = false;
 					int required_checks;
 					
-					/* For simple directories (few files, shallow), need fewer checks */
-					if (current_stats.file_count < 10 && root_state->depth <= 2) {
-						required_checks = 1;  /* Simple dirs need just one stable check */
-					} else {
-						/* Scale required checks with directory complexity */
-						required_checks = 2;  /* Base requirement */
-						
-						/* Add checks for large directories */
-						if (current_stats.file_count > 100) {
-							required_checks++;
-						}
-						
-						/* Add checks for deep directories */
-						if (root_state->depth > 4) {
-							required_checks++;
-						}
-						
-						/* Cap at reasonable maximum */
-						if (required_checks > 4) required_checks = 4;
+					/* Simplified check count logic based on directory classification */
+					int total_entries = current_stats.file_count + current_stats.dir_count;
+					
+					/* Very small directories */
+					if (total_entries < 10 && root_state->depth <= 2) {
+						required_checks = 1;  /* One check is sufficient */
+					}
+					/* Small to medium directories */
+					else if (total_entries < 100) {
+						required_checks = 2;  /* Two checks */
+					}
+					/* Large directories */
+					else if (total_entries < 1000 || root_state->depth > 4) {
+						required_checks = 3;  /* Three checks */
+					}
+					/* Very large or complex directories */
+					else {
+						required_checks = 4;  /* Four checks */
 					}
 					
 					/* Check if we have enough stable checks */
@@ -670,73 +670,144 @@ bool monitor_process_events(monitor_t *monitor) {
 		log_message(LOG_LEVEL_ERR, "Invalid monitor state");
 		return false;
 	}
-
+	
 	/* Calculate timeout based on pending deferred scans */
 	memset(&timeout, 0, sizeof(timeout));
 	p_timeout = NULL;
 	bool need_wakeup = false;
 	struct timespec now_monotonic;
 	clock_gettime(CLOCK_MONOTONIC, &now_monotonic);
-
+	
 	time_t earliest_wakeup_sec = now_monotonic.tv_sec + 3600; /* 1 hour is max timeout */
 	long earliest_wakeup_nsec = now_monotonic.tv_nsec;
-
-	/* Check each configured directory watch for pending activity */
+	
+	/* Track unique paths to avoid duplicate processing */
+	char unique_paths[MAX_WATCHES][PATH_MAX];
+	int max_quiet_period_ms[MAX_WATCHES];
+	int path_count = 0;
+	
+	/* First pass: find unique paths and their maximum quiet periods */
 	for (int i = 0; i < monitor->config->watch_count; i++) {
 		watch_entry_t *watch = monitor->config->watches[i];
 		if (watch->type != WATCH_DIRECTORY) continue;
 		
 		/* Get the state for the root of the watch */
 		entity_state_t *root_state = get_entity_state(watch->path, ENTITY_DIRECTORY, watch);
+		if (!root_state || !root_state->activity_in_progress) continue;
 		
-		/* If the root state exists and has activity pending */
-		if (root_state && root_state->activity_in_progress) {
-			need_wakeup = true;
-			
-			/* Use the root's last_activity_in_tree timestamp */
-			struct timespec *last_activity = &root_state->last_activity_in_tree;
-			
-			/* Get required period using the root state */
-			long required_quiet_period_ms = get_required_quiet_period(root_state);
-			
-			/* Calculate absolute wakeup time based on tree activity */
-			time_t wake_sec = last_activity->tv_sec + (required_quiet_period_ms / 1000);
-			long wake_nsec = last_activity->tv_nsec + ((required_quiet_period_ms % 1000) * 1000000);
-			
-			/* Normalize wake_nsec */
-			if (wake_nsec >= 1000000000) {
-				wake_sec++;
-				wake_nsec -= 1000000000;
+		/* Check if we've already seen this path */
+		bool path_seen = false;
+		for (int j = 0; j < path_count; j++) {
+			if (strcmp(unique_paths[j], watch->path) == 0) {
+				/* Update with maximum quiet period */
+				int quiet_period = get_required_quiet_period(root_state);
+				if (quiet_period > max_quiet_period_ms[j]) {
+					max_quiet_period_ms[j] = quiet_period;
+				}
+				path_seen = true;
+				break;
 			}
-			
-			/* Update earliest wake time if this one is sooner */
-			if (wake_sec < earliest_wakeup_sec ||
-				(wake_sec == earliest_wakeup_sec && wake_nsec < earliest_wakeup_nsec)) {
-				earliest_wakeup_sec = wake_sec;
-				earliest_wakeup_nsec = wake_nsec;
-			}
+		}
+		
+		/* If this is a new path, add to our tracking */
+		if (!path_seen && path_count < MAX_WATCHES) {
+			strncpy(unique_paths[path_count], watch->path, PATH_MAX - 1);
+			unique_paths[path_count][PATH_MAX - 1] = '\0';
+			max_quiet_period_ms[path_count] = get_required_quiet_period(root_state);
+			path_count++;
 		}
 	}
-
-	/* Calculate relative timeout if needed */
-	if (need_wakeup) {
-		/* Calculate timeout based on earliest_wakeup and now_monotonic */
-		if (earliest_wakeup_sec < now_monotonic.tv_sec ||
-			(earliest_wakeup_sec == now_monotonic.tv_sec && earliest_wakeup_nsec <= now_monotonic.tv_nsec)) {
-			timeout.tv_sec = 0;
-			timeout.tv_nsec = 0;
-		} else {
-			timeout.tv_sec = earliest_wakeup_sec - now_monotonic.tv_sec;
-			if (earliest_wakeup_nsec >= now_monotonic.tv_nsec) {
-				timeout.tv_nsec = earliest_wakeup_nsec - now_monotonic.tv_nsec;
-			} else {
-				timeout.tv_sec--;
-				timeout.tv_nsec = 1000000000 + earliest_wakeup_nsec - now_monotonic.tv_nsec;
+	
+	/* Second pass: calculate optimal wakeup time */
+	for (int i = 0; i < path_count; i++) {
+		/* Find the first watch entry for this path */
+		entity_state_t *root_state = NULL;
+		for (int j = 0; j < monitor->config->watch_count; j++) {
+			watch_entry_t *watch = monitor->config->watches[j];
+			if (watch->type == WATCH_DIRECTORY && strcmp(watch->path, unique_paths[i]) == 0) {
+				root_state = get_entity_state(watch->path, ENTITY_DIRECTORY, watch);
+				break;
 			}
 		}
+		
+		if (!root_state || !root_state->activity_in_progress) continue;
+		
+		need_wakeup = true;
+		
+		/* Use the root's last_activity_in_tree timestamp */
+		struct timespec *last_activity = &root_state->last_activity_in_tree;
+		
+		/* Use the maximum quiet period for this path */
+		long required_quiet_period_ms = max_quiet_period_ms[i];
+		
+		/* Calculate elapsed time since last activity */
+		long elapsed_ms = (now_monotonic.tv_sec - last_activity->tv_sec) * 1000 +
+						 (now_monotonic.tv_nsec - last_activity->tv_nsec) / 1000000;
+		
+		/* Calculate time remaining until quiet period elapses */
+		long remaining_ms = required_quiet_period_ms - elapsed_ms;
+		
+		/* Progressive backoff for near-timeouts */
+		if (remaining_ms <= 0) {
+			/* Already elapsed - use a modest delay */
+			remaining_ms = 200; /* 200ms */
+		} else if (remaining_ms < 50) {
+			/* Very close - don't check too quickly */
+			remaining_ms = 50; /* 50ms */
+		} else if (remaining_ms < 100) {
+			/* Close but not imminent */
+			remaining_ms = 100; /* 100ms */
+		} else if (remaining_ms < 500) {
+			/* Take a little longer before checking again */
+			remaining_ms = remaining_ms / 2 + 50;
+		}
+		
+		log_message(LOG_LEVEL_DEBUG, "Path %s: %ld ms elapsed of %ld ms quiet period, entries=%d, dirs=%d, adjusted wait: %ld ms",
+									unique_paths[i], elapsed_ms, required_quiet_period_ms, 
+									root_state->dir_stats.file_count, root_state->dir_stats.dir_count,
+									remaining_ms);
+		
+		/* Calculate absolute wakeup time */
+		time_t wake_sec = now_monotonic.tv_sec + (remaining_ms / 1000);
+		long wake_nsec = now_monotonic.tv_nsec + ((remaining_ms % 1000) * 1000000);
+		
+		/* Normalize wake_nsec */
+		if (wake_nsec >= 1000000000) {
+			wake_sec++;
+			wake_nsec -= 1000000000;
+		}
+		
+		/* Update earliest wake time if this one is sooner */
+		if (wake_sec < earliest_wakeup_sec ||
+			(wake_sec == earliest_wakeup_sec && wake_nsec < earliest_wakeup_nsec)) {
+			earliest_wakeup_sec = wake_sec;
+			earliest_wakeup_nsec = wake_nsec;
+		}
+	}
+	
+	/* Calculate relative timeout if needed */
+	if (need_wakeup) {
+		/* Calculate timeout based on earliest_wakeup */
+		timeout.tv_sec = earliest_wakeup_sec - now_monotonic.tv_sec;
+		
+		if (earliest_wakeup_nsec >= now_monotonic.tv_nsec) {
+			timeout.tv_nsec = earliest_wakeup_nsec - now_monotonic.tv_nsec;
+		} else {
+			timeout.tv_sec--;
+			timeout.tv_nsec = 1000000000 + earliest_wakeup_nsec - now_monotonic.tv_nsec;
+		}
+		
+		/* Ensure sane values */
+		if (timeout.tv_sec < 0) {
+			timeout.tv_sec = 0;
+			timeout.tv_nsec = 50000000; /* 50ms minimum */
+		} else if (timeout.tv_sec == 0 && timeout.tv_nsec < 10000000) {
+			timeout.tv_nsec = 50000000; /* 50ms minimum */
+		}
+		
 		p_timeout = &timeout;
 		log_message(LOG_LEVEL_DEBUG, "Next scheduled wakeup in %ld.%09ld seconds",
-				   timeout.tv_sec, timeout.tv_nsec);
+				  timeout.tv_sec, timeout.tv_nsec);
 	} else {
 		log_message(LOG_LEVEL_DEBUG, "No pending directory activity, waiting indefinitely");
 		p_timeout = NULL;

@@ -2,7 +2,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <math.h>
 #include <limits.h>
 #include <sys/stat.h>
 #include <libgen.h>
@@ -16,7 +15,7 @@
 #include "log.h"
 
 /* Hash table size for storing entity states */
-#define ENTITY_HASH_SIZE 64
+#define ENTITY_HASH_SIZE 1024
 
 /* Hash table of entity states */
 static entity_state_t **entity_states = NULL;
@@ -288,6 +287,12 @@ void synchronize_activity_states(const char *path, entity_state_t *trigger_state
 				state->last_activity_in_tree = trigger_state->last_activity_in_tree;
 				state->activity_in_progress = trigger_state->activity_in_progress;
 				
+				/* Add directory statistics synchronization */
+				state->depth = trigger_state->depth;
+				state->dir_stats = trigger_state->dir_stats;
+				state->prev_stats = trigger_state->prev_stats;
+				state->stability_check_count = trigger_state->stability_check_count;
+				
 				/* Copy the most recent activity sample to keep timing consistent */
 				if (trigger_state->activity_sample_count > 0) {
 					int latest_idx = (trigger_state->activity_index + MAX_ACTIVITY_SAMPLES - 1) % MAX_ACTIVITY_SAMPLES;
@@ -408,40 +413,45 @@ long get_required_quiet_period(entity_state_t *state) {
 	if (!state) return QUIET_PERIOD_MS;
 
 	long required_ms = QUIET_PERIOD_MS;
-
+	
+	/* Use a longer base period for directories */
 	if (state->type == ENTITY_DIRECTORY) {
 		required_ms = DIR_QUIET_PERIOD_MS;
 		
-		/* Basic multiplier for active directories */
+		/* For active directories, use fixed values based on complexity class */
 		if (state->activity_in_progress) {
-			double multiplier = 3.0;
+			/* Get complexity indicators */
+			int total_entries = state->dir_stats.file_count + state->dir_stats.dir_count;
+			int depth = state->depth;
 			
-			/* Adjust multiplier based on directory complexity */
-			if (state->dir_stats.file_count > 0) {
-				/* Scale based on directory size (logarithmic) */
-				int total_entries = state->dir_stats.file_count + state->dir_stats.dir_count;
-				if (total_entries > 100) {
-					multiplier *= (1.0 + log10(total_entries / 100.0));
-				}
-				
-				/* Scale based on directory depth */
-				if (state->depth > 3) {
-					multiplier *= (1.0 + ((state->depth - 3) * 0.2));
-				}
-				
-				/* Cap the multiplier at a reasonable maximum */
-				if (multiplier > 20.0) multiplier = 20.0;
+			/* Simple, fixed quiet periods based on directory class */
+			if (total_entries < 10 && depth <= 2) {
+				/* Small, shallow directories */
+				required_ms = 1000; /* 1 second */
+			} else if (total_entries < 100) {
+				/* Medium directories */
+				required_ms = 2000; /* 2 seconds */
+			} else if (total_entries < 1000) {
+				/* Large directories */
+				required_ms = 3000; /* 3 seconds */
+			} else {
+				/* Very large directories */
+				required_ms = 5000; /* 5 seconds */
 			}
 			
-			required_ms = (long)(required_ms * multiplier);
-			log_message(LOG_LEVEL_DEBUG, "Using adaptive quiet period for %s: %.1fx = %ld ms",
-					  state->path, multiplier, required_ms);
+			/* Add extra time for deep directories */
+			if (depth > 3) {
+				required_ms += (depth - 3) * 500; /* +500ms per level beyond 3 */
+			}
+			
+			log_message(LOG_LEVEL_DEBUG, "Using quiet period for %s: %ld ms (entries: %d, depth: %d)",
+					  state->path, required_ms, total_entries, depth);
 		}
 	}
 
 	/* Set reasonable limits */
 	if (required_ms < 10) required_ms = 10;
-	if (required_ms > 30000) required_ms = 30000;  /* Cap at 30 seconds */
+	if (required_ms > 10000) required_ms = 10000;  /* Cap at 10 seconds */
 	
 	return required_ms;
 }
@@ -559,6 +569,9 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 		state->type = type;
 	}
 
+	/* Add the depth calculation here */
+	state->depth = calculate_path_depth(state->path);
+
 	clock_gettime(CLOCK_MONOTONIC, &state->last_update);
 	clock_gettime(CLOCK_REALTIME, &state->wall_time);
 	state->last_activity_in_tree = state->last_update;
@@ -570,8 +583,8 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 	state->next = entity_states[hash];
 	entity_states[hash] = state;
 
-	log_message(LOG_LEVEL_DEBUG, "Created new state for path=%s, watch=%s, type=%d",
-			  path, watch->name, state->type);
+	log_message(LOG_LEVEL_DEBUG, "Created new state for path=%s, watch=%s, type=%d, depth=%d",
+			  path, watch->name, state->type, state->depth);
 
 	return state;
 }
