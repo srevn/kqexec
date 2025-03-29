@@ -158,6 +158,9 @@ int main(int argc, char *argv[]) {
 	/* Initialize command subsystem */
 	command_init();
 	
+	/* Initialize command intent tracking */
+	command_intent_init();
+	
 	/* Initialize entity states */
 	entity_state_init();
 	
@@ -194,6 +197,7 @@ int main(int argc, char *argv[]) {
 	/* Clean up */
 	monitor_destroy(monitor);
 	config_destroy(config);
+	command_intent_cleanup();
 	entity_state_cleanup();
 	command_cleanup();
 	log_close();

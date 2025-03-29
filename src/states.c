@@ -767,7 +767,14 @@ bool process_event(watch_entry_t *watch, file_event_t *event, entity_type_t enti
 	
 	log_message(LOG_LEVEL_DEBUG, "Processing event for %s (watch: %s, type: %s)",
 			  event->path, watch->name, event_type_to_string(event->type));
-
+	
+	/* Check if this event was caused by one of our commands */
+	if (is_path_affected_by_command(event->path)) {
+		log_message(LOG_LEVEL_DEBUG, "Ignoring event for %s - caused by our command execution",
+				  event->path);
+		return false;
+	}
+	
 	/* Get state using the event path and watch config */
 	entity_state_t *state = get_entity_state(event->path, entity_type, watch);
 	if (state == NULL) {
