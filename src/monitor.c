@@ -434,15 +434,13 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 	int watches_with_activity = 0;
 	int commands_attempted = 0;
 	int commands_executed = 0;
-	
-	/* Track if we discovered new directories while scanning */
 	bool new_directories_found = false;
 	
-	/* Track paths we've already processed in this cycle to avoid duplicates */
+	/* Track paths we've already processed in this cycle */
 	char processed_paths[MAX_WATCHES][MAX_PATH_LEN];
 	int processed_count = 0;
 
-	/* Iterate through configured watches to check root states */
+	/* Iterate through configured watches */
 	for (int i = 0; i < monitor->config->watch_count; i++) {
 		watch_entry_t *watch = monitor->config->watches[i];
 		
@@ -451,17 +449,22 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 		
 		total_dir_watches++;
 		
-		/* Check if we've already processed this path in this cycle */
+		/* Check if we've already processed this path */
 		bool already_processed = false;
 		for (int j = 0; j < processed_count; j++) {
 			if (strcmp(processed_paths[j], watch->path) == 0) {
-				log_message(LOG_LEVEL_DEBUG, "Skipping duplicate processing for path: %s (watch: %s)",
-						   watch->path, watch->name);
 				already_processed = true;
 				break;
 			}
 		}
 		if (already_processed) continue;
+		
+		/* Add to processed paths */
+		if (processed_count < MAX_WATCHES) {
+			strncpy(processed_paths[processed_count], watch->path, MAX_PATH_LEN - 1);
+			processed_paths[processed_count][MAX_PATH_LEN - 1] = '\0';
+			processed_count++;
+		}
 		
 		/* Get root state */
 		entity_state_t *root_state = get_entity_state(watch->path, ENTITY_DIRECTORY, watch);
@@ -471,26 +474,27 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 			continue;
 		}
 		
-		/* Add to processed paths */
-		if (processed_count < MAX_WATCHES) {
-			strncpy(processed_paths[processed_count], watch->path, MAX_PATH_LEN - 1);
-			processed_paths[processed_count][MAX_PATH_LEN - 1] = '\0';
-			processed_count++;
+		/* If not previously set, calculate and store the depth */
+		if (root_state->depth == 0) {
+			root_state->depth = calculate_path_depth(root_state->path);
 		}
 		
 		/* Check for activity in progress */
 		if (root_state->activity_in_progress) {
 			watches_with_activity++;
 			
-			/* Check if quiet period has elapsed */
+			/* First check if the regular quiet period has elapsed */
 			bool quiet_period_has_elapsed = is_quiet_period_elapsed(root_state, current_time);
 			
 			if (quiet_period_has_elapsed) {
+				/* Quiet period elapsed, now do a deeper stability check */
+				log_message(LOG_LEVEL_DEBUG, 
+						  "Quiet period elapsed for %s (watch: %s), performing stability verification",
+						  root_state->path, watch->name);
+				
 				/* For recursive watches, scan for new directories first */
 				int prev_watch_count = monitor->watch_count;
 				if (watch->recursive) {
-					log_message(LOG_LEVEL_DEBUG, "Scanning directory %s for new entries after quiet period", 
-							  root_state->path);
 					monitor_add_dir_recursive(monitor, root_state->path, watch, true);
 				}
 				
@@ -500,25 +504,105 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 							  monitor->watch_count - prev_watch_count);
 					new_directories_found = true;
 					
-					/* Don't reset activity flag - keep monitoring for events in new dirs
-					   But update the last activity time to avoid continuous scanning */
+					/* Reset the activity timestamp but keep monitoring */
 					root_state->last_activity_in_tree = *current_time;
-					
-					/* Synchronize with other watches for the same path */
 					synchronize_activity_states(root_state->path, root_state);
 					continue;
 				}
 				
-				/* No new directories found, proceed with command execution */
+				/* Perform recursive stability verification */
+				dir_stats_t current_stats;
+				bool is_stable = verify_directory_stability(root_state->path, &current_stats);
+				
+				/* If directory scan completed, compare with previous stats */
+				if (is_stable && root_state->stability_check_count > 0) {
+					is_stable = compare_dir_stats(&root_state->prev_stats, &current_stats);
+				}
+				
+				/* Log stability status */
+				log_message(LOG_LEVEL_DEBUG, 
+						  "Stability check #%d for %s: files=%d, dirs=%d, size=%zu, stable=%s",
+						  root_state->stability_check_count + 1, root_state->path, 
+						  current_stats.file_count, current_stats.dir_count, 
+						  current_stats.total_size, is_stable ? "yes" : "no");
+				
+				if (is_stable) {
+					/* Store current stats and increment stability counter only if stable */
+					root_state->prev_stats = current_stats;
+					root_state->dir_stats = current_stats;
+					root_state->stability_check_count++;
+					
+					/* Determine if we've reached enough consecutive stable checks */
+					bool ready_for_command = false;
+					int required_checks;
+					
+					/* For simple directories (few files, shallow), need fewer checks */
+					if (current_stats.file_count < 10 && root_state->depth <= 2) {
+						required_checks = 1;  /* Simple dirs need just one stable check */
+					} else {
+						/* Scale required checks with directory complexity */
+						required_checks = 2;  /* Base requirement */
+						
+						/* Add checks for large directories */
+						if (current_stats.file_count > 100) {
+							required_checks++;
+						}
+						
+						/* Add checks for deep directories */
+						if (root_state->depth > 4) {
+							required_checks++;
+						}
+						
+						/* Cap at reasonable maximum */
+						if (required_checks > 4) required_checks = 4;
+					}
+					
+					/* Check if we have enough stable checks */
+					ready_for_command = (root_state->stability_check_count >= required_checks);
+					
+					if (!ready_for_command) {
+						/* Not yet ready, update timestamp and continue monitoring */
+						root_state->last_activity_in_tree = *current_time;
+						synchronize_activity_states(root_state->path, root_state);
+						
+						log_message(LOG_LEVEL_DEBUG, 
+								  "Directory %s is stable but waiting for more confirmation (%d/%d checks)",
+								  root_state->path, root_state->stability_check_count, required_checks);
+						continue;
+					}
+					
+					/* If we get here, we're ready to execute the command */
+					log_message(LOG_LEVEL_INFO, 
+							  "Directory %s stability confirmed (%d/%d checks), proceeding to command execution",
+							  root_state->path, root_state->stability_check_count, required_checks);
+				} else {
+					/* Not stable, reset stability check counter */
+					root_state->stability_check_count = 0;
+					
+					/* Store current stats for future comparison */
+					root_state->prev_stats = current_stats;
+					root_state->dir_stats = current_stats;
+					
+					/* Update timestamp and continue monitoring */
+					root_state->last_activity_in_tree = *current_time;
+					synchronize_activity_states(root_state->path, root_state);
+					
+					log_message(LOG_LEVEL_DEBUG, "Directory %s is still unstable, continuing to monitor",
+							  root_state->path);
+					continue;
+				}
+				
+				/* We've confirmed stability, proceed with command execution */
 				commands_attempted++;
 				log_message(LOG_LEVEL_INFO,
-						  "Quiet period elapsed for %s (watch: %s), processing deferred events",
-						  root_state->path, watch->name);
+						  "Directory %s (watch: %s) confirmed stable after %d checks, processing deferred events",
+						  root_state->path, watch->name, root_state->stability_check_count);
 				
-				/* Reset activity flag for all watches of this path */
+				/* Reset activity flag and stability counter */
 				root_state->activity_in_progress = false;
+				root_state->stability_check_count = 0;
 				
-				/* Create synthetic event and execute command for this watch */
+				/* Create synthetic event and execute command */
 				file_event_t synthetic_event = {
 					.path = root_state->path,
 					.type = EVENT_CONTENT,
@@ -527,10 +611,7 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 					.user_id = getuid()
 				};
 				
-				log_message(LOG_LEVEL_INFO, "Executing deferred command for %s (watch: %s)",
-						  root_state->path, watch->name);
-				
-				/* Now find and execute commands for ALL watches of this path */
+				/* Execute commands for ALL watches of this path */
 				for (int j = 0; j < monitor->config->watch_count; j++) {
 					watch_entry_t *other_watch = monitor->config->watches[j];
 					
@@ -542,17 +623,16 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 						entity_state_t *other_state = get_entity_state(other_watch->path, ENTITY_DIRECTORY, other_watch);
 						if (!other_state) continue;
 						
-						/* Reset activity flag for this state too */
+						/* Reset activity flag */
 						other_state->activity_in_progress = false;
+						other_state->stability_check_count = 0;
 						
-						/* Execute command for this watch */
+						/* Execute command */
 						log_message(LOG_LEVEL_INFO, "Executing deferred command for %s (watch: %s)",
 								  other_state->path, other_watch->name);
 						
 						if (command_execute(other_watch, &synthetic_event)) {
 							commands_executed++;
-							log_message(LOG_LEVEL_INFO, "Deferred command execution successful for %s (watch: %s)", 
-									  other_state->path, other_watch->name);
 							
 							/* Reset state change flags */
 							other_state->content_changed = false;
@@ -561,17 +641,17 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 							
 							/* Update last command time */
 							other_state->last_command_time = current_time->tv_sec;
-						} else {
-							log_message(LOG_LEVEL_WARNING, "Deferred command execution failed for %s (watch: %s)", 
-									  other_state->path, other_watch->name);
 						}
 					}
 				}
+			} else {
+				log_message(LOG_LEVEL_DEBUG, "Quiet period not yet elapsed for %s (watch: %s), continuing to monitor",
+						  root_state->path, watch->name);
 			}
 		}
 	}
-	
-	/* Log summary of processing */
+
+	/* Log summary if anything interesting happened */
 	if (watches_with_activity > 0 || commands_attempted > 0 || commands_executed > 0 || new_directories_found) {
 		log_message(LOG_LEVEL_DEBUG,
 				  "Deferred processing summary: directories=%d, active=%d, commands_attempted=%d, executed=%d, new_dirs_found=%s",

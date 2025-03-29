@@ -6,7 +6,7 @@
 
 /* Event types that can be monitored */
 typedef enum {
-	EVENT_NONE = 0,
+	EVENT_NONE = 0,			   /* No events */
 	EVENT_CONTENT = 1 << 0,    /* File content changes (WRITE, EXTEND) */
 	EVENT_METADATA = 1 << 1,   /* Metadata changes (ATTRIB, LINK) */
 	EVENT_MODIFY = 1 << 2,     /* Modification events (CREATE, DELETE, RENAME) */

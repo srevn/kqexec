@@ -1,7 +1,7 @@
 # Compiler and flags
 CC = cc
 CFLAGS = -Wall -Wextra -std=c11 -pedantic -g
-LDFLAGS =
+LDFLAGS = -lm
 
 # Source files
 SRCS = src/main.c \

@@ -15,14 +15,14 @@
 
 /* Entity type for clarity in handling */
 typedef enum {
-    ENTITY_UNKNOWN,
-    ENTITY_FILE,
-    ENTITY_DIRECTORY
+    ENTITY_UNKNOWN,             /* Unknown type, to be determined */
+    ENTITY_FILE,                /* Regular file */
+    ENTITY_DIRECTORY,           /* Directory */
 } entity_type_t;
 
 /* Logical operation types */
 typedef enum {
-    OP_NONE = 0,
+    OP_NONE = 0,                /* No operation */
     
     /* File operations */
     OP_FILE_CONTENT_CHANGED,    /* File content was modified */
@@ -44,6 +44,15 @@ typedef struct {
     operation_type_t operation;     /* Type of operation */
 } activity_sample_t;
 
+/* Directory statistics for stability verification */
+typedef struct {
+    int file_count;                 /* Number of files in the directory */
+    int dir_count;                  /* Number of subdirectories */
+    size_t total_size;              /* Total size of files in the directory */
+    time_t latest_mtime;            /* Latest modification time */
+    bool has_temp_files;            /* Flag for temporary files */
+} dir_stats_t;
+
 /* Entity state tracking */
 typedef struct entity_state {
     char *path;                      /* Path to the entity */
@@ -64,8 +73,16 @@ typedef struct entity_state {
     /* Activity tracking for coalescing events */
     activity_sample_t recent_activity[MAX_ACTIVITY_SAMPLES];
     int activity_sample_count;  
-    int activity_index;             /* Circular buffer index */
-    bool activity_in_progress;      /* Flag indicating a burst of activity */
+    int activity_index;              /* Circular buffer index */
+    bool activity_in_progress;       /* Flag indicating a burst of activity */
+    
+    /* Directory statistics for adaptive processing */
+    dir_stats_t dir_stats;           /* Current directory statistics */
+    dir_stats_t prev_stats;          /* Previous stats for comparison */
+    int stability_check_count;       /* Number of stability checks */
+    
+    /* Tree depth tracking */
+    int depth;
     
     struct timespec last_activity_in_tree;  /* Latest activity anywhere in the tree */
     
@@ -89,5 +106,8 @@ entity_state_t *find_root_state(entity_state_t *state);
 long get_required_quiet_period(entity_state_t *state);
 void set_quiet_period(int milliseconds);
 int get_quiet_period(void);
+bool verify_directory_stability(const char *dir_path, dir_stats_t *stats);
+bool compare_dir_stats(dir_stats_t *prev, dir_stats_t *current);
+int calculate_path_depth(const char *path);
 
 #endif /* STATES_H */

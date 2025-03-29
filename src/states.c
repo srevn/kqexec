@@ -2,12 +2,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <math.h>
 #include <limits.h>
 #include <sys/stat.h>
 #include <libgen.h>
 #include <unistd.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <dirent.h>
 
 #include "states.h"
 #include "command.h"
@@ -81,6 +83,171 @@ static void init_activity_tracking(entity_state_t *state, watch_entry_t *watch) 
 	state->last_activity_in_tree = state->last_update;
 }
 
+/* Calculate the depth of a path (number of directory levels) */
+int calculate_path_depth(const char *path) {
+	int depth = 0;
+	const char *p = path;
+	
+	/* Start with depth 1 for absolute paths, 0 for relative */
+	if (*p == '/') {
+		depth = 0;
+		p++;
+	}
+	
+	while (*p) {
+		if (*p == '/') {
+			depth++;
+		}
+		p++;
+	}
+	
+	/* Add 1 for the final component if it's not just a trailing slash */
+	if (*(p-1) != '/') {
+		depth++;
+	}
+	
+	return depth;
+}
+
+/* Compare two directory statistics to check for stability */
+bool compare_dir_stats(dir_stats_t *prev, dir_stats_t *current) {
+	if (!prev || !current) return false;
+	
+	/* Check for identical file and directory counts */
+	if (prev->file_count != current->file_count || 
+		prev->dir_count != current->dir_count) {
+		log_message(LOG_LEVEL_DEBUG, "Directory unstable: file/dir count changed from %d/%d to %d/%d",
+				   prev->file_count, prev->dir_count, current->file_count, current->dir_count);
+		return false;
+	}
+	
+	/* Check if total size is stable (allowing for small changes) */
+	/* Use a percentage-based threshold for large directories */
+	long size_diff = labs((long)prev->total_size - (long)current->total_size);
+	long threshold = prev->total_size > 1000000 ? 
+					 prev->total_size / 10000 : /* 0.01% for large dirs */
+					 1024;                      /* 1KB for small dirs */
+	
+	if (size_diff > threshold) {
+		log_message(LOG_LEVEL_DEBUG, "Directory unstable: size changed by %ld bytes (threshold: %ld)",
+				   size_diff, threshold);
+		return false;
+	}
+	
+	/* Check for temporary files */
+	if (current->has_temp_files) {
+		log_message(LOG_LEVEL_DEBUG, "Directory unstable: temporary files detected");
+		return false;
+	}
+	
+	return true;
+}
+
+/* Collect statistics about a directory and its contents */
+bool verify_directory_stability(const char *dir_path, dir_stats_t *stats) {
+	DIR *dir;
+	struct dirent *entry;
+	struct stat st;
+	char path[PATH_MAX];
+	
+	if (!dir_path || !stats) {
+		return false;
+	}
+	
+	/* Initialize stats */
+	memset(stats, 0, sizeof(dir_stats_t));
+	
+	dir = opendir(dir_path);
+	if (!dir) {
+		log_message(LOG_LEVEL_WARNING, "Failed to open directory for stability check: %s", dir_path);
+		return false;
+	}
+	
+	time_t now;
+	time(&now);
+	
+	while ((entry = readdir(dir))) {
+		/* Skip . and .. */
+		if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+			continue;
+		}
+		
+		snprintf(path, sizeof(path), "%s/%s", dir_path, entry->d_name);
+		
+		if (stat(path, &st) != 0) {
+			/* If a file disappears during scan, the directory is not stable */
+			log_message(LOG_LEVEL_DEBUG, "Directory %s unstable: file disappeared during scan", dir_path);
+			closedir(dir);
+			return false;
+		}
+		
+		/* Look for temporary files or recent changes */
+		if (S_ISREG(st.st_mode)) {
+			stats->file_count++;
+			stats->total_size += st.st_size;
+			
+			/* Update latest modification time */
+			if (st.st_mtime > stats->latest_mtime) {
+				stats->latest_mtime = st.st_mtime;
+			}
+			
+			/* Check for very recent file modifications (< 3 seconds) */
+			if (difftime(now, st.st_mtime) < 3.0) {
+				log_message(LOG_LEVEL_DEBUG, "Directory %s unstable: recent file modification (%s, %.1f seconds ago)", 
+						  dir_path, entry->d_name, difftime(now, st.st_mtime));
+				stats->has_temp_files = true;
+			}
+			
+			/* Check for temporary files */
+			if (st.st_size == 0 || 
+				strstr(entry->d_name, ".tmp") != NULL || 
+				strstr(entry->d_name, ".part") != NULL || 
+				strstr(entry->d_name, ".~") != NULL) {
+				log_message(LOG_LEVEL_DEBUG, "Directory %s unstable: temp file detected (%s)", dir_path, entry->d_name);
+				stats->has_temp_files = true;
+			}
+		} else if (S_ISDIR(st.st_mode)) {
+			stats->dir_count++;
+			
+			/* Don't recursively scan if this directory is too deep or we already know it's unstable */
+			if (stats->has_temp_files) {
+				continue;
+			}
+			
+			/* Recursively check subdirectory, but limit recursion depth for performance */
+			static int recursion_depth = 0;
+			recursion_depth++;
+			
+			/* Skip deep recursion but don't mark as unstable */
+			if (recursion_depth > 10) {
+				recursion_depth--;
+				continue;
+			}
+			
+			dir_stats_t subdir_stats;
+			if (!verify_directory_stability(path, &subdir_stats)) {
+				recursion_depth--;
+				closedir(dir);
+				return false;
+			}
+			recursion_depth--;
+			
+			/* Incorporate subdirectory stats */
+			stats->file_count += subdir_stats.file_count;
+			stats->dir_count += subdir_stats.dir_count;
+			stats->total_size += subdir_stats.total_size;
+			stats->has_temp_files |= subdir_stats.has_temp_files;
+			
+			if (subdir_stats.latest_mtime > stats->latest_mtime) {
+				stats->latest_mtime = subdir_stats.latest_mtime;
+			}
+		}
+	}
+	
+	closedir(dir);
+	return true;
+}
+
 /* Find the state corresponding to the root path of a watch */
 entity_state_t *find_root_state(entity_state_t *state) {
 	if (!state || !state->watch || !state->watch->path) {
@@ -138,62 +305,70 @@ void synchronize_activity_states(const char *path, entity_state_t *trigger_state
 }
 
 /* Record a new activity event in the entity's history */
-static void record_activity(entity_state_t *state, operation_type_t op) {
+void record_activity(entity_state_t *state, operation_type_t op) {
 	if (!state) return;
 
 	/* Store in circular buffer */
 	state->recent_activity[state->activity_index].timestamp = state->last_update;
 	state->recent_activity[state->activity_index].operation = op;
-
 	state->activity_index = (state->activity_index + 1) % MAX_ACTIVITY_SAMPLES;
 	if (state->activity_sample_count < MAX_ACTIVITY_SAMPLES) {
 		state->activity_sample_count++;
 	}
 
+	/* Reset stability check counter when new activity occurs */
+	state->stability_check_count = 0;
+
 	/* Update Root State's Tree Activity Time for recursive watches */
 	if (state->watch && state->watch->recursive) {
+		/* First, find the root state */
 		entity_state_t *root = find_root_state(state);
 		if (root) {
-			/* Only update if the new time is later */
-			if (state->last_update.tv_sec > root->last_activity_in_tree.tv_sec ||
-				(state->last_update.tv_sec == root->last_activity_in_tree.tv_sec &&
-				 state->last_update.tv_nsec > root->last_activity_in_tree.tv_nsec))
-			{
-				root->last_activity_in_tree = state->last_update;
-				log_message(LOG_LEVEL_DEBUG, "Updated root state (%s) tree activity time due to activity on %s",
-						root->path, state->path);
-						
-				/* Synchronize this root state with other watches for the same path */
-				synchronize_activity_states(root->path, root);
-			}
-		} else if (strcmp(state->path, state->watch->path) != 0) {
-			log_message(LOG_LEVEL_WARNING, "Could not find root state for %s to update tree activity time", state->path);
-		} else {
-			/* This is the root, update its own time if needed */
-			if (state->last_update.tv_sec > state->last_activity_in_tree.tv_sec ||
-				(state->last_update.tv_sec == state->last_activity_in_tree.tv_sec &&
-				 state->last_update.tv_nsec > state->last_activity_in_tree.tv_nsec))
-			{
-				state->last_activity_in_tree = state->last_update;
-				
-				/* Synchronize with other watches for the same path */
-				synchronize_activity_states(state->path, state);
-			}
-		}
-	} else if (state->watch && strcmp(state->path, state->watch->path) == 0) {
-		/* Non-recursive: Update self only if this IS the root */
-		if (state->last_update.tv_sec > state->last_activity_in_tree.tv_sec ||
-			(state->last_update.tv_sec == state->last_activity_in_tree.tv_sec &&
-			 state->last_update.tv_nsec > state->last_activity_in_tree.tv_nsec))
-		{
-			state->last_activity_in_tree = state->last_update;
+			/* Update the root's tree activity time */
+			root->last_activity_in_tree = state->last_update;
+			root->activity_in_progress = true;
+			
+			/* Reset root's stability checks */
+			root->stability_check_count = 0;
 			
 			/* Synchronize with other watches for the same path */
+			synchronize_activity_states(root->path, root);
+			
+			/* Now propagate activity to all parent directories between this entity and root */
+			char *path_copy = strdup(state->path);
+			if (path_copy) {
+				/* Get parent directory path */
+				char *last_slash = strrchr(path_copy, '/');
+				while (last_slash && last_slash > path_copy) {
+					*last_slash = '\0';  /* Truncate to get parent directory */
+					
+					/* Skip if we've reached or gone beyond the root watch path */
+					if (strlen(path_copy) < strlen(root->path)) {
+						break;
+					}
+					
+					/* Update state for this parent directory */
+					entity_state_t *parent_state = get_entity_state(path_copy, ENTITY_DIRECTORY, state->watch);
+					if (parent_state) {
+						parent_state->last_activity_in_tree = state->last_update;
+						parent_state->activity_in_progress = true;
+						parent_state->stability_check_count = 0;
+						synchronize_activity_states(parent_state->path, parent_state);
+					}
+					
+					/* Move to next parent directory */
+					last_slash = strrchr(path_copy, '/');
+				}
+				free(path_copy);
+			}
+		} else if (strcmp(state->path, state->watch->path) == 0) {
+			/* This is the root itself */
+			state->last_activity_in_tree = state->last_update;
 			synchronize_activity_states(state->path, state);
 		}
 	}
 	
-	/* Always sync the current state with other watches for the same path */
+	/* Always sync the current state */
 	synchronize_activity_states(state->path, state);
 }
 
@@ -237,18 +412,37 @@ long get_required_quiet_period(entity_state_t *state) {
 	if (state->type == ENTITY_DIRECTORY) {
 		required_ms = DIR_QUIET_PERIOD_MS;
 		
-		log_message(LOG_LEVEL_DEBUG, "Checking quiet period for %s: activity_in_progress = %s",
-				  state->path, state->activity_in_progress ? "TRUE" : "FALSE");
-		
+		/* Basic multiplier for active directories */
 		if (state->activity_in_progress) {
 			double multiplier = 3.0;
+			
+			/* Adjust multiplier based on directory complexity */
+			if (state->dir_stats.file_count > 0) {
+				/* Scale based on directory size (logarithmic) */
+				int total_entries = state->dir_stats.file_count + state->dir_stats.dir_count;
+				if (total_entries > 100) {
+					multiplier *= (1.0 + log10(total_entries / 100.0));
+				}
+				
+				/* Scale based on directory depth */
+				if (state->depth > 3) {
+					multiplier *= (1.0 + ((state->depth - 3) * 0.2));
+				}
+				
+				/* Cap the multiplier at a reasonable maximum */
+				if (multiplier > 20.0) multiplier = 20.0;
+			}
+			
 			required_ms = (long)(required_ms * multiplier);
 			log_message(LOG_LEVEL_DEBUG, "Using adaptive quiet period for %s: %.1fx = %ld ms",
 					  state->path, multiplier, required_ms);
 		}
 	}
 
+	/* Set reasonable limits */
 	if (required_ms < 10) required_ms = 10;
+	if (required_ms > 30000) required_ms = 30000;  /* Cap at 30 seconds */
+	
 	return required_ms;
 }
 
