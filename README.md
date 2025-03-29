@@ -16,6 +16,8 @@ A lightweight file and directory monitoring utility for FreeBSD and macOS that u
 - **Daemon Mode**: Run as a background service
 - **Syslog Integration**: Comprehensive logging with configurable verbosity
 - **Placeholder Substitution**: Dynamic command generation based on event details
+- **Command Intent Tracking**: Filters out self-generated events by analyzing command operations.
+- **Directory Stability Verification**: Uses stat() to recursively verify directory stability before executing commands.
 
 ## Requirements
 
