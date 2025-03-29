@@ -67,7 +67,7 @@ typedef struct entity_state {
     int activity_index;             /* Circular buffer index */
     bool activity_in_progress;      /* Flag indicating a burst of activity */
     
-    struct timespec last_activity_in_tree;
+    struct timespec last_activity_in_tree;  /* Latest activity anywhere in the tree */
     
     /* Hash table linkage */
     struct entity_state *next;       /* Next entity in hash bucket */
