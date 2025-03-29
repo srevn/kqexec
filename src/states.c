@@ -99,6 +99,44 @@ entity_state_t *find_root_state(entity_state_t *state) {
 	return get_entity_state(state->watch->path, ENTITY_DIRECTORY, state->watch);
 }
 
+/* Find all entity states for a path (regardless of watch) */
+void synchronize_activity_states(const char *path, entity_state_t *trigger_state) {
+	if (!path || !trigger_state || !entity_states) {
+		return;
+	}
+	
+	log_message(LOG_LEVEL_DEBUG, "Synchronizing activity states for path: %s", path);
+	
+	/* Loop through all hash buckets */
+	for (int i = 0; i < ENTITY_HASH_SIZE; i++) {
+		entity_state_t *state = entity_states[i];
+		while (state) {
+			/* If this state is for the same path but different watch */
+			if (strcmp(state->path, path) == 0 && state != trigger_state) {
+				log_message(LOG_LEVEL_DEBUG, "Synchronizing state for path %s (watch: %s) with trigger (watch: %s)",
+						   path, state->watch->name, trigger_state->watch->name);
+				
+				/* Synchronize key activity tracking fields */
+				state->last_update = trigger_state->last_update;
+				state->last_activity_in_tree = trigger_state->last_activity_in_tree;
+				state->activity_in_progress = trigger_state->activity_in_progress;
+				
+				/* Copy the most recent activity sample to keep timing consistent */
+				if (trigger_state->activity_sample_count > 0) {
+					int latest_idx = (trigger_state->activity_index + MAX_ACTIVITY_SAMPLES - 1) % MAX_ACTIVITY_SAMPLES;
+					int target_idx = (state->activity_index + MAX_ACTIVITY_SAMPLES - 1) % MAX_ACTIVITY_SAMPLES;
+					
+					state->recent_activity[target_idx] = trigger_state->recent_activity[latest_idx];
+					if (state->activity_sample_count == 0) {
+						state->activity_sample_count = 1;
+					}
+				}
+			}
+			state = state->next;
+		}
+	}
+}
+
 /* Record a new activity event in the entity's history */
 static void record_activity(entity_state_t *state, operation_type_t op) {
 	if (!state) return;
@@ -124,6 +162,9 @@ static void record_activity(entity_state_t *state, operation_type_t op) {
 				root->last_activity_in_tree = state->last_update;
 				log_message(LOG_LEVEL_DEBUG, "Updated root state (%s) tree activity time due to activity on %s",
 						root->path, state->path);
+						
+				/* Synchronize this root state with other watches for the same path */
+				synchronize_activity_states(root->path, root);
 			}
 		} else if (strcmp(state->path, state->watch->path) != 0) {
 			log_message(LOG_LEVEL_WARNING, "Could not find root state for %s to update tree activity time", state->path);
@@ -134,6 +175,9 @@ static void record_activity(entity_state_t *state, operation_type_t op) {
 				 state->last_update.tv_nsec > state->last_activity_in_tree.tv_nsec))
 			{
 				state->last_activity_in_tree = state->last_update;
+				
+				/* Synchronize with other watches for the same path */
+				synchronize_activity_states(state->path, state);
 			}
 		}
 	} else if (state->watch && strcmp(state->path, state->watch->path) == 0) {
@@ -143,8 +187,14 @@ static void record_activity(entity_state_t *state, operation_type_t op) {
 			 state->last_update.tv_nsec > state->last_activity_in_tree.tv_nsec))
 		{
 			state->last_activity_in_tree = state->last_update;
+			
+			/* Synchronize with other watches for the same path */
+			synchronize_activity_states(state->path, state);
 		}
 	}
+	
+	/* Always sync the current state with other watches for the same path */
+	synchronize_activity_states(state->path, state);
 }
 
 /* Calculate time between the last two recorded activities */
@@ -426,6 +476,9 @@ bool should_execute_command(entity_state_t *state, operation_type_t op, int defa
 			root->activity_in_progress = true;
 			log_message(LOG_LEVEL_DEBUG, "Directory content change for %s, marked root %s as active - command deferred",
 					  state->path, root->path);
+			
+			/* Synchronize with other watches for the same path */
+			synchronize_activity_states(root->path, root);
 		} else {
 			log_message(LOG_LEVEL_WARNING, "Directory content change for %s, but could not find root state for deferral",
 					  state->path);

@@ -51,7 +51,8 @@ static void watch_info_destroy(watch_info_t *info) {
 		return;
 	}
 	
-	if (info->wd >= 0) {
+	/* Only close the file descriptor if it's not shared with other watches */
+	if (info->wd >= 0 && !info->is_shared_fd) {
 		close(info->wd);
 	}
 	
@@ -177,8 +178,38 @@ static bool monitor_add_dir_recursive(monitor_t *monitor, const char *dir_path, 
 		return false;
 	}
 	
-	/* First, add a watch for the directory itself if needed */
-	if (!skip_existing || monitor_find_watch_info_by_path(monitor, dir_path) == NULL) {
+	/* Check if there's an existing watch for this directory path that we can reuse */
+	watch_info_t *existing_info = monitor_find_watch_info_by_path(monitor, dir_path);
+	
+	if (existing_info != NULL && !skip_existing) {
+		/* Reuse the existing file descriptor */
+		int fd = existing_info->wd;
+		
+		watch_info_t *info = calloc(1, sizeof(watch_info_t));
+		if (info == NULL) {
+			log_message(LOG_LEVEL_ERR, "Failed to allocate memory for watch info");
+			closedir(dir);
+			return false;
+		}
+		
+		info->wd = fd;
+		info->path = strdup(dir_path);
+		info->watch = watch;
+		info->is_shared_fd = true; /* Mark as shared */
+		
+		/* Update the existing info to also mark it as shared */
+		existing_info->is_shared_fd = true;
+		
+		if (!monitor_add_watch_info(monitor, info)) {
+			watch_info_destroy(info);
+			closedir(dir);
+			return false;
+		}
+		
+		log_message(LOG_LEVEL_DEBUG, "Added additional watch for directory: %s (with shared FD)", dir_path);
+	}
+	/* If no existing watch or if skip_existing is true but no watch exists yet */
+	else if (existing_info == NULL || (skip_existing && monitor_find_watch_info_by_path(monitor, dir_path) == NULL)) {
 		int fd = open(dir_path, O_RDONLY);
 		if (fd == -1) {
 			log_message(LOG_LEVEL_ERR, "Failed to open %s: %s", 
@@ -198,6 +229,7 @@ static bool monitor_add_dir_recursive(monitor_t *monitor, const char *dir_path, 
 		info->wd = fd;
 		info->path = strdup(dir_path);
 		info->watch = watch;
+		info->is_shared_fd = false; /* Initially not shared */
 		
 		if (!monitor_add_watch_info(monitor, info)) {
 			watch_info_destroy(info);
@@ -210,7 +242,7 @@ static bool monitor_add_dir_recursive(monitor_t *monitor, const char *dir_path, 
 			return false;
 		}
 		
-		log_message(LOG_LEVEL_DEBUG, "Added watch for directory: %s", dir_path);
+		log_message(LOG_LEVEL_DEBUG, "Added new watch for directory: %s", dir_path);
 	}
 	
 	/* If recursive monitoring is enabled, process subdirectories */
@@ -232,9 +264,17 @@ static bool monitor_add_dir_recursive(monitor_t *monitor, const char *dir_path, 
 			
 			snprintf(path, sizeof(path), "%s/%s", dir_path, entry->d_name);
 			
-			/* Skip if we're ignoring existing paths */
-			if (skip_existing && monitor_find_watch_info_by_path(monitor, path) != NULL) {
-				continue;
+			/* Check for existence if we're skipping existing paths */
+			bool path_exists = false;
+			if (skip_existing) {
+				for (int i = 0; i < monitor->watch_count; i++) {
+					if (strcmp(monitor->watches[i]->path, path) == 0 && 
+						monitor->watches[i]->watch == watch) {
+						path_exists = true;
+						break;
+					}
+				}
+				if (path_exists) continue;
 			}
 			
 			if (stat(path, &st) == -1) {
@@ -266,9 +306,33 @@ bool monitor_add_watch(monitor_t *monitor, watch_entry_t *watch) {
 		return false;
 	}
 	
-	/* Check if we already have a watch for this path */
-	if (monitor_find_watch_info_by_path(monitor, watch->path) != NULL) {
-		log_message(LOG_LEVEL_WARNING, "Already watching %s", watch->path);
+	/* Check if we already have a watch for this path, and reuse the file descriptor if we do */
+	watch_info_t *existing_info = monitor_find_watch_info_by_path(monitor, watch->path);
+	if (existing_info != NULL) {
+		log_message(LOG_LEVEL_INFO, "Adding additional watch for %s (watch: %s)", watch->path, watch->name);
+		
+		/* Create a new watch_info that reuses the file descriptor */
+		watch_info_t *info = calloc(1, sizeof(watch_info_t));
+		if (info == NULL) {
+			log_message(LOG_LEVEL_ERR, "Failed to allocate memory for watch info");
+			return false;
+		}
+		
+		/* Reuse the existing file descriptor */
+		info->wd = existing_info->wd;
+		info->path = strdup(watch->path);
+		info->watch = watch;
+		info->is_shared_fd = true; /* Mark that this FD is shared */
+		
+		if (!monitor_add_watch_info(monitor, info)) {
+			watch_info_destroy(info);
+			return false;
+		}
+		
+		/* Update the existing info to also mark it as shared */
+		existing_info->is_shared_fd = true;
+		
+		/* No need to add kqueue watch again since we're using the same FD */
 		return true;
 	}
 	
@@ -311,6 +375,7 @@ bool monitor_add_watch(monitor_t *monitor, watch_entry_t *watch) {
 		info->wd = fd;
 		info->path = strdup(watch->path);
 		info->watch = watch;
+		info->is_shared_fd = false; /* Initially not shared */
 		
 		if (!monitor_add_watch_info(monitor, info)) {
 			watch_info_destroy(info);
@@ -383,6 +448,10 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 	
 	/* Track if we discovered new directories while scanning */
 	bool new_directories_found = false;
+	
+	/* Track paths we've already processed in this cycle to avoid duplicates */
+	char processed_paths[MAX_WATCHES][MAX_PATH_LEN];
+	int processed_count = 0;
 
 	/* Iterate through configured watches to check root states */
 	for (int i = 0; i < monitor->config->watch_count; i++) {
@@ -393,12 +462,31 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 		
 		total_dir_watches++;
 		
+		/* Check if we've already processed this path in this cycle */
+		bool already_processed = false;
+		for (int j = 0; j < processed_count; j++) {
+			if (strcmp(processed_paths[j], watch->path) == 0) {
+				log_message(LOG_LEVEL_DEBUG, "Skipping duplicate processing for path: %s (watch: %s)",
+						   watch->path, watch->name);
+				already_processed = true;
+				break;
+			}
+		}
+		if (already_processed) continue;
+		
 		/* Get root state */
 		entity_state_t *root_state = get_entity_state(watch->path, ENTITY_DIRECTORY, watch);
 		if (!root_state) {
 			log_message(LOG_LEVEL_WARNING, "Failed to get root state for deferred check: %s (watch: %s)",
 					  watch->path, watch->name);
 			continue;
+		}
+		
+		/* Add to processed paths */
+		if (processed_count < MAX_WATCHES) {
+			strncpy(processed_paths[processed_count], watch->path, MAX_PATH_LEN - 1);
+			processed_paths[processed_count][MAX_PATH_LEN - 1] = '\0';
+			processed_count++;
 		}
 		
 		/* Check for activity in progress */
@@ -426,6 +514,9 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 					/* Don't reset activity flag - keep monitoring for events in new dirs
 					   But update the last activity time to avoid continuous scanning */
 					root_state->last_activity_in_tree = *current_time;
+					
+					/* Synchronize with other watches for the same path */
+					synchronize_activity_states(root_state->path, root_state);
 					continue;
 				}
 				
@@ -435,10 +526,10 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 						  "Quiet period elapsed for %s (watch: %s), processing deferred events",
 						  root_state->path, watch->name);
 				
-				/* Reset activity flag only after scanning found no new directories */
+				/* Reset activity flag for all watches of this path */
 				root_state->activity_in_progress = false;
 				
-				/* Create synthetic event and execute command */
+				/* Create synthetic event and execute command for this watch */
 				file_event_t synthetic_event = {
 					.path = root_state->path,
 					.type = EVENT_CONTENT,
@@ -450,19 +541,42 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 				log_message(LOG_LEVEL_INFO, "Executing deferred command for %s (watch: %s)",
 						  root_state->path, watch->name);
 				
-				if (command_execute(watch, &synthetic_event)) {
-					commands_executed++;
-					log_message(LOG_LEVEL_INFO, "Deferred command execution successful for %s", root_state->path);
+				/* Now find and execute commands for ALL watches of this path */
+				for (int j = 0; j < monitor->config->watch_count; j++) {
+					watch_entry_t *other_watch = monitor->config->watches[j];
 					
-					/* Reset state change flags */
-					root_state->content_changed = false;
-					root_state->metadata_changed = false;
-					root_state->structure_changed = false;
+					/* Skip non-directory watches */
+					if (other_watch->type != WATCH_DIRECTORY) continue;
 					
-					/* Update last command time */
-					root_state->last_command_time = current_time->tv_sec;
-				} else {
-					log_message(LOG_LEVEL_WARNING, "Deferred command execution failed for %s", root_state->path);
+					/* If this is another watch for the same path */
+					if (strcmp(other_watch->path, root_state->path) == 0) {
+						entity_state_t *other_state = get_entity_state(other_watch->path, ENTITY_DIRECTORY, other_watch);
+						if (!other_state) continue;
+						
+						/* Reset activity flag for this state too */
+						other_state->activity_in_progress = false;
+						
+						/* Execute command for this watch */
+						log_message(LOG_LEVEL_INFO, "Executing deferred command for %s (watch: %s)",
+								  other_state->path, other_watch->name);
+						
+						if (command_execute(other_watch, &synthetic_event)) {
+							commands_executed++;
+							log_message(LOG_LEVEL_INFO, "Deferred command execution successful for %s (watch: %s)", 
+									  other_state->path, other_watch->name);
+							
+							/* Reset state change flags */
+							other_state->content_changed = false;
+							other_state->metadata_changed = false;
+							other_state->structure_changed = false;
+							
+							/* Update last command time */
+							other_state->last_command_time = current_time->tv_sec;
+						} else {
+							log_message(LOG_LEVEL_WARNING, "Deferred command execution failed for %s (watch: %s)", 
+									  other_state->path, other_watch->name);
+						}
+					}
 				}
 			}
 		}
@@ -580,52 +694,78 @@ bool monitor_process_events(monitor_t *monitor) {
 	if (nev > 0) {
 		log_message(LOG_LEVEL_DEBUG, "Processing %d new kqueue events", nev);
 		for (int i = 0; i < nev; i++) {
-			watch_info_t *info = monitor_find_watch_info_by_wd(monitor, events[i].ident);
-			if (!info || !info->watch) {
-				log_message(LOG_LEVEL_WARNING, "Event for unknown watch descriptor: %d", (int)events[i].ident);
-				continue;
+			/* Find all watches that use this file descriptor */
+			for (int j = 0; j < monitor->watch_count; j++) {
+				watch_info_t *info = monitor->watches[j];
+				
+				if (info->wd == events[i].ident) {
+					file_event_t event;
+					memset(&event, 0, sizeof(event));
+					event.path = info->path;
+					event.type = flags_to_event_type(events[i].fflags);
+					event.time = after_kevent_time;
+					clock_gettime(CLOCK_REALTIME, &event.wall_time);
+					event.user_id = getuid();
+					
+					entity_type_t entity_type = (info->watch->type == WATCH_FILE) ?
+											   ENTITY_FILE : ENTITY_DIRECTORY;
+					
+					log_message(LOG_LEVEL_DEBUG, "Event: path=%s, flags=0x%x -> type=%s (watch: %s)",
+							   info->path, events[i].fflags, event_type_to_string(event.type), info->watch->name);
+					
+					/* Process the event using the associated watch configuration */
+					process_event(info->watch, &event, entity_type);
+				}
 			}
 			
-			file_event_t event;
-			memset(&event, 0, sizeof(event));
-			event.path = info->path;
-			event.type = flags_to_event_type(events[i].fflags);
-			event.time = after_kevent_time;
-			clock_gettime(CLOCK_REALTIME, &event.wall_time);
-			event.user_id = getuid();
-			
-			entity_type_t entity_type = (info->watch->type == WATCH_FILE) ?
-									   ENTITY_FILE : ENTITY_DIRECTORY;
-			
-			log_message(LOG_LEVEL_DEBUG, "Event: path=%s, flags=0x%x -> type=%s (watch: %s)",
-					   info->path, events[i].fflags, event_type_to_string(event.type), info->watch->name);
-			
-			/* Process the event using the associated watch configuration */
-			process_event(info->watch, &event, entity_type);
-			
 			/* Handle NOTE_DELETE / NOTE_REVOKE for watched descriptors */
-			if (events[i].fflags & (NOTE_DELETE | NOTE_REVOKE)) {
-				log_message(LOG_LEVEL_DEBUG, "DELETE/REVOKE detected for %s, re-opening", info->path);
-				close(info->wd);
-				info->wd = -1;
+			/* We need to find the first watch info for this FD to handle reopening */
+			watch_info_t *primary_info = NULL;
+			for (int j = 0; j < monitor->watch_count; j++) {
+				if (monitor->watches[j]->wd == events[i].ident) {
+					primary_info = monitor->watches[j];
+					break;
+				}
+			}
+			
+			if (primary_info && (events[i].fflags & (NOTE_DELETE | NOTE_REVOKE))) {
+				log_message(LOG_LEVEL_DEBUG, "DELETE/REVOKE detected for %s, re-opening", primary_info->path);
+				close(primary_info->wd);
 				
-				int new_fd = open(info->path, O_RDONLY);
+				int new_fd = open(primary_info->path, O_RDONLY);
 				if (new_fd != -1) {
-					info->wd = new_fd;
+					/* Update all watch_info structures that share this FD */
+					for (int j = 0; j < monitor->watch_count; j++) {
+						if (monitor->watches[j]->wd == events[i].ident) {
+							monitor->watches[j]->wd = new_fd;
+						}
+					}
+					
 					log_message(LOG_LEVEL_INFO, "Re-opened %s after DELETE/REVOKE (new descriptor: %d)", 
-							 info->path, info->wd);
+							 primary_info->path, new_fd);
 							 
-					if (!monitor_add_kqueue_watch(monitor, info)) {
-						log_message(LOG_LEVEL_WARNING, "Failed to re-add kqueue watch for %s", info->path);
+					if (!monitor_add_kqueue_watch(monitor, primary_info)) {
+						log_message(LOG_LEVEL_WARNING, "Failed to re-add kqueue watch for %s", primary_info->path);
+						/* Close and invalidate all related watch descriptors */
 						close(new_fd);
-						info->wd = -1;
+						for (int j = 0; j < monitor->watch_count; j++) {
+							if (monitor->watches[j]->wd == new_fd) {
+								monitor->watches[j]->wd = -1;
+							}
+						}
 					}
 				} else {
 					if (errno == ENOENT) {
-						log_message(LOG_LEVEL_DEBUG, "Path %s no longer exists after DELETE/REVOKE", info->path);
+						log_message(LOG_LEVEL_DEBUG, "Path %s no longer exists after DELETE/REVOKE", primary_info->path);
 					} else {
 						log_message(LOG_LEVEL_WARNING, "Failed to re-open %s: %s", 
-								   info->path, strerror(errno));
+								   primary_info->path, strerror(errno));
+					}
+					/* Invalidate all watch descriptors for this path */
+					for (int j = 0; j < monitor->watch_count; j++) {
+						if (monitor->watches[j]->wd == events[i].ident) {
+							monitor->watches[j]->wd = -1;
+						}
 					}
 				}
 			}

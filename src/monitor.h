@@ -15,6 +15,7 @@ typedef struct {
 	int wd;                 	/* Watch descriptor (file descriptor) */
 	char *path;             	/* Full path */
 	watch_entry_t *watch;   	/* Associated watch entry */
+	bool is_shared_fd;          /* Whether this FD is shared with other watches */
 } watch_info_t;
 
 /* Structure to hold monitoring context */
