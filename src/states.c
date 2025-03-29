@@ -285,7 +285,7 @@ bool verify_directory_stability(const char *dir_path, dir_stats_t *stats) {
 entity_state_t *find_root_state(entity_state_t *state) {
 	if (!state || !state->watch || !state->watch->path) {
 		if (state && state->path) {
-			log_message(LOG_LEVEL_WARNING, "find_root_state: Invalid watch info for state %s", state->path);
+			log_message(LOG_LEVEL_WARNING, "Invalid watch info for state %s", state->path);
 		}
 		return NULL;
 	}
@@ -833,14 +833,4 @@ bool process_event(watch_entry_t *watch, file_event_t *event, entity_type_t enti
 		log_message(LOG_LEVEL_DEBUG, "Command for %s (op %d) deferred or debounced", state->path, op);
 		return false;
 	}
-}
-
-/* Set the global quiet period (placeholder implementation) */
-void set_quiet_period(int milliseconds) {
-	log_message(LOG_LEVEL_WARNING, "Dynamic quiet period setting not implemented (using defines): %d ms", milliseconds);
-}
-
-/* Get the current quiet period value */
-int get_quiet_period(void) {
-	return QUIET_PERIOD_MS;
 }

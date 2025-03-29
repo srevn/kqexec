@@ -105,8 +105,6 @@ long get_required_quiet_period(entity_state_t *state);
 bool is_activity_burst(entity_state_t *state);
 entity_state_t *find_root_state(entity_state_t *state);
 long get_required_quiet_period(entity_state_t *state);
-void set_quiet_period(int milliseconds);
-int get_quiet_period(void);
 bool verify_directory_stability(const char *dir_path, dir_stats_t *stats);
 bool compare_dir_stats(dir_stats_t *prev, dir_stats_t *current);
 int calculate_path_depth(const char *path);
