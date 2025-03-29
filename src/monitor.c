@@ -22,6 +22,9 @@
 /* Maximum path length */
 #define MAX_PATH_LEN 1024
 
+/* Define max allowed failures before giving up */
+#define MAX_FAILED_CHECKS 3
+
 /* Create a new file/directory monitor */
 monitor_t *monitor_create(config_t *config) {
 	monitor_t *monitor;
@@ -514,6 +517,42 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 				/* Perform recursive stability verification */
 				dir_stats_t current_stats;
 				bool scan_completed = verify_directory_stability(root_state->path, &current_stats, 0);
+				
+				if (!scan_completed) {
+					/* Check if the directory still exists */
+					struct stat st;
+					bool exists = (stat(root_state->path, &st) == 0 && S_ISDIR(st.st_mode));
+					
+					if (!exists) {
+						/* Increment failed checks counter */
+						root_state->failed_checks++;
+						
+						log_message(LOG_LEVEL_DEBUG, 
+								  "Directory %s not found (attempt %d/%d)",
+								  root_state->path, root_state->failed_checks, MAX_FAILED_CHECKS);
+						
+						/* After multiple consecutive failures, consider it permanently deleted */
+						if (root_state->failed_checks >= MAX_FAILED_CHECKS) {
+							log_message(LOG_LEVEL_NOTICE, 
+									  "Directory %s confirmed deleted after %d failed checks, cleaning up",
+									  root_state->path, root_state->failed_checks);
+							
+							/* Mark as not active to stop further checks */
+							root_state->activity_in_progress = false;
+							root_state->exists = false;
+							synchronize_activity_states(root_state->path, root_state);
+							
+							/* Skip to next watch entry */
+							continue;
+						}
+					} else {
+						/* Directory exists but scan failed for some other reason */
+						root_state->failed_checks = 0;  /* Reset counter */
+					}
+				} else {
+					/* Reset failed check counter on successful scan */
+					root_state->failed_checks = 0;
+				}
 				
 				/* Always store the stats, regardless of stability */
 				root_state->dir_stats = current_stats;

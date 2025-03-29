@@ -67,6 +67,7 @@ typedef struct entity_state {
     bool content_changed;            /* Content has changed */
     bool metadata_changed;           /* Metadata has changed */
     bool structure_changed;          /* Structural change occurred */
+    int failed_checks;               /* Number of consecutive failed stability checks */
     
     /* Command tracking */
     time_t last_command_time;        /* When a command was last triggered */

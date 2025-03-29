@@ -599,6 +599,7 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 
 	init_activity_tracking(state, watch);
 	state->last_command_time = 0;
+	state->failed_checks = 0;
 
 	/* Add to hash table */
 	state->next = entity_states[hash];
