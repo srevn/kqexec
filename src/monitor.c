@@ -478,11 +478,6 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 			continue;
 		}
 		
-		/* If not previously set, calculate and store the depth */
-		if (root_state->depth == 0) {
-			root_state->depth = calculate_path_depth(root_state->path);
-		}
-		
 		/* Check for activity in progress */
 		if (root_state->activity_in_progress) {
 			watches_with_activity++;
@@ -591,9 +586,10 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 					
 					/* Simplified check count logic based on directory classification */
 					int total_entries = current_stats.file_count + current_stats.dir_count;
+					int tree_depth = current_stats.depth;
 					
 					/* Very small directories */
-					if (total_entries < 10 && root_state->depth <= 2) {
+					if (total_entries < 10 && tree_depth == 0) {
 						required_checks = 1;  /* One check is sufficient */
 					}
 					/* Small to medium directories */
@@ -601,7 +597,7 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 						required_checks = 2;  /* Two checks */
 					}
 					/* Large directories */
-					else if (total_entries < 1000 || root_state->depth > 4) {
+					else if (total_entries < 1000 || tree_depth > 3) {
 						required_checks = 3;  /* Three checks */
 					}
 					/* Very large or complex directories */
@@ -814,10 +810,10 @@ bool monitor_process_events(monitor_t *monitor) {
 			remaining_ms = remaining_ms / 2 + 50;
 		}
 		
-		log_message(LOG_LEVEL_DEBUG, "Path %s: %ld ms elapsed of %ld ms quiet period, entries=%d, dirs=%d, adjusted wait: %ld ms",
+		log_message(LOG_LEVEL_DEBUG, "Path %s: %ld ms elapsed of %ld ms quiet period, entries=%d, dirs=%d, tree_depth=%d, adjusted wait: %ld ms",
 									unique_paths[i], elapsed_ms, required_quiet_period_ms, 
 									root_state->dir_stats.file_count, root_state->dir_stats.dir_count,
-									remaining_ms);
+									root_state->dir_stats.depth, remaining_ms);
 		
 		/* Calculate absolute wakeup time */
 		time_t wake_sec = now_monotonic.tv_sec + (remaining_ms / 1000);

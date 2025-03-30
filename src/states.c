@@ -83,32 +83,6 @@ static void init_activity_tracking(entity_state_t *state, watch_entry_t *watch) 
 	state->last_activity_in_tree = state->last_update;
 }
 
-/* Calculate the depth of a path (number of directory levels) */
-int calculate_path_depth(const char *path) {
-	int depth = 0;
-	const char *p = path;
-	
-	/* Start with depth 1 for absolute paths, 0 for relative */
-	if (*p == '/') {
-		depth = 0;
-		p++;
-	}
-	
-	while (*p) {
-		if (*p == '/') {
-			depth++;
-		}
-		p++;
-	}
-	
-	/* Add 1 for the final component if it's not just a trailing slash */
-	if (*(p-1) != '/') {
-		depth++;
-	}
-	
-	return depth;
-}
-
 /* Compare two directory statistics to check for stability */
 bool compare_dir_stats(dir_stats_t *prev, dir_stats_t *current) {
 	if (!prev || !current) return false;
@@ -221,15 +195,15 @@ bool verify_directory_stability(const char *dir_path, dir_stats_t *stats, int re
 				continue;
 			}
 			
-			/* Check for very recent file modifications (< 3 seconds) */
-			if (difftime(now, st.st_mtime) < 3.0) {
+			/* Check for very recent file modifications (< 1 seconds) */
+			if (difftime(now, st.st_mtime) < 1.0) {
 				log_message(LOG_LEVEL_DEBUG, "Directory %s unstable: recent file modification (%s, %.1f seconds ago)", 
 						  dir_path, entry->d_name, difftime(now, st.st_mtime));
 				stats->has_temp_files = true;
 			}
 			
 			/* Check for temporary files */
-			if (st.st_size == 0 || 
+			if ((st.st_size == 0 && difftime(now, st.st_mtime) < 5.0) || 
 				strstr(entry->d_name, ".tmp") != NULL || 
 				strstr(entry->d_name, ".part") != NULL || 
 				strstr(entry->d_name, ".~") != NULL ||
@@ -250,6 +224,11 @@ bool verify_directory_stability(const char *dir_path, dir_stats_t *stats, int re
 			if (!verify_directory_stability(path, &subdir_stats, recursion_depth + 1)) {
 				closedir(dir);
 				return false;
+			}
+			
+			/* Update maximum tree depth based on subdirectory scan results */
+			if (subdir_stats.depth + 1 > stats->depth) {
+				stats->depth = subdir_stats.depth + 1;
 			}
 			
 			/* Incorporate subdirectory stats */
@@ -309,7 +288,6 @@ void synchronize_activity_states(const char *path, entity_state_t *trigger_state
 				state->activity_in_progress = trigger_state->activity_in_progress;
 				
 				/* Add directory statistics synchronization */
-				state->depth = trigger_state->depth;
 				state->dir_stats = trigger_state->dir_stats;
 				state->prev_stats = trigger_state->prev_stats;
 				state->stability_check_count = trigger_state->stability_check_count;
@@ -439,34 +417,37 @@ long get_required_quiet_period(entity_state_t *state) {
 	if (state->type == ENTITY_DIRECTORY) {
 		required_ms = DIR_QUIET_PERIOD_MS;
 		
-		/* For active directories, use fixed values based on complexity class */
+		/* For active directories, use adaptive complexity measurement */
 		if (state->activity_in_progress) {
-			/* Get complexity indicators */
+			/* Extract complexity indicators */
 			int total_entries = state->dir_stats.file_count + state->dir_stats.dir_count;
-			int depth = state->depth;
+			int tree_depth = state->dir_stats.depth;
+			int subdir_count = state->dir_stats.dir_count;
 			
-			/* Simple, fixed quiet periods based on directory class */
-			if (total_entries < 10 && depth <= 2) {
-				/* Small, shallow directories */
-				required_ms = 1000; /* 1 second */
+			/* Base quiet period on total entries */
+			if (total_entries < 10) {
+				required_ms = 1000; /* 1 second for small directories */
 			} else if (total_entries < 100) {
-				/* Medium directories */
-				required_ms = 2000; /* 2 seconds */
+				required_ms = 1500; /* 1.5 seconds for medium directories */
 			} else if (total_entries < 1000) {
-				/* Large directories */
-				required_ms = 3000; /* 3 seconds */
+				required_ms = 2500; /* 2.5 seconds for large directories */
 			} else {
-				/* Very large directories */
-				required_ms = 5000; /* 5 seconds */
+				required_ms = 4000; /* 4 seconds for very large directories */
 			}
 			
-			/* Add extra time for deep directories */
-			if (depth > 3) {
-				required_ms += (depth - 3) * 500; /* +500ms per level beyond 3 */
+			/* Add time for directory tree depth */
+			if (tree_depth > 0) {
+				required_ms += tree_depth * 250; /* Add 250ms per directory level */
 			}
 			
-			log_message(LOG_LEVEL_DEBUG, "Using quiet period for %s: %ld ms (entries: %d, depth: %d)",
-					  state->path, required_ms, total_entries, depth);
+			/* Add time for complex directory structures with many subdirectories */
+			if (subdir_count > 10) {
+				required_ms += 500; /* Complex structure with many subdirectories */
+			}
+			
+			log_message(LOG_LEVEL_DEBUG, 
+					  "Using adaptive quiet period for %s: %ld ms (entries: %d, tree depth: %d, subdirs: %d)",
+					  state->path, required_ms, total_entries, tree_depth, subdir_count);
 		}
 	}
 
@@ -590,9 +571,6 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 		state->type = type;
 	}
 
-	/* Add the depth calculation here */
-	state->depth = calculate_path_depth(state->path);
-
 	clock_gettime(CLOCK_MONOTONIC, &state->last_update);
 	clock_gettime(CLOCK_REALTIME, &state->wall_time);
 	state->last_activity_in_tree = state->last_update;
@@ -605,8 +583,8 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 	state->next = entity_states[hash];
 	entity_states[hash] = state;
 
-	log_message(LOG_LEVEL_DEBUG, "Created new state for path=%s, watch=%s, type=%d, depth=%d",
-			  path, watch->name, state->type, state->depth);
+	log_message(LOG_LEVEL_DEBUG, "Created new state for path=%s, watch=%s, type=%d",
+			  path, watch->name, state->type);
 
 	return state;
 }

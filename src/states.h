@@ -47,6 +47,7 @@ typedef struct {
 
 /* Directory statistics for stability verification */
 typedef struct {
+    int depth;                      /* Directory tree depth */
     int file_count;                 /* Number of files in the directory */
     int dir_count;                  /* Number of subdirectories */
     size_t total_size;              /* Total size of files in the directory */
@@ -83,9 +84,6 @@ typedef struct entity_state {
     dir_stats_t prev_stats;          /* Previous stats for comparison */
     int stability_check_count;       /* Number of stability checks */
     
-    /* Tree depth tracking */
-    int depth;
-    
     struct timespec last_activity_in_tree;  /* Latest activity anywhere in the tree */
     
     /* Hash table linkage */
@@ -108,6 +106,5 @@ entity_state_t *find_root_state(entity_state_t *state);
 long get_required_quiet_period(entity_state_t *state);
 bool verify_directory_stability(const char *dir_path, dir_stats_t *stats, int recursion_depth);
 bool compare_dir_stats(dir_stats_t *prev, dir_stats_t *current);
-int calculate_path_depth(const char *path);
 
 #endif /* STATES_H */
