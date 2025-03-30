@@ -103,6 +103,9 @@ static bool gather_basic_directory_stats(const char *dir_path, dir_stats_t *stat
 		return false;
 	}
 	
+	time_t now;
+	time(&now);
+	
 	while ((entry = readdir(dir))) {
 		/* Skip . and .. */
 		if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
@@ -144,12 +147,40 @@ static bool gather_basic_directory_stats(const char *dir_path, dir_stats_t *stat
 				stats->dir_count += subdir_stats.dir_count;
 				stats->total_size += subdir_stats.total_size;
 				
+				/* Calculate and update recursive stats */
+				if (subdir_stats.recursive_file_count > 0 || subdir_stats.recursive_dir_count > 0) {
+					/* Subdirectory already has recursive stats, use them */
+					stats->recursive_file_count += subdir_stats.recursive_file_count;
+					stats->recursive_dir_count += subdir_stats.recursive_dir_count;
+					stats->recursive_total_size += subdir_stats.recursive_total_size;
+					
+					/* Update depth considering subdirectory's max depth */
+					if (subdir_stats.depth + 1 > stats->depth) {
+						stats->depth = subdir_stats.depth + 1;
+					}
+				} else {
+					/* Subdirectory doesn't have recursive stats, use direct stats */
+					stats->recursive_file_count += subdir_stats.file_count;
+					stats->recursive_dir_count += subdir_stats.dir_count;
+					stats->recursive_total_size += subdir_stats.total_size;
+					
+					/* Update depth considering subdirectory's depth */
+					if (subdir_stats.depth + 1 > stats->depth) {
+						stats->depth = subdir_stats.depth + 1;
+					}
+				}
+				
 				if (subdir_stats.latest_mtime > stats->latest_mtime) {
 					stats->latest_mtime = subdir_stats.latest_mtime;
 				}
 			}
 		}
 	}
+	
+	/* Ensure recursive stats include direct stats at this level */
+	stats->recursive_file_count += stats->file_count;
+	stats->recursive_dir_count += stats->dir_count;
+	stats->recursive_total_size += stats->total_size;
 	
 	closedir(dir);
 	return true;
@@ -304,6 +335,9 @@ bool verify_directory_stability(const char *dir_path, dir_stats_t *stats, int re
 					 * Check if we have more than just default values */
 					if (state->dir_stats.file_count > 0 || 
 						state->dir_stats.dir_count > 0 ||
+						state->dir_stats.depth > 0 ||
+						state->dir_stats.recursive_file_count > 0 ||
+						state->dir_stats.recursive_dir_count > 0 ||
 						state->dir_stats.depth > 0) {
 						use_existing_stats = true;
 						break;
@@ -318,9 +352,12 @@ bool verify_directory_stability(const char *dir_path, dir_stats_t *stats, int re
 	/* If we found an existing state with valid stats, use that for verification */
 	if (use_existing_stats && existing_state) {
 		log_message(LOG_LEVEL_DEBUG, 
-				  "Using existing stats for stability verification of %s: files=%d, dirs=%d, depth=%d",
+				  "Using existing stats for stability verification of %s: files=%d, dirs=%d, depth=%d, recursive_files=%d, recursive_dirs=%d, depth=%d",
 				  dir_path, existing_state->dir_stats.file_count, 
-				  existing_state->dir_stats.dir_count, existing_state->dir_stats.depth);
+				  existing_state->dir_stats.dir_count, existing_state->dir_stats.depth,
+				  existing_state->dir_stats.recursive_file_count,
+				  existing_state->dir_stats.recursive_dir_count,
+				  existing_state->dir_stats.depth);
 		
 		/* Make a copy of the existing stats */
 		*stats = existing_state->dir_stats;
@@ -451,6 +488,8 @@ bool verify_directory_stability(const char *dir_path, dir_stats_t *stats, int re
 				log_message(LOG_LEVEL_DEBUG, "Directory %s unstable: recent file modification (%s, %.1f seconds ago)", 
 						  dir_path, entry->d_name, difftime(now, st.st_mtime));
 				stats->has_temp_files = true;
+				closedir(dir);
+				return false;
 			}
 			
 			/* Check for temporary files */
@@ -462,6 +501,8 @@ bool verify_directory_stability(const char *dir_path, dir_stats_t *stats, int re
 				strstr(entry->d_name, ".download") != NULL) {
 				log_message(LOG_LEVEL_DEBUG, "Directory %s unstable: temp file detected (%s)", dir_path, entry->d_name);
 				stats->has_temp_files = true;
+				closedir(dir);
+				return false;
 			}
 		} else if (S_ISDIR(st.st_mode)) {
 			stats->dir_count++;
@@ -488,15 +529,39 @@ bool verify_directory_stability(const char *dir_path, dir_stats_t *stats, int re
 			stats->total_size += subdir_stats.total_size;
 			stats->has_temp_files |= subdir_stats.has_temp_files;
 			
+			/* Calculate and update recursive stats */
+			if (subdir_stats.recursive_file_count > 0 || subdir_stats.recursive_dir_count > 0) {
+				/* Subdirectory already has recursive stats, use them */
+				stats->recursive_file_count += subdir_stats.recursive_file_count;
+				stats->recursive_dir_count += subdir_stats.recursive_dir_count;
+				stats->recursive_total_size += subdir_stats.recursive_total_size;
+				
+				/* Update depth considering subdirectory's max depth */
+				if (subdir_stats.depth + 1 > stats->depth) {
+					stats->depth = subdir_stats.depth + 1;
+				}
+			} else {
+				/* Subdirectory doesn't have recursive stats, use direct stats */
+				stats->recursive_file_count += subdir_stats.file_count;
+				stats->recursive_dir_count += subdir_stats.dir_count;
+				stats->recursive_total_size += subdir_stats.total_size;
+				
+				/* Update depth considering subdirectory's depth */
+				if (subdir_stats.depth + 1 > stats->depth) {
+					stats->depth = subdir_stats.depth + 1;
+				}
+			}
+			
 			if (subdir_stats.latest_mtime > stats->latest_mtime) {
 				stats->latest_mtime = subdir_stats.latest_mtime;
 			}
 		}
 	}
 	
-	if (stats->has_temp_files) {
-		log_message(LOG_LEVEL_DEBUG, "Directory %s has temporary or very recently modified files", dir_path);
-	}
+	/* Ensure recursive stats include direct stats at this level */
+	stats->recursive_file_count += stats->file_count;
+	stats->recursive_dir_count += stats->dir_count;
+	stats->recursive_total_size += stats->total_size;
 	
 	closedir(dir);
 	return !stats->has_temp_files;
@@ -726,13 +791,13 @@ long get_required_quiet_period(entity_state_t *state) {
 		/* For active directories, use adaptive complexity measurement */
 		if (state->activity_in_progress) {
 			/* Extract complexity indicators */
-			int total_entries = state->dir_stats.file_count + state->dir_stats.dir_count;
-			int tree_depth = state->dir_stats.depth;
-			int subdir_count = state->dir_stats.dir_count;
+			int total_entries = state->dir_stats.recursive_file_count + state->dir_stats.recursive_dir_count;
+			int tree_depth = state->dir_stats.depth > 0 ? state->dir_stats.depth : state->dir_stats.depth;
+			int subdir_count = state->dir_stats.recursive_dir_count;
 			
 			/* Calculate the change rate from prev_stats to current stats */
-			int prev_total_entries = state->prev_stats.file_count + state->prev_stats.dir_count;
-			int prev_tree_depth = state->prev_stats.depth;
+			int prev_total_entries = state->prev_stats.recursive_file_count + state->prev_stats.recursive_dir_count;
+			int prev_tree_depth = state->prev_stats.depth > 0 ? state->prev_stats.depth : state->prev_stats.depth;
 			int entry_change = total_entries - prev_total_entries;
 			int depth_change = tree_depth - prev_tree_depth;
 			
@@ -790,18 +855,18 @@ long get_required_quiet_period(entity_state_t *state) {
 			}
 			
 			log_message(LOG_LEVEL_DEBUG, 
-					  "Using rate-based quiet period for %s: %ld ms (entries: %d [%+d], depth: %d [%+d], subdirs: %d)",
-					  state->path, required_ms, total_entries, entry_change, tree_depth, depth_change, subdir_count);
+			  "Using rate-based quiet period for %s: %ld ms (recursive entries: %d [%+d], max depth: %d [%+d], total subdirs: %d)",
+			  state->path, required_ms, total_entries, entry_change, tree_depth, depth_change, subdir_count);
 		}
 		else {
-			/* For inactive directories, just log the base period */
-			int total_entries = state->dir_stats.file_count + state->dir_stats.dir_count;
-			int tree_depth = state->dir_stats.depth;
-			int subdir_count = state->dir_stats.dir_count;
+			/* For inactive directories, just log the base period with recursive stats */
+			int total_entries = state->dir_stats.recursive_file_count + state->dir_stats.recursive_dir_count;
+			int tree_depth = state->dir_stats.depth > 0 ? state->dir_stats.depth : state->dir_stats.depth;
+			int subdir_count = state->dir_stats.recursive_dir_count;
 			
 			log_message(LOG_LEVEL_DEBUG, 
-					  "Using base quiet period for %s: %ld ms (total entries: %d, tree depth: %d, subdirs: %d)",
-					  state->path, required_ms, total_entries, tree_depth, subdir_count);
+			  "Using base quiet period for %s: %ld ms (recursive entries: %d, max depth: %d, total subdirs: %d)",
+			  state->path, required_ms, total_entries, tree_depth, subdir_count);
 		}
 	}
 

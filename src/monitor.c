@@ -549,15 +549,32 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 					root_state->failed_checks = 0;
 				}
 				
-				/* Always store the stats, regardless of stability */
-				root_state->dir_stats = current_stats;
+				if (current_stats.recursive_file_count > root_state->dir_stats.recursive_file_count ||
+					current_stats.recursive_dir_count > root_state->dir_stats.recursive_dir_count ||
+					current_stats.depth > root_state->dir_stats.depth) {
+					
+					log_message(LOG_LEVEL_DEBUG, 
+							  "Updating root directory %s with more comprehensive recursive stats: files=%d, dirs=%d, depth=%d",
+							  root_state->path, current_stats.recursive_file_count, 
+							  current_stats.recursive_dir_count, current_stats.depth);
+					
+					/* Store full recursive stats in the root state */
+					root_state->dir_stats.recursive_file_count = current_stats.recursive_file_count;
+					root_state->dir_stats.recursive_dir_count = current_stats.recursive_dir_count;
+					root_state->dir_stats.depth = current_stats.depth;
+					root_state->dir_stats.recursive_total_size = current_stats.recursive_total_size;
+					
+					/* Also update these for other watches via synchronization */
+					synchronize_activity_states(root_state->path, root_state);
+				}
 				
-				/* Log the scan results */
+				/* Log the scan results with both direct and recursive stats */
 				log_message(LOG_LEVEL_DEBUG, 
-					"Stability check #%d for %s: files=%d, dirs=%d, size=%zu, stable=%s",
+					"Stability check #%d for %s: files=%d, dirs=%d, size=%zu, recursive_files=%d, recursive_dirs=%d, depth=%d, stable=%s",
 					root_state->stability_check_count + 1, root_state->path, 
-					current_stats.file_count, current_stats.dir_count, 
-					current_stats.total_size, scan_completed ? "yes" : "no");
+					current_stats.file_count, current_stats.dir_count, current_stats.total_size,
+					current_stats.recursive_file_count, current_stats.recursive_dir_count, 
+					current_stats.depth, scan_completed ? "yes" : "no");
 				
 				/* Determine stability based on scan result and comparison */
 				bool is_stable = scan_completed;  /* Initially use scan result */
@@ -576,6 +593,9 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 				/* Always update previous stats for next comparison */
 				root_state->prev_stats = current_stats;
 				
+				/* Synchronize updated stats with other watches */
+				synchronize_activity_states(root_state->path, root_state);
+				
 				if (is_stable) {
 					/* Only increment stability counter if stable */
 					root_state->stability_check_count++;
@@ -585,12 +605,12 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 					int required_checks;
 					
 					/* Simplified check count logic based on directory classification */
-					int total_entries = current_stats.file_count + current_stats.dir_count;
-					int tree_depth = current_stats.depth;
+					int total_entries = current_stats.recursive_file_count + current_stats.recursive_dir_count;
+					int tree_depth = current_stats.depth > 0 ? current_stats.depth : current_stats.depth;
 					
-					/* Calculate change rates */
-					int prev_total = root_state->prev_stats.file_count + root_state->prev_stats.dir_count;
-					int prev_depth = root_state->prev_stats.depth;
+					/* Calculate change rate */
+					int prev_total = root_state->prev_stats.recursive_file_count + root_state->prev_stats.recursive_dir_count;
+					int prev_depth = root_state->prev_stats.depth > 0 ? root_state->prev_stats.depth : root_state->prev_stats.depth;
 					int entry_change = total_entries - prev_total;
 					int depth_change = tree_depth - prev_depth;
 					int abs_change = (entry_change < 0) ? -entry_change : entry_change;
@@ -619,9 +639,11 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 					
 					/* Log with change rate and tree depth information */
 					log_message(LOG_LEVEL_DEBUG, 
-							  "Directory stability check for %s: %d/%d checks, entries=%d [%+d], depth=%d [%+d]",
-							  root_state->path, root_state->stability_check_count, required_checks, 
-							  total_entries, entry_change, tree_depth, depth_change);
+					  "Directory stability check for %s: %d/%d checks, entries=%d [%+d], depth=%d [%+d], recursive entries=%d, depth=%d",
+					  root_state->path, root_state->stability_check_count, required_checks, 
+					  total_entries, entry_change, tree_depth, depth_change, 
+					  current_stats.recursive_file_count + current_stats.recursive_dir_count,
+					  current_stats.depth);
 					
 					/* Check if we have enough stable checks */
 					ready_for_command = (root_state->stability_check_count >= required_checks);
@@ -848,11 +870,12 @@ bool monitor_process_events(monitor_t *monitor) {
 			remaining_ms = remaining_ms / 2 + 50;
 		}
 		
-		log_message(LOG_LEVEL_DEBUG, "Path %s: %ld ms elapsed of %ld ms quiet period, files=%d, dirs=%d, tree_depth=%d, adjusted wait: %ld ms",
-										unique_paths[i], elapsed_ms, required_quiet_period_ms, 
-										root_state->dir_stats.file_count,
-										root_state->dir_stats.dir_count,
-										root_state->dir_stats.depth, remaining_ms);
+		log_message(LOG_LEVEL_DEBUG, 
+		  "Path %s: %ld ms elapsed of %ld ms quiet period, direct_entries=%d+%d, recursive_entries=%d+%d, depth=%d, adjusted wait: %ld ms",
+						unique_paths[i], elapsed_ms, required_quiet_period_ms, 
+						root_state->dir_stats.file_count, root_state->dir_stats.dir_count,
+						root_state->dir_stats.recursive_file_count, root_state->dir_stats.recursive_dir_count,
+						root_state->dir_stats.depth, remaining_ms);
 		
 		/* Calculate absolute wakeup time */
 		time_t wake_sec = now_monotonic.tv_sec + (remaining_ms / 1000);
