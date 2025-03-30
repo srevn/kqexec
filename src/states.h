@@ -90,6 +90,14 @@ typedef struct entity_state {
     dir_stats_t prev_stats;          /* Previous stats for comparison */
     int stability_check_count;       /* Number of stability checks */
     
+    /* Stable reference state tracking */
+    dir_stats_t stable_reference_stats;  /* Last known stable state statistics */
+    bool reference_stats_initialized;    /* Whether reference stats are initialized */
+    int cumulative_file_change;          /* Running total of file changes since stability */
+    int cumulative_dir_change;           /* Running total of directory changes */
+    int cumulative_depth_change;         /* Running total of depth changes */
+    bool stability_lost;                 /* Flag indicating stability was previously achieved and lost */
+    
     struct timespec last_activity_in_tree;  /* Latest activity anywhere in the tree */
     
     /* Hash table linkage */
@@ -112,5 +120,7 @@ entity_state_t *find_root_state(entity_state_t *state);
 long get_required_quiet_period(entity_state_t *state);
 bool verify_directory_stability(const char *dir_path, dir_stats_t *stats, int recursion_depth);
 bool compare_dir_stats(dir_stats_t *prev, dir_stats_t *current);
+void update_cumulative_changes(entity_state_t *state);
+void init_change_tracking(entity_state_t *state);
 
 #endif /* STATES_H */

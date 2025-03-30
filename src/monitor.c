@@ -615,15 +615,13 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 					int total_entries = current_stats.recursive_file_count + current_stats.recursive_dir_count;
 					int tree_depth = current_stats.max_depth > 0 ? current_stats.max_depth : current_stats.depth;
 					
-					/* Calculate change rate */
-					int prev_total = root_state->prev_stats.recursive_file_count + root_state->prev_stats.recursive_dir_count;
-					int prev_depth = root_state->prev_stats.max_depth > 0 ? root_state->prev_stats.max_depth : root_state->prev_stats.depth;
-					int entry_change = total_entries - prev_total;
-					int depth_change = tree_depth - prev_depth;
-					int abs_change = (entry_change < 0) ? -entry_change : entry_change;
-					int abs_depth_change = (depth_change < 0) ? -depth_change : depth_change;
+					/* Use cumulative changes for adapting stability requirements */
+					int abs_file_change = abs(root_state->cumulative_file_change);
+					int abs_dir_change = abs(root_state->cumulative_dir_change);
+					int abs_depth_change = abs(root_state->cumulative_depth_change);
+					int abs_change = abs_file_change + abs_dir_change;
 					
-					/* Base checks on size, depth changes, and content changes */
+					/* Base checks on size, depth changes, and cumulative changes */
 					if (abs_change <= 1 && abs_depth_change == 0) {
 						/* Single file change - use simpler check requirements */
 						required_checks = 1;
@@ -665,11 +663,19 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 						}
 					}
 					
-					/* Log with emphasis on change magnitude */
+					/* If stability was previously achieved and then lost, reduce requirements slightly */
+					if (root_state->stability_lost && required_checks > 1) {
+						required_checks--;
+						log_message(LOG_LEVEL_DEBUG, 
+								  "Reducing stability requirement due to previously achieved stability");
+					}
+					
+					/* Log with emphasis on cumulative change magnitude */
 					log_message(LOG_LEVEL_DEBUG, 
-							  "Directory stability check for %s: %d/%d checks based on changes (%+d files, %+d depth) in dir with %d entries, depth %d",
+							  "Directory stability check for %s: %d/%d checks based on cumulative changes (%+d files, %+d dirs, %+d depth) in dir with %d entries, depth %d",
 							  root_state->path, root_state->stability_check_count, required_checks, 
-							  entry_change, depth_change, total_entries, tree_depth);
+							  root_state->cumulative_file_change, root_state->cumulative_dir_change, 
+							  root_state->cumulative_depth_change, total_entries, tree_depth);
 					
 					/* Check if we have enough stable checks */
 					ready_for_command = (root_state->stability_check_count >= required_checks);
@@ -765,8 +771,18 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 						log_message(LOG_LEVEL_INFO, "Executing deferred command for %s (watch: %s)",
 								  other_state->path, other_watch->name);
 						
+						/* After command execution, reset the cumulative changes */
 						if (command_execute(other_watch, &synthetic_event)) {
 							commands_executed++;
+							
+							/* Update stable reference stats with current values */
+							other_state->stable_reference_stats = other_state->dir_stats;
+							
+							/* Reset cumulative changes after successful command execution */
+							other_state->cumulative_file_change = 0;
+							other_state->cumulative_dir_change = 0;
+							other_state->cumulative_depth_change = 0;
+							other_state->stability_lost = false;
 							
 							/* Reset state change flags */
 							other_state->content_changed = false;
@@ -775,6 +791,10 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 							
 							/* Update last command time */
 							other_state->last_command_time = current_time->tv_sec;
+							
+							log_message(LOG_LEVEL_DEBUG, 
+									  "Reset change tracking for %s after successful command execution",
+									  other_state->path);
 						}
 					}
 				}

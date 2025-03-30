@@ -83,6 +83,63 @@ static void init_activity_tracking(entity_state_t *state, watch_entry_t *watch) 
 	state->last_activity_in_tree = state->last_update;
 }
 
+/* Initialize change tracking fields for a new entity state */
+void init_change_tracking(entity_state_t *state) {
+	if (!state) return;
+	
+	/* Initialize stable reference stats with current stats */
+	state->stable_reference_stats = state->dir_stats;
+	state->reference_stats_initialized = true;
+	
+	/* Reset all cumulative change counters */
+	state->cumulative_file_change = 0;
+	state->cumulative_dir_change = 0;
+	state->cumulative_depth_change = 0;
+	state->stability_lost = false;
+	
+	log_message(LOG_LEVEL_DEBUG, 
+			  "Initialized change tracking for %s with reference stats: files=%d, dirs=%d, depth=%d",
+			  state->path, state->stable_reference_stats.file_count, 
+			  state->stable_reference_stats.dir_count, state->stable_reference_stats.depth);
+}
+
+/* Update cumulative changes based on current vs. previous stats */
+void update_cumulative_changes(entity_state_t *state) {
+	if (!state) return;
+	
+	/* Skip if we don't have previous stats yet */
+	if (state->prev_stats.file_count == 0 && state->prev_stats.dir_count == 0 && 
+		state->prev_stats.recursive_file_count == 0 && state->prev_stats.recursive_dir_count == 0) {
+		return;
+	}
+	
+	/* Calculate incremental changes */
+	int new_file_change = state->dir_stats.recursive_file_count - state->prev_stats.recursive_file_count;
+	int new_dir_change = state->dir_stats.recursive_dir_count - state->prev_stats.recursive_dir_count;
+	int new_depth_change = state->dir_stats.max_depth - state->prev_stats.max_depth;
+	
+	/* Accumulate changes */
+	state->cumulative_file_change += new_file_change;
+	state->cumulative_dir_change += new_dir_change;
+	state->cumulative_depth_change += new_depth_change;
+	
+	/* Set flag indicating stability was lost if we're detecting new changes
+	   after activity was previously not in progress */
+	if (!state->activity_in_progress && (new_file_change != 0 || new_dir_change != 0 || new_depth_change != 0)) {
+		state->stability_lost = true;
+	}
+	
+	/* Log significant cumulative changes */
+	if (new_file_change != 0 || new_dir_change != 0 || new_depth_change != 0) {
+		log_message(LOG_LEVEL_DEBUG, 
+				  "Updated cumulative changes for %s: files=%+d (%+d), dirs=%+d (%+d), depth=%+d (%+d)",
+				  state->path, 
+				  state->cumulative_file_change, new_file_change,
+				  state->cumulative_dir_change, new_dir_change,
+				  state->cumulative_depth_change, new_depth_change);
+	}
+}
+
 /* Gather basic directory statistics */
 static bool gather_basic_directory_stats(const char *dir_path, dir_stats_t *stats, int recursion_depth) {
 	DIR *dir;
@@ -629,6 +686,14 @@ void synchronize_activity_states(const char *path, entity_state_t *trigger_state
 					state->content_changed = trigger_state->content_changed;
 					state->metadata_changed = trigger_state->metadata_changed;
 					state->structure_changed = trigger_state->structure_changed;
+					
+					/* Sync stable reference state and cumulative change fields */
+					state->stable_reference_stats = trigger_state->stable_reference_stats;
+					state->reference_stats_initialized = trigger_state->reference_stats_initialized;
+					state->cumulative_file_change = trigger_state->cumulative_file_change;
+					state->cumulative_dir_change = trigger_state->cumulative_dir_change; 
+					state->cumulative_depth_change = trigger_state->cumulative_depth_change;
+					state->stability_lost = trigger_state->stability_lost;
 				}
 				
 				/* Copy the most recent activity sample to keep timing consistent */
@@ -683,6 +748,9 @@ void record_activity(entity_state_t *state, operation_type_t op) {
 					/* Update with new stats */
 					root->dir_stats = new_stats;
 					
+					/* Update cumulative changes */
+					update_cumulative_changes(root);
+					
 					log_message(LOG_LEVEL_DEBUG, 
 							  "Updated directory stats for %s after change: files=%d, dirs=%d, depth=%d (was: files=%d, dirs=%d, depth=%d)",
 							  root->path, 
@@ -720,6 +788,9 @@ void record_activity(entity_state_t *state, operation_type_t op) {
 							if (gather_basic_directory_stats(parent_state->path, &parent_new_stats, 0)) {
 								parent_state->prev_stats = parent_state->dir_stats;
 								parent_state->dir_stats = parent_new_stats;
+								
+								/* Update cumulative changes */
+								update_cumulative_changes(parent_state);
 							}
 						}
 						
@@ -741,6 +812,9 @@ void record_activity(entity_state_t *state, operation_type_t op) {
 				if (gather_basic_directory_stats(state->path, &new_stats, 0)) {
 					state->prev_stats = state->dir_stats;
 					state->dir_stats = new_stats;
+					
+					/* Update cumulative changes */
+					update_cumulative_changes(state);
 					
 					log_message(LOG_LEVEL_DEBUG, 
 							  "Updated directory stats for root %s after change: files=%d, dirs=%d, depth=%d",
@@ -804,57 +878,62 @@ long get_required_quiet_period(entity_state_t *state) {
 			int total_entries = state->dir_stats.recursive_file_count + state->dir_stats.recursive_dir_count;
 			int tree_depth = state->dir_stats.max_depth > 0 ? state->dir_stats.max_depth : state->dir_stats.depth;
 			
-			/* Calculate the change rate from prev_stats to current stats */
-			int prev_total_entries = state->prev_stats.recursive_file_count + state->prev_stats.recursive_dir_count;
-			int prev_tree_depth = state->prev_stats.max_depth > 0 ? state->prev_stats.max_depth : state->prev_stats.depth;
-			int entry_change = total_entries - prev_total_entries;
-			int depth_change = tree_depth - prev_tree_depth;
-			
-			/* Use an absolute value for rate calculation */
-			int abs_change = (entry_change < 0) ? -entry_change : entry_change;
-			int abs_depth_change = (depth_change < 0) ? -depth_change : depth_change;
+			/* Use cumulative change counters instead of just prev/current comparison */
+			int abs_file_change = abs(state->cumulative_file_change);
+			int abs_dir_change = abs(state->cumulative_dir_change);
+			int abs_depth_change = abs(state->cumulative_depth_change);
+			int total_change = abs_file_change + abs_dir_change;
 			
 			/* Prioritize operation complexity */
 			/* Start with a base quiet period based primarily on change magnitude */
-			if (abs_change == 0 && abs_depth_change == 0) {
+			if (total_change == 0 && abs_depth_change == 0) {
 				/* No change - minimal quiet period */
 				required_ms = 500; 
-			} else if (abs_change == 1 && abs_depth_change == 0) {
+			} else if (total_change == 1 && abs_depth_change == 0) {
 				/* Single file change with no structural changes - very short quiet period */
 				required_ms = 800;
-			} else if (abs_change < 5 && abs_depth_change == 0) {
+			} else if (total_change < 5 && abs_depth_change == 0) {
 				/* Few files changed, no structural changes - modest quiet period */
 				required_ms = 1000;
 			} else if (abs_depth_change > 0) {
 				/* Structural depth changes - significant quiet period */
 				required_ms = 1500 + (abs_depth_change * 500);
-			} else if (abs_change < 10) {
+			} else if (total_change < 10) {
 				/* Moderate changes - medium quiet period */
 				required_ms = 1200;
 			} else {
 				/* Many changes - longer quiet period */
-				required_ms = 1500 + (abs_change / 10) * 250;
+				required_ms = 1500 + (total_change / 10) * 250;
+			}
+			
+			/* If stability was previously achieved and then lost, increase quiet period */
+			if (state->stability_lost) {
+				/* We need a more careful check for resumed activity */
+				required_ms = (long)(required_ms * 1.25); /* 25% increase */
+				log_message(LOG_LEVEL_DEBUG, "Stability previously achieved and lost, increasing quiet period by 25%%");
 			}
 			
 			/* Tree depth multiplier - less dominant than before */
 			if (tree_depth > 0) {
 				/* Scale down the depth impact for simple operations */
-				float depth_factor = (abs_change <= 1) ? 0.5 : 1.0;
+				float depth_factor = (total_change <= 1) ? 0.5 : 1.0;
 				required_ms += tree_depth * 150 * depth_factor; /* Reduced from 250ms to 150ms per level */
 			}
 			
 			/* Directory size complexity factor - minimal for small changes */
 			if (total_entries > 100) {
-				float size_factor = (abs_change <= 3) ? 0.3 : 0.7;
+				float size_factor = (total_change <= 3) ? 0.3 : 0.7;
 				int size_addition = (int)(250 * size_factor * (total_entries / 200.0));
 				/* Cap the size adjustment for small operations */
-				if (abs_change <= 1 && size_addition > 300) size_addition = 300;
+				if (total_change <= 1 && size_addition > 300) size_addition = 300;
 				required_ms += size_addition;
 			}
 			
 			log_message(LOG_LEVEL_DEBUG, 
-					  "Using operation-centric quiet period for %s: %ld ms (changes: %+d files, %+d depth, in dir with %d entries, depth %d)",
-					  state->path, required_ms, entry_change, depth_change, total_entries, tree_depth);
+					  "Using operation-centric quiet period for %s: %ld ms (cumulative changes: %+d files, %+d dirs, %+d depth, in dir with %d entries, depth %d)",
+					  state->path, required_ms, state->cumulative_file_change, 
+					  state->cumulative_dir_change, state->cumulative_depth_change, 
+					  total_entries, tree_depth);
 		}
 		else {
 			/* For inactive directories, just log the base period with recursive stats */
@@ -996,11 +1075,22 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 	state->last_command_time = 0;
 	state->failed_checks = 0;
 	
+	/* Initialize the new reference stats and change tracking fields */
+	state->reference_stats_initialized = false;
+	state->cumulative_file_change = 0;
+	state->cumulative_dir_change = 0;
+	state->cumulative_depth_change = 0;
+	state->stability_lost = false;
+	
 	/* If this is a directory, gather initial statistics */
 	if (state->type == ENTITY_DIRECTORY && state->exists) {
 		if (gather_basic_directory_stats(state->path, &state->dir_stats, 0)) {
 			/* Copy initial stats to prev_stats for future comparison */
 			state->prev_stats = state->dir_stats;
+			
+			/* Initialize stable reference stats with current stats */
+			state->stable_reference_stats = state->dir_stats;
+			state->reference_stats_initialized = true;
 			
 			log_message(LOG_LEVEL_DEBUG, 
 					  "Initialized directory stats for %s: files=%d, dirs=%d, depth=%d, size=%zu",
