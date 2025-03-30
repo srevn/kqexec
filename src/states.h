@@ -47,6 +47,7 @@ typedef struct {
 
 /* Directory statistics for stability verification */
 typedef struct {
+    int depth;                      /* Directory tree depth */
     int file_count;                 /* Number of files in the directory */
     int dir_count;                  /* Number of subdirectories */
     size_t total_size;              /* Total size of files in the directory */
@@ -54,7 +55,7 @@ typedef struct {
     bool has_temp_files;            /* Flag for temporary files */
     
     /* Recursive stats */
-    int depth;                      /* Directory tree depth */
+    int max_depth;                  /* Maximum depth reached from this dir */
     int recursive_file_count;       /* Total number of files in this dir and all subdirs */
     int recursive_dir_count;        /* Total number of dirs in this dir and all subdirs */
     size_t recursive_total_size;    /* Total size of all files in tree */

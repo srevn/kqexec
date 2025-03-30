@@ -513,6 +513,26 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 				dir_stats_t current_stats;
 				bool scan_completed = verify_directory_stability(root_state->path, &current_stats, 0);
 				
+				/* Update root state with comprehensive recursive stats from scan, even if not stable */
+				if (scan_completed || current_stats.recursive_file_count > 0 || current_stats.recursive_dir_count > 0) {
+					/* Check if current scan has more complete recursive stats */
+					if (current_stats.recursive_file_count > root_state->dir_stats.recursive_file_count ||
+						current_stats.recursive_dir_count > root_state->dir_stats.recursive_dir_count ||
+						current_stats.max_depth > root_state->dir_stats.max_depth) {
+						
+						log_message(LOG_LEVEL_DEBUG, 
+								  "Updating %s with more comprehensive recursive stats: files=%d, dirs=%d, max_depth=%d",
+								  root_state->path, current_stats.recursive_file_count, 
+								  current_stats.recursive_dir_count, current_stats.max_depth);
+						
+						/* Store comprehensive recursive stats */
+						root_state->dir_stats.recursive_file_count = current_stats.recursive_file_count;
+						root_state->dir_stats.recursive_dir_count = current_stats.recursive_dir_count;
+						root_state->dir_stats.max_depth = current_stats.max_depth;
+						root_state->dir_stats.recursive_total_size = current_stats.recursive_total_size;
+					}
+				}
+				
 				if (!scan_completed) {
 					/* Check if the directory still exists */
 					struct stat st;
@@ -549,32 +569,19 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 					root_state->failed_checks = 0;
 				}
 				
-				if (current_stats.recursive_file_count > root_state->dir_stats.recursive_file_count ||
-					current_stats.recursive_dir_count > root_state->dir_stats.recursive_dir_count ||
-					current_stats.depth > root_state->dir_stats.depth) {
-					
-					log_message(LOG_LEVEL_DEBUG, 
-							  "Updating root directory %s with more comprehensive recursive stats: files=%d, dirs=%d, depth=%d",
-							  root_state->path, current_stats.recursive_file_count, 
-							  current_stats.recursive_dir_count, current_stats.depth);
-					
-					/* Store full recursive stats in the root state */
-					root_state->dir_stats.recursive_file_count = current_stats.recursive_file_count;
-					root_state->dir_stats.recursive_dir_count = current_stats.recursive_dir_count;
-					root_state->dir_stats.depth = current_stats.depth;
-					root_state->dir_stats.recursive_total_size = current_stats.recursive_total_size;
-					
-					/* Also update these for other watches via synchronization */
-					synchronize_activity_states(root_state->path, root_state);
-				}
+				/* Always store the direct stats, regardless of stability */
+				root_state->dir_stats.file_count = current_stats.file_count;
+				root_state->dir_stats.dir_count = current_stats.dir_count;
+				root_state->dir_stats.depth = current_stats.depth;
+				root_state->dir_stats.total_size = current_stats.total_size;
 				
 				/* Log the scan results with both direct and recursive stats */
 				log_message(LOG_LEVEL_DEBUG, 
-					"Stability check #%d for %s: files=%d, dirs=%d, size=%zu, recursive_files=%d, recursive_dirs=%d, depth=%d, stable=%s",
+					"Stability check #%d for %s: files=%d, dirs=%d, size=%zu, recursive_files=%d, recursive_dirs=%d, max_depth=%d, stable=%s",
 					root_state->stability_check_count + 1, root_state->path, 
 					current_stats.file_count, current_stats.dir_count, current_stats.total_size,
 					current_stats.recursive_file_count, current_stats.recursive_dir_count, 
-					current_stats.depth, scan_completed ? "yes" : "no");
+					current_stats.max_depth, scan_completed ? "yes" : "no");
 				
 				/* Determine stability based on scan result and comparison */
 				bool is_stable = scan_completed;  /* Initially use scan result */
@@ -604,46 +611,65 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 					bool ready_for_command = false;
 					int required_checks;
 					
-					/* Simplified check count logic based on directory classification */
+					/* Calculate complexity factors */
 					int total_entries = current_stats.recursive_file_count + current_stats.recursive_dir_count;
-					int tree_depth = current_stats.depth > 0 ? current_stats.depth : current_stats.depth;
+					int tree_depth = current_stats.max_depth > 0 ? current_stats.max_depth : current_stats.depth;
 					
 					/* Calculate change rate */
 					int prev_total = root_state->prev_stats.recursive_file_count + root_state->prev_stats.recursive_dir_count;
-					int prev_depth = root_state->prev_stats.depth > 0 ? root_state->prev_stats.depth : root_state->prev_stats.depth;
+					int prev_depth = root_state->prev_stats.max_depth > 0 ? root_state->prev_stats.max_depth : root_state->prev_stats.depth;
 					int entry_change = total_entries - prev_total;
 					int depth_change = tree_depth - prev_depth;
 					int abs_change = (entry_change < 0) ? -entry_change : entry_change;
 					int abs_depth_change = (depth_change < 0) ? -depth_change : depth_change;
 					
 					/* Base checks on size, depth changes, and content changes */
-					if (abs_change <= 1 && abs_depth_change == 0 && total_entries < 100) {
-						required_checks = 1;  /* Single check for small changes to simple directories */
+					if (abs_change <= 1 && abs_depth_change == 0) {
+						/* Single file change - use simpler check requirements */
+						required_checks = 1;
+						
+						/* Only add a check for very complex directories */
+						if (tree_depth >= 5 || total_entries > 1000) {
+							required_checks = 2;
+						}
 					} 
-					else if (abs_change <= 3 && abs_depth_change == 0 && total_entries < 500) {
-						required_checks = 2;  /* Two checks for modest changes to medium directories */
+					else if (abs_change <= 5 && abs_depth_change == 0) {
+						/* Few changes - modest requirements */
+						required_checks = 2;
 					}
-					else if (abs_depth_change > 0 && abs_depth_change < 4) {
-						/* Always use more checks when tree depth changes */
-						required_checks = 3;  /* Structural changes need thorough verification */
+					else if (abs_depth_change > 0) {
+						/* Always use more checks when tree structure changes */
+						required_checks = 2;
+						
+						/* For significant depth changes, use even more checks */
+						if (abs_depth_change > 1) {
+							required_checks = 3;
+						}
 					}
-					else if (tree_depth >= 5 || abs_depth_change >= 4) {
-						required_checks = 3;  /* Always use max checks for very deep directory trees */
-					}
-					else if (abs_change < 10 || total_entries < 1000 || tree_depth >= 3) {
-						required_checks = 3;  /* Three checks for larger changes, larger directories, or deeper structures */
+					else if (abs_change < 20) {
+						/* Moderate changes - standard requirements */
+						required_checks = 2;
+						
+						/* Add a check for complex structures */
+						if (tree_depth >= 4 || total_entries > 500) {
+							required_checks = 3;
+						}
 					}
 					else {
-						required_checks = 4;  /* Four checks for very large changes to large directories */
+						/* Many changes - more thorough verification */
+						required_checks = 3;
+						
+						/* For very complex directories with many changes, maximum checks */
+						if (tree_depth >= 5 || total_entries > 1000) {
+							required_checks = 4;
+						}
 					}
 					
-					/* Log with change rate and tree depth information */
+					/* Log with emphasis on change magnitude */
 					log_message(LOG_LEVEL_DEBUG, 
-					  "Directory stability check for %s: %d/%d checks, entries=%d [%+d], depth=%d [%+d], recursive entries=%d, depth=%d",
-					  root_state->path, root_state->stability_check_count, required_checks, 
-					  total_entries, entry_change, tree_depth, depth_change, 
-					  current_stats.recursive_file_count + current_stats.recursive_dir_count,
-					  current_stats.depth);
+							  "Directory stability check for %s: %d/%d checks based on changes (%+d files, %+d depth) in dir with %d entries, depth %d",
+							  root_state->path, root_state->stability_check_count, required_checks, 
+							  entry_change, depth_change, total_entries, tree_depth);
 					
 					/* Check if we have enough stable checks */
 					ready_for_command = (root_state->stability_check_count >= required_checks);
