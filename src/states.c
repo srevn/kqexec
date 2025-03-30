@@ -83,20 +83,154 @@ static void init_activity_tracking(entity_state_t *state, watch_entry_t *watch) 
 	state->last_activity_in_tree = state->last_update;
 }
 
+/* Gather basic directory statistics */
+static bool gather_basic_directory_stats(const char *dir_path, dir_stats_t *stats, int recursion_depth) {
+	DIR *dir;
+	struct dirent *entry;
+	struct stat st;
+	char path[PATH_MAX];
+	
+	if (!dir_path || !stats) {
+		return false;
+	}
+	
+	/* Initialize stats */
+	memset(stats, 0, sizeof(dir_stats_t));
+	
+	dir = opendir(dir_path);
+	if (!dir) {
+		log_message(LOG_LEVEL_WARNING, "Failed to open directory for stats gathering: %s", dir_path);
+		return false;
+	}
+	
+	while ((entry = readdir(dir))) {
+		/* Skip . and .. */
+		if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+			continue;
+		}
+		
+		snprintf(path, sizeof(path), "%s/%s", dir_path, entry->d_name);
+		
+		if (stat(path, &st) != 0) {
+			/* Skip files that can't be stat'd but continue processing */
+			continue;
+		}
+		
+		if (S_ISREG(st.st_mode)) {
+			stats->file_count++;
+			stats->total_size += st.st_size;
+			
+			/* Update latest modification time */
+			if (st.st_mtime > stats->latest_mtime) {
+				stats->latest_mtime = st.st_mtime;
+			}
+		} else if (S_ISDIR(st.st_mode)) {
+			stats->dir_count++;
+			
+			/* Limit recursion depth for quick initialization */
+			if (recursion_depth > 5) {
+				continue;
+			}
+			
+			dir_stats_t subdir_stats;
+			if (gather_basic_directory_stats(path, &subdir_stats, recursion_depth + 1)) {
+				/* Update maximum tree depth based on subdirectory scan results */
+				if (subdir_stats.depth + 1 > stats->depth) {
+					stats->depth = subdir_stats.depth + 1;
+				}
+				
+				/* Incorporate subdirectory stats */
+				stats->file_count += subdir_stats.file_count;
+				stats->dir_count += subdir_stats.dir_count;
+				stats->total_size += subdir_stats.total_size;
+				
+				if (subdir_stats.latest_mtime > stats->latest_mtime) {
+					stats->latest_mtime = subdir_stats.latest_mtime;
+				}
+			}
+		}
+	}
+	
+	closedir(dir);
+	return true;
+}
+
 /* Compare two directory statistics to check for stability */
 bool compare_dir_stats(dir_stats_t *prev, dir_stats_t *current) {
 	if (!prev || !current) return false;
 	
-	/* Check for identical file and directory counts */
-	if (prev->file_count != current->file_count || 
-		prev->dir_count != current->dir_count) {
-		log_message(LOG_LEVEL_DEBUG, "Directory unstable: file/dir count changed from %d/%d to %d/%d",
-				   prev->file_count, prev->dir_count, current->file_count, current->dir_count);
+	/* Calculate content changes */
+	int file_change = current->file_count - prev->file_count;
+	int dir_change = current->dir_count - prev->dir_count;
+	int depth_change = current->depth - prev->depth;
+	int total_change = abs(file_change) + abs(dir_change);
+	
+	/* Log depth changes */
+	if (depth_change != 0) {
+		log_message(LOG_LEVEL_DEBUG, "Directory tree depth changed: %d -> %d (%+d levels)",
+				  		prev->depth, current->depth, depth_change);
+	}
+	
+	/* Allow small changes for larger directories */
+	int prev_total = prev->file_count + prev->dir_count;
+	float change_percentage = (prev_total > 0) ? ((float)total_change / prev_total) * 100.0 : 0;
+	
+	/* Use a threshold that scales with directory size */
+	int max_allowed_change;
+	float max_allowed_percent;
+	
+	if (prev_total < 10) {
+		/* Very small directories - no changes allowed */
+		max_allowed_change = 0;
+		max_allowed_percent = 0.0;
+	} else if (prev_total < 50) {
+		/* Small directories - allow 1 change */
+		max_allowed_change = 1;
+		max_allowed_percent = 5.0;
+	} else if (prev_total < 200) {
+		/* Medium directories - allow 2 changes or 3% */
+		max_allowed_change = 2;
+		max_allowed_percent = 3.0;
+	} else if (prev_total < 1000) {
+		/* Large directories - allow 4 changes or 2% */
+		max_allowed_change = 4;
+		max_allowed_percent = 2.0;
+	} else {
+		/* Very large directories - allow 10 changes or 1% */
+		max_allowed_change = 10;
+		max_allowed_percent = 1.0;
+	}
+	
+	/* Always consider unstable if tree depth changes significantly */
+	if (abs(depth_change) > 1) {
+		log_message(LOG_LEVEL_DEBUG, "Directory unstable: significant tree depth change (%+d levels)",
+				  		depth_change);
 		return false;
 	}
 	
+	/* Consider stable if changes are within allowances and depth stable or minimal change */
+	if ((total_change <= max_allowed_change || change_percentage <= max_allowed_percent) &&
+		(depth_change == 0 || (abs(depth_change) == 1 && prev->depth > 2))) {
+		/* Changes within threshold - considered stable */
+		if (total_change > 0 || depth_change != 0) {
+			log_message(LOG_LEVEL_DEBUG, 
+					  "Directory considered stable despite small changes: %+d files, %+d dirs, %+d depth (%.1f%% change)",
+					  	file_change, dir_change, depth_change, change_percentage);
+		}
+		return true;
+	}
+	
+	/* Too many changes - unstable */
+	log_message(LOG_LEVEL_DEBUG, 
+			  "Directory unstable: %d/%d to %d/%d, depth %d to %d (%+d files, %+d dirs, %+d depth, %.1f%% change)",
+						prev->file_count, prev->dir_count, 
+						current->file_count, current->dir_count,
+						prev->depth, current->depth,
+						file_change, dir_change, depth_change, change_percentage);
+	return false;
+	
+	/* Keep existing size and temp file checks */
 	/* Check if total size is stable (allowing for small changes) */
-	/* Use a percentage-based threshold for large directories */
 	long size_diff = labs((long)prev->total_size - (long)current->total_size);
 	long threshold = prev->total_size > 1000000 ? 
 					 prev->total_size / 10000 : /* 0.01% for large dirs */
@@ -243,6 +377,10 @@ bool verify_directory_stability(const char *dir_path, dir_stats_t *stats, int re
 		}
 	}
 	
+	if (stats->has_temp_files) {
+		log_message(LOG_LEVEL_DEBUG, "Directory %s has temporary or very recently modified files", dir_path);
+	}
+	
 	closedir(dir);
 	return !stats->has_temp_files;
 }
@@ -335,6 +473,23 @@ void record_activity(entity_state_t *state, operation_type_t op) {
 			/* Reset root's stability checks */
 			root->stability_check_count = 0;
 			
+			/* For directory operations, update directory stats immediately */
+			if (op == OP_DIR_CONTENT_CHANGED && root->type == ENTITY_DIRECTORY) {
+				dir_stats_t new_stats;
+				if (gather_basic_directory_stats(root->path, &new_stats, 0)) {
+					/* Save previous stats for comparison */
+					root->prev_stats = root->dir_stats;
+					/* Update with new stats */
+					root->dir_stats = new_stats;
+					
+					log_message(LOG_LEVEL_DEBUG, 
+							  "Updated directory stats for %s after change: files=%d, dirs=%d, depth=%d (was: files=%d, dirs=%d, depth=%d)",
+							  root->path, 
+							  root->dir_stats.file_count, root->dir_stats.dir_count, root->dir_stats.depth,
+							  root->prev_stats.file_count, root->prev_stats.dir_count, root->prev_stats.depth);
+				}
+			}
+			
 			/* Synchronize with other watches for the same path */
 			synchronize_activity_states(root->path, root);
 			
@@ -357,6 +512,16 @@ void record_activity(entity_state_t *state, operation_type_t op) {
 						parent_state->last_activity_in_tree = state->last_update;
 						parent_state->activity_in_progress = true;
 						parent_state->stability_check_count = 0;
+						
+						/* Update directory stats for parent if this is a content change */
+						if (op == OP_DIR_CONTENT_CHANGED && parent_state->type == ENTITY_DIRECTORY) {
+							dir_stats_t parent_new_stats;
+							if (gather_basic_directory_stats(parent_state->path, &parent_new_stats, 0)) {
+								parent_state->prev_stats = parent_state->dir_stats;
+								parent_state->dir_stats = parent_new_stats;
+							}
+						}
+						
 						synchronize_activity_states(parent_state->path, parent_state);
 					}
 					
@@ -368,6 +533,20 @@ void record_activity(entity_state_t *state, operation_type_t op) {
 		} else if (strcmp(state->path, state->watch->path) == 0) {
 			/* This is the root itself */
 			state->last_activity_in_tree = state->last_update;
+			
+			/* Update directory stats immediately for content changes to root */
+			if (op == OP_DIR_CONTENT_CHANGED && state->type == ENTITY_DIRECTORY) {
+				dir_stats_t new_stats;
+				if (gather_basic_directory_stats(state->path, &new_stats, 0)) {
+					state->prev_stats = state->dir_stats;
+					state->dir_stats = new_stats;
+					
+					log_message(LOG_LEVEL_DEBUG, 
+							  "Updated directory stats for root %s after change: files=%d, dirs=%d, depth=%d",
+							  state->path, state->dir_stats.file_count, state->dir_stats.dir_count, state->dir_stats.depth);
+				}
+			}
+			
 			synchronize_activity_states(state->path, state);
 		}
 	}
@@ -415,7 +594,8 @@ long get_required_quiet_period(entity_state_t *state) {
 	
 	/* Use a longer base period for directories */
 	if (state->type == ENTITY_DIRECTORY) {
-		required_ms = DIR_QUIET_PERIOD_MS;
+		/* Default quiet period */
+		required_ms = DIR_QUIET_PERIOD_MS; /* Default 1000ms */
 		
 		/* For active directories, use adaptive complexity measurement */
 		if (state->activity_in_progress) {
@@ -424,29 +604,77 @@ long get_required_quiet_period(entity_state_t *state) {
 			int tree_depth = state->dir_stats.depth;
 			int subdir_count = state->dir_stats.dir_count;
 			
-			/* Base quiet period on total entries */
+			/* Calculate the change rate from prev_stats to current stats */
+			int prev_total_entries = state->prev_stats.file_count + state->prev_stats.dir_count;
+			int prev_tree_depth = state->prev_stats.depth;
+			int entry_change = total_entries - prev_total_entries;
+			int depth_change = tree_depth - prev_tree_depth;
+			
+			/* Use an absolute value for rate calculation */
+			int abs_change = (entry_change < 0) ? -entry_change : entry_change;
+			int abs_depth_change = (depth_change < 0) ? -depth_change : depth_change;
+			
+			/* Base quiet period on directory size but with lower thresholds */
 			if (total_entries < 10) {
-				required_ms = 1000; /* 1 second for small directories */
+				required_ms = 500; /* 0.5 second for very small directories */
 			} else if (total_entries < 100) {
-				required_ms = 1500; /* 1.5 seconds for medium directories */
+				required_ms = 1000; /* 1 second for small directories */
 			} else if (total_entries < 1000) {
-				required_ms = 2500; /* 2.5 seconds for large directories */
+				required_ms = 1500; /* 1.5 seconds for medium directories */
 			} else {
-				required_ms = 4000; /* 4 seconds for very large directories */
+				required_ms = 2000; /* 2 seconds for large directories */
 			}
 			
-			/* Add time for directory tree depth */
+			/* Factor in the rate of change - higher rate means longer quiet period */
+			if (abs_change == 0 && abs_depth_change == 0) {
+				/* No change - short quiet period */
+				required_ms = 500; /* Use minimum - no need to wait longer */
+			} else if (abs_change <= 1 && abs_depth_change == 0) {
+				/* Single file change, no depth change - very short quiet period */
+				required_ms = 800; /* Just long enough to ensure stability */
+			} else if (abs_change < 5 && abs_depth_change == 0) {
+				/* Few changes, no depth change - modest quiet period */
+				required_ms = 1000;
+			} else if (abs_depth_change > 0) {
+				/* Tree depth changes indicate structural changes - use longer period */
+				required_ms = 2000 + (abs_depth_change * 500);
+				log_message(LOG_LEVEL_DEBUG, 
+						  "Extended quiet period due to tree depth change (%+d levels)",
+						  depth_change);
+			} else if (abs_change < 10) {
+				/* Moderate changes */
+				required_ms = 1500;
+			} else {
+				/* Many changes - use a longer period */
+				/* Start with a base and add based on change magnitude */
+				required_ms = 2000 + (abs_change / 5) * 100;
+				/* Cap at a reasonable maximum */
+				if (required_ms > 5000) required_ms = 5000;
+			}
+			
+			/* Add substantial adjustment for current tree depth */
 			if (tree_depth > 0) {
-				required_ms += tree_depth * 250; /* Add 250ms per directory level */
+				/* Use current depth for base period */
+				required_ms += tree_depth * 250; /* 250ms per directory level */
 			}
 			
-			/* Add time for complex directory structures with many subdirectories */
+			/* Add a moderate adjustment for many subdirectories */
 			if (subdir_count > 10) {
-				required_ms += 500; /* Complex structure with many subdirectories */
+				required_ms += 250;
 			}
 			
 			log_message(LOG_LEVEL_DEBUG, 
-					  "Using adaptive quiet period for %s: %ld ms (entries: %d, tree depth: %d, subdirs: %d)",
+					  "Using rate-based quiet period for %s: %ld ms (entries: %d [%+d], depth: %d [%+d], subdirs: %d)",
+					  state->path, required_ms, total_entries, entry_change, tree_depth, depth_change, subdir_count);
+		}
+		else {
+			/* For inactive directories, just log the base period */
+			int total_entries = state->dir_stats.file_count + state->dir_stats.dir_count;
+			int tree_depth = state->dir_stats.depth;
+			int subdir_count = state->dir_stats.dir_count;
+			
+			log_message(LOG_LEVEL_DEBUG, 
+					  "Using base quiet period for %s: %ld ms (total entries: %d, tree depth: %d, subdirs: %d)",
 					  state->path, required_ms, total_entries, tree_depth, subdir_count);
 		}
 	}
@@ -578,6 +806,22 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 	init_activity_tracking(state, watch);
 	state->last_command_time = 0;
 	state->failed_checks = 0;
+	
+	/* If this is a directory, gather initial statistics */
+	if (state->type == ENTITY_DIRECTORY && state->exists) {
+		if (gather_basic_directory_stats(state->path, &state->dir_stats, 0)) {
+			/* Copy initial stats to prev_stats for future comparison */
+			state->prev_stats = state->dir_stats;
+			
+			log_message(LOG_LEVEL_DEBUG, 
+					  "Initialized directory stats for %s: files=%d, dirs=%d, depth=%d, size=%zu",
+					  state->path, state->dir_stats.file_count, state->dir_stats.dir_count, 
+					  state->dir_stats.depth, state->dir_stats.total_size);
+		} else {
+			log_message(LOG_LEVEL_WARNING, 
+					  "Failed to gather initial stats for directory: %s", state->path);
+		}
+	}
 
 	/* Add to hash table */
 	state->next = entity_states[hash];
@@ -619,6 +863,12 @@ operation_type_t determine_operation(entity_state_t *state, event_type_t new_eve
 		if (state->type == ENTITY_UNKNOWN) {
 			if (S_ISDIR(st.st_mode)) state->type = ENTITY_DIRECTORY;
 			else if (S_ISREG(st.st_mode)) state->type = ENTITY_FILE;
+		}
+		
+		/* For directory creation, gather initial stats */
+		if (state->type == ENTITY_DIRECTORY) {
+			gather_basic_directory_stats(state->path, &state->dir_stats, 0);
+			state->prev_stats = state->dir_stats;
 		}
 	} else if (exists_now) {
 		/* Existed before and exists now - check for other changes */

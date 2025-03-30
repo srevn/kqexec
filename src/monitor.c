@@ -588,22 +588,40 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 					int total_entries = current_stats.file_count + current_stats.dir_count;
 					int tree_depth = current_stats.depth;
 					
-					/* Very small directories */
-					if (total_entries < 10 && tree_depth == 0) {
-						required_checks = 1;  /* One check is sufficient */
+					/* Calculate change rates */
+					int prev_total = root_state->prev_stats.file_count + root_state->prev_stats.dir_count;
+					int prev_depth = root_state->prev_stats.depth;
+					int entry_change = total_entries - prev_total;
+					int depth_change = tree_depth - prev_depth;
+					int abs_change = (entry_change < 0) ? -entry_change : entry_change;
+					int abs_depth_change = (depth_change < 0) ? -depth_change : depth_change;
+					
+					/* Base checks on size, depth changes, and content changes */
+					if (abs_change <= 1 && abs_depth_change == 0 && total_entries < 100) {
+						required_checks = 1;  /* Single check for small changes to simple directories */
+					} 
+					else if (abs_change <= 3 && abs_depth_change == 0 && total_entries < 500) {
+						required_checks = 2;  /* Two checks for modest changes to medium directories */
 					}
-					/* Small to medium directories */
-					else if (total_entries < 100) {
-						required_checks = 2;  /* Two checks */
+					else if (abs_depth_change > 0 && abs_depth_change < 4) {
+						/* Always use more checks when tree depth changes */
+						required_checks = 3;  /* Structural changes need thorough verification */
 					}
-					/* Large directories */
-					else if (total_entries < 1000 || tree_depth > 3) {
-						required_checks = 3;  /* Three checks */
+					else if (tree_depth >= 5 || abs_depth_change >= 4) {
+						required_checks = 3;  /* Always use max checks for very deep directory trees */
 					}
-					/* Very large or complex directories */
+					else if (abs_change < 10 || total_entries < 1000 || tree_depth >= 3) {
+						required_checks = 3;  /* Three checks for larger changes, larger directories, or deeper structures */
+					}
 					else {
-						required_checks = 4;  /* Four checks */
+						required_checks = 4;  /* Four checks for very large changes to large directories */
 					}
+					
+					/* Log with change rate and tree depth information */
+					log_message(LOG_LEVEL_DEBUG, 
+							  "Directory stability check for %s: %d/%d checks, entries=%d [%+d], depth=%d [%+d]",
+							  root_state->path, root_state->stability_check_count, required_checks, 
+							  total_entries, entry_change, tree_depth, depth_change);
 					
 					/* Check if we have enough stable checks */
 					ready_for_command = (root_state->stability_check_count >= required_checks);
@@ -810,10 +828,11 @@ bool monitor_process_events(monitor_t *monitor) {
 			remaining_ms = remaining_ms / 2 + 50;
 		}
 		
-		log_message(LOG_LEVEL_DEBUG, "Path %s: %ld ms elapsed of %ld ms quiet period, entries=%d, dirs=%d, tree_depth=%d, adjusted wait: %ld ms",
-									unique_paths[i], elapsed_ms, required_quiet_period_ms, 
-									root_state->dir_stats.file_count, root_state->dir_stats.dir_count,
-									root_state->dir_stats.depth, remaining_ms);
+		log_message(LOG_LEVEL_DEBUG, "Path %s: %ld ms elapsed of %ld ms quiet period, files=%d, dirs=%d, tree_depth=%d, adjusted wait: %ld ms",
+										unique_paths[i], elapsed_ms, required_quiet_period_ms, 
+										root_state->dir_stats.file_count,
+										root_state->dir_stats.dir_count,
+										root_state->dir_stats.depth, remaining_ms);
 		
 		/* Calculate absolute wakeup time */
 		time_t wake_sec = now_monotonic.tv_sec + (remaining_ms / 1000);
