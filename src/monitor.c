@@ -689,6 +689,26 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 						entity_state_t *other_state = get_entity_state(other_watch->path, ENTITY_DIRECTORY, other_watch);
 						if (!other_state) continue;
 						
+						if (other_state) {
+							/* Use the most accurate statistics available across watches */
+							if (root_state->dir_stats.file_count > other_state->dir_stats.file_count || 
+								root_state->dir_stats.dir_count > other_state->dir_stats.dir_count ||
+								root_state->dir_stats.depth > other_state->dir_stats.depth) {
+								/* Root state has more complete info - update the other state */
+								other_state->dir_stats = root_state->dir_stats;
+								other_state->prev_stats = root_state->prev_stats;
+							} else if (other_state->dir_stats.file_count > root_state->dir_stats.file_count ||
+									  other_state->dir_stats.dir_count > root_state->dir_stats.dir_count ||
+									  other_state->dir_stats.depth > root_state->dir_stats.depth) {
+								/* Other state has more complete info - update root state and all others */
+								root_state->dir_stats = other_state->dir_stats;
+								root_state->prev_stats = other_state->prev_stats;
+								/* Since root state was updated, we need to resync with all watches */
+								synchronize_activity_states(root_state->path, root_state);
+								break;  /* Exit loop as we've already updated all states */
+							}
+						}
+						
 						/* Reset activity flag */
 						other_state->activity_in_progress = false;
 						other_state->stability_check_count = 0;

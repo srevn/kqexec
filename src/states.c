@@ -287,6 +287,123 @@ bool verify_directory_stability(const char *dir_path, dir_stats_t *stats, int re
 		return false;
 	}
 	
+	/* Check if we should use an existing directory state's statistics as a baseline */
+	bool use_existing_stats = false;
+	entity_state_t *existing_state = NULL;
+	
+	/* Look through all hash buckets for an existing state for this path */
+	if (entity_states) {
+		for (int i = 0; i < ENTITY_HASH_SIZE; i++) {
+			entity_state_t *state = entity_states[i];
+			while (state) {
+				if (strcmp(state->path, dir_path) == 0) {
+					/* Found an existing state for this path */
+					existing_state = state;
+					
+					/* If the existing state has valid stats, consider using them 
+					 * Check if we have more than just default values */
+					if (state->dir_stats.file_count > 0 || 
+						state->dir_stats.dir_count > 0 ||
+						state->dir_stats.depth > 0) {
+						use_existing_stats = true;
+						break;
+					}
+				}
+				state = state->next;
+			}
+			if (use_existing_stats) break;
+		}
+	}
+	
+	/* If we found an existing state with valid stats, use that for verification */
+	if (use_existing_stats && existing_state) {
+		log_message(LOG_LEVEL_DEBUG, 
+				  "Using existing stats for stability verification of %s: files=%d, dirs=%d, depth=%d",
+				  dir_path, existing_state->dir_stats.file_count, 
+				  existing_state->dir_stats.dir_count, existing_state->dir_stats.depth);
+		
+		/* Make a copy of the existing stats */
+		*stats = existing_state->dir_stats;
+		
+		/* Still scan the directory, but only to check for temporary files */
+		dir = opendir(dir_path);
+		if (!dir) {
+			log_message(LOG_LEVEL_WARNING, "Failed to open directory for stability check: %s", dir_path);
+			return false;
+		}
+		
+		time_t now;
+		time(&now);
+		
+		/* Just check for temporary files without recounting everything */
+		stats->has_temp_files = false;
+		
+		while ((entry = readdir(dir))) {
+			/* Skip . and .. */
+			if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+				continue;
+			}
+			
+			snprintf(path, sizeof(path), "%s/%s", dir_path, entry->d_name);
+			
+			if (stat(path, &st) != 0) {
+				/* If a file disappears during scan, the directory is not stable */
+				log_message(LOG_LEVEL_DEBUG, "Directory %s unstable: file disappeared during scan", dir_path);
+				closedir(dir);
+				return false;
+			}
+			
+			/* Check only for temporary files or very recent changes */
+			if (S_ISREG(st.st_mode)) {
+				/* Skip known system files */
+				if (is_system_file_to_ignore(entry->d_name)) {
+					continue;
+				}
+				
+				/* Check for very recent file modifications (< 1 second) */
+				if (difftime(now, st.st_mtime) < 1.0) {
+					log_message(LOG_LEVEL_DEBUG, "Directory %s unstable: recent file modification (%s, %.1f seconds ago)", 
+							  dir_path, entry->d_name, difftime(now, st.st_mtime));
+					stats->has_temp_files = true;
+					closedir(dir);
+					return false;
+				}
+				
+				/* Check for temporary files */
+				if ((st.st_size == 0 && difftime(now, st.st_mtime) < 5.0) || 
+					strstr(entry->d_name, ".tmp") != NULL || 
+					strstr(entry->d_name, ".part") != NULL || 
+					strstr(entry->d_name, ".~") != NULL ||
+					strstr(entry->d_name, ".crdownload") != NULL ||
+					strstr(entry->d_name, ".download") != NULL) {
+					log_message(LOG_LEVEL_DEBUG, "Directory %s unstable: temp file detected (%s)", dir_path, entry->d_name);
+					stats->has_temp_files = true;
+					closedir(dir);
+					return false;
+				}
+			} else if (S_ISDIR(st.st_mode) && recursion_depth <= 5) {
+				/* Quick check of subdirectories but only to limited depth */
+				dir_stats_t subdir_stats;
+				memset(&subdir_stats, 0, sizeof(dir_stats_t));
+				
+				if (!verify_directory_stability(path, &subdir_stats, recursion_depth + 1)) {
+					stats->has_temp_files = true;
+					closedir(dir);
+					return false;
+				}
+				
+				if (subdir_stats.has_temp_files) {
+					stats->has_temp_files = true;
+					closedir(dir);
+					return false;
+				}
+			}
+		}
+		
+		closedir(dir);
+		return !stats->has_temp_files;
+	}
+	
 	/* Initialize stats */
 	memset(stats, 0, sizeof(dir_stats_t));
 	
@@ -429,6 +546,15 @@ void synchronize_activity_states(const char *path, entity_state_t *trigger_state
 				state->dir_stats = trigger_state->dir_stats;
 				state->prev_stats = trigger_state->prev_stats;
 				state->stability_check_count = trigger_state->stability_check_count;
+				state->failed_checks = trigger_state->failed_checks;
+				state->exists = trigger_state->exists;
+				
+				if (state->type == ENTITY_DIRECTORY && trigger_state->type == ENTITY_DIRECTORY) {
+					/* Also sync change detection flags */
+					state->content_changed = trigger_state->content_changed;
+					state->metadata_changed = trigger_state->metadata_changed;
+					state->structure_changed = trigger_state->structure_changed;
+				}
 				
 				/* Copy the most recent activity sample to keep timing consistent */
 				if (trigger_state->activity_sample_count > 0) {
