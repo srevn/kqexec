@@ -506,7 +506,7 @@ bool command_execute(const watch_entry_t *watch, const file_event_t *event) {
 		return false;  /* Return false, but last_command_debounced will be set */
 	}
 	
-	log_message(LOG_LEVEL_INFO, "Executing command: %s", command);
+	log_message(LOG_LEVEL_NOTICE, "Executing command: %s", command);
 	
 	/* Fork a child process */
 	pid = fork();

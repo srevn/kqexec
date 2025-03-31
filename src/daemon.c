@@ -74,7 +74,7 @@ void daemon_set_monitor(monitor_t *monitor) {
 	if (monitor != NULL) {
 		log_message(LOG_LEVEL_DEBUG, "Daemon: monitor reference updated");
 	} else {
-		log_message(LOG_LEVEL_WARNING, "Daemon: monitor reference cleared");
+		log_message(LOG_LEVEL_DEBUG, "Daemon: monitor reference cleared");
 	}
 }
 

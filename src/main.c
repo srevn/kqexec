@@ -207,7 +207,7 @@ int main(int argc, char *argv[]) {
 	}
 	
 	/* Clean up */
-	log_message(LOG_LEVEL_INFO, "Shutting down kqexec");
+	log_message(LOG_LEVEL_NOTICE, "Shutting down kqexec");
 	
 	/* Clear monitor reference */
 	if (config->daemon_mode) {
