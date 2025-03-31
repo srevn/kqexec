@@ -20,5 +20,6 @@ load_rc_config $name
 
 command="/usr/local/bin/kqexec"
 command_args="-d -c ${kqexec_config}"
+extra_commands="reload"
 
 run_rc_command "$1"

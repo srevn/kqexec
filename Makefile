@@ -39,6 +39,8 @@ install: $(TARGET)
 	mkdir -p /usr/local/etc
 	[ -f /usr/local/etc/kqexec.conf ] || \
 		install -m 644 kqexec.conf.sample /usr/local/etc/kqexec.conf
+	mkdir -p /usr/local/etc/rc.d
+	install -m 755 rc.d/kqexec.rc /usr/local/etc/rc.d/kqexec
 
 # Create sample configuration
 kqexec.conf.sample:
