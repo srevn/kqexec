@@ -38,14 +38,20 @@ static void signal_handler(int sig) {
 	switch (sig) {
 		case SIGINT:
 		case SIGTERM:
+			log_message(LOG_LEVEL_NOTICE, "Received signal %d, shutting down", sig);
 			if (g_monitor != NULL) {
 				monitor_stop(g_monitor);
+			} else {
+				log_message(LOG_LEVEL_WARNING, "No monitor available, forcing exit");
+				exit(EXIT_FAILURE);
 			}
 			break;
 		case SIGHUP:
 			if (g_monitor != NULL) {
 				log_message(LOG_LEVEL_NOTICE, "Received SIGHUP, requesting configuration reload");
 				monitor_request_reload(g_monitor);
+			} else {
+				log_message(LOG_LEVEL_WARNING, "Received SIGHUP but no monitor available");
 			}
 			break;
 		default:
@@ -207,9 +213,6 @@ int main(int argc, char *argv[]) {
 	}
 	
 	/* Clean up */
-	log_message(LOG_LEVEL_NOTICE, "Shutting down kqexec");
-	
-	/* Clear monitor reference */
 	if (config->daemon_mode) {
 		daemon_set_monitor(NULL);
 	}
