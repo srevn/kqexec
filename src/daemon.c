@@ -71,7 +71,11 @@ bool daemon_is_running(void) {
 /* Set monitor reference for signal handler */
 void daemon_set_monitor(monitor_t *monitor) {
 	g_monitor = monitor;
-	log_message(LOG_LEVEL_DEBUG, "Daemon: monitor reference updated");
+	if (monitor != NULL) {
+		log_message(LOG_LEVEL_DEBUG, "Daemon: monitor reference updated");
+	} else {
+		log_message(LOG_LEVEL_WARNING, "Daemon: monitor reference cleared");
+	}
 }
 
 /* Check if reload is requested */
@@ -137,9 +141,6 @@ bool daemon_start(config_t *config) {
 	
 	/* Set file creation mask */
 	umask(0);
-	
-	/* Set up signal handlers */
-	daemon_setup_signals();
 	
 	log_message(LOG_LEVEL_NOTICE, "Started daemon with PID %d", getpid());
 	
