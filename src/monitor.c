@@ -994,8 +994,8 @@ bool monitor_process_events(monitor_t *monitor) {
 	/* Handle kevent result */
 	if (nev == -1) {
 		if (errno == EINTR) {
-			log_message(LOG_LEVEL_DEBUG, "kevent interrupted by signal, continuing");
-			return true; /* Continue monitoring */
+			log_message(LOG_LEVEL_DEBUG, "kevent interrupted by signal, returning to main loop");
+			return true; /* Return to main loop where running flag will be checked */
 		}
 		log_message(LOG_LEVEL_ERR, "kevent error: %s", strerror(errno));
 		return false; /* Stop monitoring on error */
