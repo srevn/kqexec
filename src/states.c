@@ -666,37 +666,30 @@ void synchronize_activity_states(const char *path, entity_state_t *trigger_state
 		while (state) {
 			/* If this state is for the same path but different watch */
 			if (strcmp(state->path, path) == 0 && state != trigger_state) {
-				log_message(LOG_LEVEL_DEBUG, "Synchronizing state for path %s (watch: %s) with trigger (watch: %s)",
+				log_message(LOG_LEVEL_DEBUG, "Found state to sync for path %s (watch: %s) with trigger (watch: %s)",
 						   path, state->watch->name, trigger_state->watch->name);
 				
-				/* Synchronize key activity tracking fields */
-				state->last_update = trigger_state->last_update;
-				state->last_activity_in_tree = trigger_state->last_activity_in_tree;
-				state->activity_in_progress = trigger_state->activity_in_progress;
+				/* Determine watch configuration compatibility */
+				bool fully_compatible = false;
+				bool partially_compatible = false;
 				
-				/* Add directory statistics synchronization */
-				state->dir_stats = trigger_state->dir_stats;
-				state->prev_stats = trigger_state->prev_stats;
-				state->stability_check_count = trigger_state->stability_check_count;
-				state->failed_checks = trigger_state->failed_checks;
-				state->exists = trigger_state->exists;
-				
-				if (state->type == ENTITY_DIRECTORY && trigger_state->type == ENTITY_DIRECTORY) {
-					/* Also sync change detection flags */
-					state->content_changed = trigger_state->content_changed;
-					state->metadata_changed = trigger_state->metadata_changed;
-					state->structure_changed = trigger_state->structure_changed;
-					
-					/* Sync stable reference state and cumulative change fields */
-					state->stable_reference_stats = trigger_state->stable_reference_stats;
-					state->reference_stats_initialized = trigger_state->reference_stats_initialized;
-					state->cumulative_file_change = trigger_state->cumulative_file_change;
-					state->cumulative_dir_change = trigger_state->cumulative_dir_change; 
-					state->cumulative_depth_change = trigger_state->cumulative_depth_change;
-					state->stability_lost = trigger_state->stability_lost;
+				/* Check for full compatibility (same recursive setting, events, and hidden files setting) */
+				if (state->watch->recursive == trigger_state->watch->recursive &&
+					state->watch->events == trigger_state->watch->events &&
+					state->watch->hidden == trigger_state->watch->hidden) {
+					fully_compatible = true;
+				}
+				/* Check for partial compatibility (overlapping events) */
+				else if (state->watch->events & trigger_state->watch->events) {
+					partially_compatible = true;
 				}
 				
-				/* Copy the most recent activity sample to keep timing consistent */
+				/* Always sync these basic factual properties */
+				state->exists = trigger_state->exists;
+				state->last_update = trigger_state->last_update;
+				state->wall_time = trigger_state->wall_time;
+				
+				/* Copy the most recent activity sample for basic timing consistency */
 				if (trigger_state->activity_sample_count > 0) {
 					int latest_idx = (trigger_state->activity_index + MAX_ACTIVITY_SAMPLES - 1) % MAX_ACTIVITY_SAMPLES;
 					int target_idx = (state->activity_index + MAX_ACTIVITY_SAMPLES - 1) % MAX_ACTIVITY_SAMPLES;
@@ -705,6 +698,81 @@ void synchronize_activity_states(const char *path, entity_state_t *trigger_state
 					if (state->activity_sample_count == 0) {
 						state->activity_sample_count = 1;
 					}
+				}
+				
+				/* Only sync activity state if watches have compatible recursive settings */
+				if (state->watch->recursive == trigger_state->watch->recursive) {
+					state->last_activity_in_tree = trigger_state->last_activity_in_tree;
+				} else {
+					/* For mismatched recursive settings, be cautious with tree activity */
+					if (state->watch->recursive && !trigger_state->watch->recursive) {
+						/* State is recursive but trigger is not - don't update tree activity */
+						log_message(LOG_LEVEL_DEBUG, 
+								  "Skipping tree activity sync: %s is recursive but trigger is not", 
+								  state->watch->name);
+					} else if (!state->watch->recursive && trigger_state->watch->recursive) {
+						/* State is non-recursive but trigger is recursive
+						 * Only update if this is direct activity, not propagated */
+						if (strcmp(trigger_state->path, trigger_state->watch->path) == 0) {
+							state->last_activity_in_tree = trigger_state->last_activity_in_tree;
+						}
+					}
+				}
+				
+				/* Sync change detection flags only if overlapping event types */
+				if (state->watch->events & EVENT_CONTENT && trigger_state->watch->events & EVENT_CONTENT) {
+					state->content_changed = trigger_state->content_changed;
+				}
+				if (state->watch->events & EVENT_METADATA && trigger_state->watch->events & EVENT_METADATA) {
+					state->metadata_changed = trigger_state->metadata_changed;
+				}
+				if (state->watch->events & EVENT_MODIFY && trigger_state->watch->events & EVENT_MODIFY) {
+					state->structure_changed = trigger_state->structure_changed;
+				}
+				
+				/* Only sync stability assessment for fully compatible watches */
+				if (fully_compatible) {
+					log_message(LOG_LEVEL_DEBUG, "Fully compatible watches - syncing all stability data");
+					
+					/* Activity in progress flag */
+					state->activity_in_progress = trigger_state->activity_in_progress;
+					
+					/* Stability checks */
+					state->stability_check_count = trigger_state->stability_check_count;
+					state->failed_checks = trigger_state->failed_checks;
+					
+					/* Directory statistics */
+					if (state->type == ENTITY_DIRECTORY && trigger_state->type == ENTITY_DIRECTORY) {
+						state->dir_stats = trigger_state->dir_stats;
+						state->prev_stats = trigger_state->prev_stats;
+						
+						/* Sync stable reference state and cumulative change fields */
+						state->stable_reference_stats = trigger_state->stable_reference_stats;
+						state->reference_stats_initialized = trigger_state->reference_stats_initialized;
+						state->cumulative_file_change = trigger_state->cumulative_file_change;
+						state->cumulative_dir_change = trigger_state->cumulative_dir_change; 
+						state->cumulative_depth_change = trigger_state->cumulative_depth_change;
+						state->stability_lost = trigger_state->stability_lost;
+					}
+				}
+				/* For partially compatible watches, sync directory stats but not stability assessment */
+				else if (partially_compatible && state->type == ENTITY_DIRECTORY && trigger_state->type == ENTITY_DIRECTORY) {
+					log_message(LOG_LEVEL_DEBUG, "Partially compatible watches - syncing basic stats only");
+					
+					/* Only sync the basic stats, not the interpretation of stability */
+					if (trigger_state->dir_stats.file_count > 0 || trigger_state->dir_stats.dir_count > 0) {
+						state->dir_stats = trigger_state->dir_stats;
+					}
+					
+					/* Don't sync stability check counts, activity_in_progress, etc. */
+				}
+				else {
+					log_message(LOG_LEVEL_DEBUG, 
+							  "Incompatible watches - minimal sync for %s and %s",
+							  state->watch->name, trigger_state->watch->name);
+					
+					/* Incompatible watches - very minimal synchronization */
+					/* Already synced the basics above */
 				}
 			}
 			state = state->next;
