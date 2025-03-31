@@ -42,6 +42,12 @@ static void signal_handler(int sig) {
 				monitor_stop(g_monitor);
 			}
 			break;
+		case SIGHUP:
+			if (g_monitor != NULL) {
+				log_message(LOG_LEVEL_NOTICE, "Received SIGHUP, requesting configuration reload");
+				monitor_request_reload(g_monitor);
+			}
+			break;
 		default:
 			break;
 	}
@@ -192,6 +198,11 @@ int main(int argc, char *argv[]) {
 		config_destroy(config);
 		log_close();
 		return EXIT_FAILURE;
+	}
+	
+	/* Daemon signal handler */
+	if (config->daemon_mode) {
+		daemon_set_monitor(monitor);
 	}
 	
 	/* Clean up */

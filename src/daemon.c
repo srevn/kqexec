@@ -10,9 +10,13 @@
 
 #include "daemon.h"
 #include "log.h"
+#include "monitor.h"
 
-/* Global flag for signal handling */
+/* Global monitor reference for signal handler */
+static monitor_t *g_monitor = NULL;
 static volatile sig_atomic_t running = 1;
+static volatile sig_atomic_t reload_requested = 0;
+
 
 /* Signal handler */
 static void signal_handler(int sig) {
@@ -20,6 +24,23 @@ static void signal_handler(int sig) {
 		case SIGINT:
 		case SIGTERM:
 			running = 0;
+			/* Stop the monitor if available */
+			if (g_monitor != NULL) {
+				log_message(LOG_LEVEL_NOTICE, "Daemon received signal %d, stopping monitor", sig);
+				monitor_stop(g_monitor);
+			} else {
+				log_message(LOG_LEVEL_WARNING, "Daemon received signal %d but monitor is not available", sig);
+			}
+			break;
+		case SIGHUP:
+			reload_requested = 1;
+			/* Request reload if monitor is available */
+			if (g_monitor != NULL) {
+				log_message(LOG_LEVEL_NOTICE, "Daemon received SIGHUP, requesting configuration reload");
+				monitor_request_reload(g_monitor);
+			} else {
+				log_message(LOG_LEVEL_WARNING, "Daemon received SIGHUP but monitor is not available");
+			}
 			break;
 		default:
 			break;
@@ -45,6 +66,21 @@ void daemon_setup_signals(void) {
 /* Check if the daemon is still running */
 bool daemon_is_running(void) {
 	return running != 0;
+}
+
+/* Set monitor reference for signal handler */
+void daemon_set_monitor(monitor_t *monitor) {
+	g_monitor = monitor;
+	log_message(LOG_LEVEL_DEBUG, "Daemon: monitor reference updated");
+}
+
+/* Check if reload is requested */
+bool daemon_reload_requested(void) {
+	if (reload_requested) {
+		reload_requested = 0;
+		return true;
+	}
+	return false;
 }
 
 /* Start daemon */
