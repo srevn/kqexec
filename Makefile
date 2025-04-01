@@ -1,7 +1,21 @@
+# Detect operating system
+UNAME_S := $(shell uname -s)
+
 # Compiler and flags
 CC = cc
 CFLAGS = -Wall -Wextra -std=c11 -pedantic -g
 LDFLAGS = -lm
+
+# OS-specific settings
+ifeq ($(UNAME_S),FreeBSD)
+	CFLAGS += -DIS_FREEBSD
+	INSTALL_PREFIX = /usr/local
+else ifeq ($(UNAME_S),Darwin)
+	CFLAGS += -DIS_MACOS
+	INSTALL_PREFIX = /usr/local
+else
+	$(error Unsupported operating system: $(UNAME_S))
+endif
 
 # Source files
 SRCS = src/main.c \
@@ -35,12 +49,18 @@ clean:
 
 # Install
 install: $(TARGET)
-	install -s $(TARGET) /usr/local/bin/
-	mkdir -p /usr/local/etc
-	[ -f /usr/local/etc/kqexec.conf ] || \
-		install -m 644 kqexec.conf.sample /usr/local/etc/kqexec.conf
-	mkdir -p /usr/local/etc/rc.d
-	install -m 755 rc.d/kqexec.rc /usr/local/etc/rc.d/kqexec
+	install -s $(TARGET) $(INSTALL_PREFIX)/bin/
+	mkdir -p $(INSTALL_PREFIX)/etc
+	[ -f $(INSTALL_PREFIX)/etc/kqexec.conf ] || \
+		install -m 644 kqexec.conf.sample $(INSTALL_PREFIX)/etc/kqexec.conf
+	
+ifeq ($(UNAME_S),FreeBSD)
+	mkdir -p $(INSTALL_PREFIX)/etc/rc.d
+	install -m 755 etc/kqexec.rc $(INSTALL_PREFIX)/etc/rc.d/kqexec
+else ifeq ($(UNAME_S),Darwin)
+	mkdir -p $(INSTALL_PREFIX)/etc/kqexec
+	install -m 644 etc/com.kqexec.daemon.plist $(INSTALL_PREFIX)/etc/kqexec/com.kqexec.daemon.plist
+endif
 
 # Create sample configuration
 kqexec.conf.sample:

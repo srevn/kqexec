@@ -1120,10 +1120,10 @@ void monitor_request_reload(monitor_t *monitor) {
 	}
 }
 
-/* Process a reload request - called from monitor_process_events */
+/* Process a reload request */
 bool monitor_reload(monitor_t *monitor) {
 	if (monitor == NULL || monitor->config_file == NULL) {
-		log_message(LOG_LEVEL_ERR, "Invalid monitor or missing config_file for reload");
+		log_message(LOG_LEVEL_ERR, "Invalid monitor or missing configuration file for reload");
 		return false;
 	}
 	
