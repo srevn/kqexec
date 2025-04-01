@@ -21,23 +21,23 @@ typedef enum {
 
 /* Structure for a watch entry in the configuration */
 typedef struct {
-	char *name;             /* Section name in config */
-	char *path;             /* Path to watch */
-	watch_type_t type;      /* File or directory */
-	event_type_t events;    /* Events to monitor */
-	char *command;          /* Command to execute */
-	bool recursive;         /* Whether to recursively monitor (for directories) */
-	bool hidden;    		/* Whether to monitor hidden files/directories */
-	bool log_output;        /* Whether to capture and log command output */
+	char *name;             	/* Section name in config */
+	char *path;             	/* Path to watch */
+	watch_type_t type;      	/* File or directory */
+	event_type_t events;    	/* Events to monitor */
+	char *command;          	/* Command to execute */
+	bool log_output;        	/* Whether to capture and log command output */
+	bool recursive;         	/* Whether to recursively monitor (for directories) */
+	bool hidden;    			/* Whether to monitor hidden files/directories */
 } watch_entry_t;
 
 /* Global configuration structure */
 typedef struct {
-	char *config_file;      /* Path to config file */
-	bool daemon_mode;       /* Run as daemon */
-	int syslog_level;       /* Syslog verbosity */
-	watch_entry_t **watches;/* Array of watch entries */
-	int watch_count;        /* Number of watch entries */
+	char *config_file;      	/* Path to config file */
+	bool daemon_mode;       	/* Run as daemon */
+	int syslog_level;       	/* Syslog verbosity */
+	watch_entry_t **watches;	/* Array of watch entries */
+	int watch_count;        	/* Number of watch entries */
 } config_t;
 
 /* Function prototypes */

@@ -263,9 +263,9 @@ bool config_parse_file(config_t *config, const char *filename) {
 			}
 			
 			current_watch->name = strdup(str + 1);
+			current_watch->log_output = false; /* Default to not logging command output */
 			current_watch->recursive = true;  /* Default to recursive for directories */
 			current_watch->hidden = false;	/* Default to not including hidden files */
-			current_watch->log_output = false; /* Default to not logging command output */
 			state = SECTION_ENTRY;
 			
 			continue;
@@ -304,6 +304,15 @@ bool config_parse_file(config_t *config, const char *filename) {
 				current_watch->events = config_parse_events(value);
 			} else if (strcasecmp(key, "command") == 0) {
 				current_watch->command = strdup(value);
+			} else if (strcasecmp(key, "log_output") == 0) {
+				if (strcasecmp(value, "true") == 0 || strcmp(value, "1") == 0) {
+					current_watch->log_output = true;
+				} else if (strcasecmp(value, "false") == 0 || strcmp(value, "0") == 0) {
+					current_watch->log_output = false;
+				} else {
+					log_message(LOG_LEVEL_WARNING, "Invalid value for log_output at line %d: %s", 
+							  line_number, value);
+				}
 			} else if (strcasecmp(key, "recursive") == 0) {
 				if (strcasecmp(value, "true") == 0 || strcmp(value, "1") == 0) {
 					current_watch->recursive = true;
@@ -320,15 +329,6 @@ bool config_parse_file(config_t *config, const char *filename) {
 					current_watch->hidden = false;
 				} else {
 					log_message(LOG_LEVEL_WARNING, "Invalid value for hidden at line %d: %s", 
-							  line_number, value);
-				}
-			} else if (strcasecmp(key, "log_output") == 0) {
-				if (strcasecmp(value, "true") == 0 || strcmp(value, "1") == 0) {
-					current_watch->log_output = true;
-				} else if (strcasecmp(value, "false") == 0 || strcmp(value, "0") == 0) {
-					current_watch->log_output = false;
-				} else {
-					log_message(LOG_LEVEL_WARNING, "Invalid value for log_output at line %d: %s", 
 							  line_number, value);
 				}
 			} else {
