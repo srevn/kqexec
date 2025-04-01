@@ -28,6 +28,7 @@ typedef struct {
 	char *command;          /* Command to execute */
 	bool recursive;         /* Whether to recursively monitor (for directories) */
 	bool hidden;    		/* Whether to monitor hidden files/directories */
+	bool log_output;        /* Whether to capture and log command output */
 } watch_entry_t;
 
 /* Global configuration structure */

@@ -3,6 +3,8 @@
 
 #include <stdarg.h>
 #include <syslog.h>
+#include <fcntl.h>
+#include <sys/select.h>
 
 /* Log levels (matching syslog levels) */
 typedef enum {

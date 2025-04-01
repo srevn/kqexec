@@ -79,6 +79,7 @@ events = EVENT1,EVENT2       # Comma-separated list of events
 command = command to execute # Command to run when events occur
 recursive = true             # For recursive directory monitoring (default: true)
 hidden = false               # Whether to monitor hidden files/dirs (default: false)
+log_output = false           # Whether to capture and log command output (default: false)
 ```
 
 ### Event Types

@@ -368,6 +368,8 @@ char *command_substitute_placeholders(const char *command, const file_event_t *e
 bool command_execute(const watch_entry_t *watch, const file_event_t *event) {
 	pid_t pid;
 	char *command;
+	int stdout_pipe[2] = {-1, -1}, stderr_pipe[2] = {-1, -1};
+	bool capture_output = watch->log_output;
 	
 	if (watch == NULL || event == NULL) {
 		log_message(LOG_LEVEL_ERR, "Invalid arguments to command_execute");
@@ -382,22 +384,109 @@ bool command_execute(const watch_entry_t *watch, const file_event_t *event) {
 	
 	log_message(LOG_LEVEL_NOTICE, "Executing command: %s", command);
 	
+	/* Create pipes for stdout and stderr if configured to capture output */
+	if (capture_output) {
+		if (pipe(stdout_pipe) < 0 || pipe(stderr_pipe) < 0) {
+			log_message(LOG_LEVEL_ERR, "Failed to create pipes: %s", strerror(errno));
+			free(command);
+			return false;
+		}
+	}
+	
 	/* Fork a child process */
 	pid = fork();
 	if (pid == -1) {
 		log_message(LOG_LEVEL_ERR, "Failed to fork: %s", strerror(errno));
+		if (capture_output) {
+			close(stdout_pipe[0]); close(stdout_pipe[1]);
+			close(stderr_pipe[0]); close(stderr_pipe[1]);
+		}
 		free(command);
 		return false;
 	}
 	
 	/* Child process */
 	if (pid == 0) {
+		/* Redirect stdout and stderr to pipes if configured */
+		if (capture_output) {
+			/* Close read ends of pipes */
+			close(stdout_pipe[0]);
+			close(stderr_pipe[0]);
+			
+			/* Redirect stdout and stderr to pipes */
+			dup2(stdout_pipe[1], STDOUT_FILENO);
+			dup2(stderr_pipe[1], STDERR_FILENO);
+			
+			/* Close write ends after dup2 */
+			close(stdout_pipe[1]);
+			close(stderr_pipe[1]);
+		}
+		
 		/* Execute the command */
 		execl("/bin/sh", "sh", "-c", command, NULL);
 		
 		/* If we get here, execl failed */
 		log_message(LOG_LEVEL_ERR, "Failed to execute command: %s", strerror(errno));
 		exit(EXIT_FAILURE);
+	}
+	
+	/* Parent process */
+	/* Handle output pipes if configured */
+	if (capture_output) {
+		/* Close write ends of pipes */
+		close(stdout_pipe[1]);
+		close(stderr_pipe[1]);
+		
+		/* Set up non-blocking I/O for reading from pipes */
+		fcntl(stdout_pipe[0], F_SETFL, O_NONBLOCK);
+		fcntl(stderr_pipe[0], F_SETFL, O_NONBLOCK);
+		
+		/* Read and log output in a non-blocking way */
+		char buffer[1024];
+		ssize_t bytes_read;
+		fd_set read_fds;
+		struct timeval timeout;
+		int max_fd = (stdout_pipe[0] > stderr_pipe[0]) ? stdout_pipe[0] : stderr_pipe[0];
+		
+		/* Non-blocking read with timeout to prevent hanging */
+		for (int i = 0; i < 100; i++) { /* Limit iterations to prevent infinite loop */
+			FD_ZERO(&read_fds);
+			FD_SET(stdout_pipe[0], &read_fds);
+			FD_SET(stderr_pipe[0], &read_fds);
+			
+			timeout.tv_sec = 0;
+			timeout.tv_usec = 100000; /* 100ms timeout */
+			
+			int select_result = select(max_fd + 1, &read_fds, NULL, NULL, &timeout);
+			if (select_result <= 0) break; /* Timeout or error */
+			
+			/* Read stdout */
+			if (FD_ISSET(stdout_pipe[0], &read_fds)) {
+				bytes_read = read(stdout_pipe[0], buffer, sizeof(buffer) - 1);
+				if (bytes_read > 0) {
+					buffer[bytes_read] = '\0';
+					log_message(LOG_LEVEL_NOTICE, "Command stdout [%s]: %s", watch->name, buffer);
+				}
+			}
+			
+			/* Read stderr */
+			if (FD_ISSET(stderr_pipe[0], &read_fds)) {
+				bytes_read = read(stderr_pipe[0], buffer, sizeof(buffer) - 1);
+				if (bytes_read > 0) {
+					buffer[bytes_read] = '\0';
+					log_message(LOG_LEVEL_WARNING, "Command stderr [%s]: %s", watch->name, buffer);
+				}
+			}
+			
+			/* Check if both pipes are closed */
+			bytes_read = read(stdout_pipe[0], buffer, 1);
+			ssize_t stderr_read = read(stderr_pipe[0], buffer, 1);
+			if (bytes_read <= 0 && stderr_read <= 0) break;
+		}
+		
+		/* Close read ends of pipes */
+		close(stdout_pipe[0]);
+		close(stderr_pipe[0]);
 	}
 	
 	/* Parent process - create command intent */
