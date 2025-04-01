@@ -382,7 +382,8 @@ bool command_execute(const watch_entry_t *watch, const file_event_t *event) {
 		return false;
 	}
 	
-	log_message(LOG_LEVEL_NOTICE, "Executing command: %s", command);
+	log_message(LOG_LEVEL_INFO, "Executing command: %s", command);
+	log_message(LOG_LEVEL_NOTICE, "[%s]: %s", watch->name, command);
 	
 	/* Create pipes for stdout and stderr if configured to capture output */
 	if (capture_output) {
@@ -430,58 +431,93 @@ bool command_execute(const watch_entry_t *watch, const file_event_t *event) {
 		exit(EXIT_FAILURE);
 	}
 	
-	/* Parent process */
-	/* Handle output pipes if configured */
+	/* Read and log output line by line */
 	if (capture_output) {
-		/* Close write ends of pipes */
-		close(stdout_pipe[1]);
-		close(stderr_pipe[1]);
-		
-		/* Set up non-blocking I/O for reading from pipes */
-		fcntl(stdout_pipe[0], F_SETFL, O_NONBLOCK);
-		fcntl(stderr_pipe[0], F_SETFL, O_NONBLOCK);
-		
-		/* Read and log output in a non-blocking way */
-		char buffer[1024];
+		char buffer[4096] = {0};
+		char line_buffer[4096] = {0};
+		size_t line_pos = 0;
 		ssize_t bytes_read;
 		fd_set read_fds;
 		struct timeval timeout;
 		int max_fd = (stdout_pipe[0] > stderr_pipe[0]) ? stdout_pipe[0] : stderr_pipe[0];
+		bool stdout_open = true, stderr_open = true;
+		int empty_read_count = 0;
+		bool last_line_was_empty = false;
 		
-		/* Non-blocking read with timeout to prevent hanging */
-		for (int i = 0; i < 100; i++) { /* Limit iterations to prevent infinite loop */
+		/* Process all output until both pipes are closed or timeout */
+		while (stdout_open || stderr_open) {
 			FD_ZERO(&read_fds);
-			FD_SET(stdout_pipe[0], &read_fds);
-			FD_SET(stderr_pipe[0], &read_fds);
+			if (stdout_open) FD_SET(stdout_pipe[0], &read_fds);
+			if (stderr_open) FD_SET(stderr_pipe[0], &read_fds);
 			
 			timeout.tv_sec = 0;
 			timeout.tv_usec = 100000; /* 100ms timeout */
 			
 			int select_result = select(max_fd + 1, &read_fds, NULL, NULL, &timeout);
-			if (select_result <= 0) break; /* Timeout or error */
 			
-			/* Read stdout */
-			if (FD_ISSET(stdout_pipe[0], &read_fds)) {
+			/* Timeout or error */
+			if (select_result <= 0) {
+				empty_read_count++;
+				
+				/* Log any partial lines remaining */
+				if (line_pos > 0) {
+					line_buffer[line_pos] = '\0';
+					log_message(LOG_LEVEL_NOTICE, "[%s]: %s", watch->name, line_buffer);
+					line_pos = 0;
+				}
+				
+				/* Break after several consecutive empty reads */
+				if (empty_read_count >= 5) {
+					break;  /* Exit the loop after 5 consecutive timeouts */
+				}
+				
+				continue;
+			}
+			
+			/* Reset counter when we get data */
+			empty_read_count = 0;
+			
+			/* Process stdout */
+			if (stdout_open && FD_ISSET(stdout_pipe[0], &read_fds)) {
 				bytes_read = read(stdout_pipe[0], buffer, sizeof(buffer) - 1);
-				if (bytes_read > 0) {
+				
+				if (bytes_read <= 0) {
+					stdout_open = false;
+				} else {
 					buffer[bytes_read] = '\0';
-					log_message(LOG_LEVEL_NOTICE, "Command stdout [%s]: %s", watch->name, buffer);
+					
+					/* Process line by line */
+					for (size_t i = 0; i < (size_t)bytes_read; i++) {
+						if (buffer[i] == '\n') {
+							/* Avoid consecutive empty lines */
+							line_buffer[line_pos] = '\0';
+							
+							if (line_pos > 0 || !last_line_was_empty) {
+								log_message(LOG_LEVEL_NOTICE, "[%s]: %s", watch->name, line_buffer);
+							}
+							
+							last_line_was_empty = (line_pos == 0);
+							line_pos = 0;
+						} else if (line_pos < sizeof(line_buffer) - 1) {
+							/* Add character to buffer */
+							line_buffer[line_pos++] = buffer[i];
+						}
+					}
 				}
 			}
 			
-			/* Read stderr */
-			if (FD_ISSET(stderr_pipe[0], &read_fds)) {
+			/* Process stderr */
+			if (stderr_open && FD_ISSET(stderr_pipe[0], &read_fds)) {
 				bytes_read = read(stderr_pipe[0], buffer, sizeof(buffer) - 1);
-				if (bytes_read > 0) {
+				
+				if (bytes_read <= 0) {
+					stderr_open = false;
+				} else {
 					buffer[bytes_read] = '\0';
-					log_message(LOG_LEVEL_WARNING, "Command stderr [%s]: %s", watch->name, buffer);
+					/* Log stderr directly */
+					log_message(LOG_LEVEL_WARNING, "[%s]: %s", watch->name, buffer);
 				}
 			}
-			
-			/* Check if both pipes are closed */
-			bytes_read = read(stdout_pipe[0], buffer, 1);
-			ssize_t stderr_read = read(stderr_pipe[0], buffer, 1);
-			if (bytes_read <= 0 && stderr_read <= 0) break;
 		}
 		
 		/* Close read ends of pipes */
