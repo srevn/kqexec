@@ -221,7 +221,6 @@ int main(int argc, char *argv[]) {
 	config_destroy(config);
 	command_intent_cleanup();
 	entity_state_cleanup();
-	command_cleanup();
 	log_close();
 	
 	return EXIT_SUCCESS;

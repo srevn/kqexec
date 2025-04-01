@@ -20,14 +20,8 @@
 static command_intent_t command_intents[MAX_COMMAND_INTENTS];
 static int active_intent_count = 0;
 
-/* Hash table for command debouncing */
-static command_entry_t *command_hash[COMMAND_HASH_SIZE] = {NULL};
-
 /* Debounce time in milliseconds */
 static int debounce_time_ms = DEFAULT_DEBOUNCE_TIME_MS;
-
-/* Track if the last command was debounced */
-static bool last_command_debounced = false;
 
 /* SIGCHLD handler to reap child processes and mark command intents as complete */
 static void command_sigchld_handler(int sig) {
@@ -43,9 +37,6 @@ static void command_sigchld_handler(int sig) {
 
 /* Initialize command subsystem */
 void command_init(void) {
-	/* Initialize hash table */
-	memset(command_hash, 0, sizeof(command_hash));
-	
 	/* Set up SIGCHLD handler */
 	struct sigaction sa;
 	memset(&sa, 0, sizeof(sa));
@@ -58,22 +49,6 @@ void command_init(void) {
 void command_intent_init(void) {
 	memset(command_intents, 0, sizeof(command_intents));
 	active_intent_count = 0;
-}
-
-/* Clean up command subsystem */
-void command_cleanup(void) {
-	/* Free all entries in the hash table */
-	for (int i = 0; i < COMMAND_HASH_SIZE; i++) {
-		command_entry_t *entry = command_hash[i];
-		while (entry != NULL) {
-			command_entry_t *next = entry->next;
-			free(entry->key.path);
-			free(entry->key.command);
-			free(entry);
-			entry = next;
-		}
-		command_hash[i] = NULL;
-	}
 }
 
 /* Clean up command intent tracking */
@@ -272,13 +247,6 @@ bool command_intent_mark_complete(pid_t pid) {
 	return false;
 }
 
-/* Function to check if the last command was debounced */
-bool command_was_debounced(void) {
-	bool result = last_command_debounced;
-	last_command_debounced = false;  /* Reset after read */
-	return result;
-}
-
 /* Set debounce time */
 void command_debounce_time(int milliseconds) {
 	if (milliseconds >= 0) {
@@ -290,92 +258,6 @@ void command_debounce_time(int milliseconds) {
 /* Get debounce time */
 int command_get_debounce_time(void) {
 	return debounce_time_ms;
-}
-
-/* Calculate simple hash for a command key */
-static unsigned int hash_command_key(const char *path, event_type_t event_type, const char *command) {
-	unsigned int hash = 0;
-	const char *str;
-	
-	/* Hash the path */
-	for (str = path; *str; str++) {
-		hash = hash * 31 + *str;
-	}
-	
-	/* Incorporate the event type */
-	hash = hash * 31 + event_type;
-	
-	/* Hash the command */
-	for (str = command; *str; str++) {
-		hash = hash * 31 + *str;
-	}
-	
-	return hash % COMMAND_HASH_SIZE;
-}
-
-/* Check if enough time has passed since last command execution */
-static bool should_execute(const char *path, event_type_t event_type, const char *command) {
-	struct timespec now;
-	unsigned int hash;
-	command_entry_t *entry, *prev = NULL;
-	long elapsed_ms;
-	
-	/* Get current time */
-	clock_gettime(CLOCK_MONOTONIC, &now);
-	
-	/* Calculate hash */
-	hash = hash_command_key(path, event_type, command);
-	
-	/* Look for existing entry */
-	entry = command_hash[hash];
-	while (entry != NULL) {
-		if (strcmp(entry->key.path, path) == 0 && 
-			entry->key.event_type == event_type && 
-			strcmp(entry->key.command, command) == 0) {
-			/* Found an entry, check if enough time has passed */
-			elapsed_ms = (now.tv_sec - entry->last_exec.tv_sec) * 1000 + 
-						(now.tv_nsec - entry->last_exec.tv_nsec) / 1000000;
-			
-			if (elapsed_ms < debounce_time_ms) {
-				log_message(LOG_LEVEL_DEBUG, "Debouncing command for %s (elapsed: %ld ms, required: %d ms)",
-						  path, elapsed_ms, debounce_time_ms);
-				last_command_debounced = true;  /* Set the debounce flag */
-				return false;
-			}
-			
-			/* Update last execution time */
-			entry->last_exec = now;
-			last_command_debounced = false;  /* Clear the debounce flag */
-			return true;
-		}
-		
-		prev = entry;
-		entry = entry->next;
-	}
-	
-	/* No existing entry, create a new one */
-	entry = malloc(sizeof(command_entry_t));
-	if (entry == NULL) {
-		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for command entry");
-		last_command_debounced = false;  /* Clear the debounce flag */
-		return true; /* Execute anyway */
-	}
-	
-	entry->key.path = strdup(path);
-	entry->key.event_type = event_type;
-	entry->key.command = strdup(command);
-	entry->last_exec = now;
-	entry->next = NULL;
-	
-	/* Add to hash table */
-	if (prev == NULL) {
-		command_hash[hash] = entry;
-	} else {
-		prev->next = entry;
-	}
-	
-	last_command_debounced = false;  /* Clear the debounce flag */
-	return true;
 }
 
 /* Substitutes placeholders in the command string:
@@ -489,21 +371,13 @@ bool command_execute(const watch_entry_t *watch, const file_event_t *event) {
 	
 	if (watch == NULL || event == NULL) {
 		log_message(LOG_LEVEL_ERR, "Invalid arguments to command_execute");
-		last_command_debounced = false;  /* Clear the debounce flag */
 		return false;
 	}
 	
 	/* Substitute placeholders in the command */
 	command = command_substitute_placeholders(watch->command, event);
 	if (command == NULL) {
-		last_command_debounced = false;  /* Clear the debounce flag */
 		return false;
-	}
-	
-	/* Check if we should execute this command (debouncing) */
-	if (!should_execute(event->path, event->type, command)) {
-		free(command);
-		return false;  /* Return false, but last_command_debounced will be set */
 	}
 	
 	log_message(LOG_LEVEL_NOTICE, "Executing command: %s", command);
