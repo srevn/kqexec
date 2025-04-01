@@ -699,7 +699,7 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 					}
 					
 					/* If we get here, we're ready to execute the command */
-					log_message(LOG_LEVEL_INFO, 
+					log_message(LOG_LEVEL_DEBUG, 
 							  "Directory %s stability confirmed (%d/%d checks), proceeding to command execution",
 							  root_state->path, root_state->stability_check_count, required_checks);
 				} else {
@@ -721,9 +721,6 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 				
 				/* We've confirmed stability, proceed with command execution */
 				commands_attempted++;
-				log_message(LOG_LEVEL_INFO,
-						  "Directory %s (watch: %s) confirmed stable after %d checks, processing deferred events",
-						  root_state->path, watch->name, root_state->stability_check_count);
 				
 				/* Reset activity flag and stability counter */
 				root_state->activity_in_progress = false;
