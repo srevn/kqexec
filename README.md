@@ -77,9 +77,9 @@ file = /path/to/file         # For monitoring a single file
 directory = /path/to/dir     # For monitoring a directory
 events = EVENT1,EVENT2       # Comma-separated list of events
 command = command to execute # Command to run when events occur
+log_output = false           # Whether to capture and log command output (default: false)
 recursive = true             # For recursive directory monitoring (default: true)
 hidden = false               # Whether to monitor hidden files/dirs (default: false)
-log_output = false           # Whether to capture and log command output (default: false)
 ```
 
 ### Event Types
@@ -143,6 +143,7 @@ command = echo "Log file %p was modified at %t by user %u (event: %e)" >> /var/l
 directory = /usr/local/www/data
 events = CONTENT
 command = /usr/local/bin/refresh_cache.sh %p %e
+log_output = true
 recursive = true
 hidden = false
 
@@ -188,10 +189,6 @@ Create an RC script in `/usr/local/etc/rc.d/kqexec`:
 # PROVIDE: kqexec
 # REQUIRE: DAEMON
 # KEYWORD: shutdown
-#
-# Add the following line to /etc/rc.conf to enable kqexec:
-# kqexec_enable="YES"
-#
 
 . /etc/rc.subr
 
@@ -205,6 +202,7 @@ load_rc_config $name
 
 command="/usr/local/bin/kqexec"
 command_args="-d -c ${kqexec_config}"
+extra_commands="reload"
 
 run_rc_command "$1"
 ```
@@ -299,6 +297,12 @@ Check syslog for messages from kqexec:
 
 ```sh
 grep kqexec /var/log/messages
+```
+
+Or, if you prefer separate log file, add this line to `/etc/syslog.conf`
+
+```ini
+daemon.notice      /var/log/kqexec.log
 ```
 
 Increase log verbosity for debugging:
