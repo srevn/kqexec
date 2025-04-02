@@ -4,6 +4,8 @@
 # REQUIRE: DAEMON
 # KEYWORD: shutdown
 
+export PATH="/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin"
+
 . /etc/rc.subr
 
 name=kqexec
