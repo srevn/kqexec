@@ -1175,9 +1175,6 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 	/* Always update previous stats for next comparison */
 	root_state->prev_stats = current_stats;
 	
-	/* Save current stats so we can calculate changes properly */
-	dir_stats_t saved_current_stats = root_state->dir_stats;
-	
 	/* Update current stats with new values */
 	root_state->dir_stats = current_stats;
 	

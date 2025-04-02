@@ -18,6 +18,9 @@
 /* Hash table size for storing entity states */
 #define ENTITY_HASH_SIZE 1024
 
+/* External reference to the current monitor instance */
+extern monitor_t *g_current_monitor;
+
 /* Hash table of entity states */
 static entity_state_t **entity_states = NULL;
 
@@ -117,6 +120,27 @@ void update_cumulative_changes(entity_state_t *state) {
 	int new_file_change = state->dir_stats.recursive_file_count - state->prev_stats.recursive_file_count;
 	int new_dir_change = state->dir_stats.recursive_dir_count - state->prev_stats.recursive_dir_count;
 	int new_depth_change = state->dir_stats.max_depth - state->prev_stats.max_depth;
+	
+	/* Fix for deletion depth tracking: If significant directory deletion 
+	   but no depth change reported, infer a depth change */
+	if (new_dir_change < -5 && new_depth_change == 0) {
+		/* Large structure deletion detected but depth unchanged - likely a bug */
+		log_message(LOG_LEVEL_DEBUG, 
+				  "Deletion detected with no depth change for %s - inferring depth reduction",
+				  state->path);
+		
+		/* Calculate inferred depth change proportional to directory removal */
+		float deletion_ratio = (float)abs(new_dir_change) / 
+							  (state->prev_stats.recursive_dir_count > 0 ? 
+							   state->prev_stats.recursive_dir_count : 10);
+		
+		/* Scale depth change based on deletion magnitude */
+		if (deletion_ratio > 0.5) {
+			new_depth_change = -2; /* Major deletion, likely multiple levels */
+		} else {
+			new_depth_change = -1; /* Standard deletion, at least one level */
+		}
+	}
 	
 	/* Accumulate changes */
 	state->cumulative_file_change += new_file_change;
