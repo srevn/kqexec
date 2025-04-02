@@ -25,6 +25,376 @@
 /* Define max allowed failures before giving up */
 #define MAX_FAILED_CHECKS 3
 
+/* Global monitor instance for integration with states.c */
+monitor_t *g_current_monitor = NULL;
+
+/* Add a watch to a queue entry */
+static bool check_queue_add_watch(deferred_check_t *entry, watch_entry_t *watch) {
+	if (!entry || !watch) {
+		log_message(LOG_LEVEL_ERR, "Invalid parameters for check_queue_add_watch");
+		return false;
+	}
+	
+	/* Check if this watch is already in the array */
+	for (int i = 0; i < entry->watch_count; i++) {
+		if (entry->watches && entry->watches[i] == watch) {
+			return true; /* Already present */
+		}
+	}
+	
+	/* Ensure capacity */
+	if (entry->watch_count >= entry->watch_capacity) {
+		int new_capacity = entry->watch_capacity == 0 ? 4 : entry->watch_capacity * 2;
+		watch_entry_t **new_watches = realloc(entry->watches, 
+											new_capacity * sizeof(watch_entry_t *));
+		if (!new_watches) {
+			log_message(LOG_LEVEL_ERR, "Failed to resize watches array in queue entry");
+			return false;
+		}
+		entry->watches = new_watches;
+		entry->watch_capacity = new_capacity;
+		
+		/* Zero out new memory */
+		if (entry->watch_count < new_capacity) {
+			memset(&entry->watches[entry->watch_count], 0, 
+				  (new_capacity - entry->watch_count) * sizeof(watch_entry_t *));
+		}
+	}
+	
+	/* Add the new watch */
+	entry->watches[entry->watch_count++] = watch;
+	return true;
+}
+
+/* Cleanup the priority queue */
+static void check_queue_cleanup(monitor_t *monitor) {
+	if (!monitor || !monitor->check_queue) return;
+	
+	/* Free path strings and watch arrays */
+	for (int i = 0; i < monitor->check_queue_size; i++) {
+		if (monitor->check_queue[i].path) {
+			free(monitor->check_queue[i].path);
+			monitor->check_queue[i].path = NULL;
+		}
+		if (monitor->check_queue[i].watches) {
+			free(monitor->check_queue[i].watches);
+			monitor->check_queue[i].watches = NULL;
+		}
+		
+		/* Clear the struct to prevent double-free issues */
+		memset(&monitor->check_queue[i], 0, sizeof(deferred_check_t));
+	}
+	
+	free(monitor->check_queue);
+	monitor->check_queue = NULL;
+	monitor->check_queue_size = 0;
+	monitor->check_queue_capacity = 0;
+	
+	log_message(LOG_LEVEL_DEBUG, "Cleaned up deferred check queue");
+}
+
+/* Initialize the priority queue */
+static void check_queue_init(monitor_t *monitor, int initial_capacity) {
+	if (!monitor) {
+		return;
+	}
+	
+	if (initial_capacity < 8) initial_capacity = 8;
+	
+	/* Make sure we're starting with a clean state */
+	if (monitor->check_queue) {
+		check_queue_cleanup(monitor);
+	}
+	
+	monitor->check_queue = NULL;
+	monitor->check_queue_size = 0;
+	monitor->check_queue_capacity = 0;
+	
+	/* Allocate memory for the queue and zero it out */
+	monitor->check_queue = calloc(initial_capacity, sizeof(deferred_check_t));
+	if (!monitor->check_queue) {
+		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for deferred check queue");
+	} else {
+		monitor->check_queue_capacity = initial_capacity;
+		log_message(LOG_LEVEL_DEBUG, "Initialized deferred check queue with capacity %d", initial_capacity);
+	}
+}
+
+/* Compare two timespec values for priority queue ordering */
+static int check_queue_compare(struct timespec *a, struct timespec *b) {
+	if (!a || !b) return 0; /* Handle NULL pointers */
+	
+	if (a->tv_sec < b->tv_sec) return -1;
+	if (a->tv_sec > b->tv_sec) return 1;
+	if (a->tv_nsec < b->tv_nsec) return -1;
+	if (a->tv_nsec > b->tv_nsec) return 1;
+	return 0;
+}
+
+/* Restore heap property upward */
+static void check_queue_heapify_up(deferred_check_t *queue, int index) {
+	if (!queue || index <= 0) return;
+	
+	int parent = (index - 1) / 2;
+	
+	/* Ensure both queue entries have valid paths to avoid crash */
+	if (!queue[index].path || !queue[parent].path) {
+		log_message(LOG_LEVEL_WARNING, "Heapify up encountered invalid path at index %d or parent %d", 
+				  index, parent);
+		return;
+	}
+	
+	if (check_queue_compare(&queue[index].next_check, 
+						  &queue[parent].next_check) < 0) {
+		/* Swap with parent using a temporary copy */
+		deferred_check_t temp;
+		memcpy(&temp, &queue[index], sizeof(deferred_check_t));
+		memcpy(&queue[index], &queue[parent], sizeof(deferred_check_t));
+		memcpy(&queue[parent], &temp, sizeof(deferred_check_t));
+		
+		/* Recursively heapify up */
+		check_queue_heapify_up(queue, parent);
+	}
+}
+
+/* Restore heap property downward */
+static void check_queue_heapify_down(deferred_check_t *queue, int size, int index) {
+	if (!queue || index < 0 || size <= 0 || index >= size) {
+		return;
+	}
+	
+	int smallest = index;
+	int left = 2 * index + 1;
+	int right = 2 * index + 2;
+	
+	/* First validate that the current entry has a valid path */
+	if (!queue[index].path) {
+		log_message(LOG_LEVEL_WARNING, "Heapify down encountered NULL path at index %d", index);
+		return;
+	}
+	
+	/* Check left child with validation */
+	if (left < size) {
+		if (!queue[left].path) {
+			log_message(LOG_LEVEL_WARNING, "Left child at index %d has NULL path", left);
+		} else if (check_queue_compare(&queue[left].next_check, 
+									 &queue[smallest].next_check) < 0) {
+			smallest = left;
+		}
+	}
+	
+	/* Check right child with validation */
+	if (right < size) {
+		if (!queue[right].path) {
+			log_message(LOG_LEVEL_WARNING, "Right child at index %d has NULL path", right);
+		} else if (check_queue_compare(&queue[right].next_check, 
+									  &queue[smallest].next_check) < 0) {
+			smallest = right;
+		}
+	}
+	
+	if (smallest != index) {
+		/* Swap with smallest child using a temporary copy to properly preserve pointers */
+		deferred_check_t temp;
+		memcpy(&temp, &queue[index], sizeof(deferred_check_t));
+		memcpy(&queue[index], &queue[smallest], sizeof(deferred_check_t));
+		memcpy(&queue[smallest], &temp, sizeof(deferred_check_t));
+		
+		/* Recursively heapify down */
+		check_queue_heapify_down(queue, size, smallest);
+	}
+}
+
+/* Find a queue entry by path */
+static int check_queue_find_by_path(monitor_t *monitor, const char *path) {
+	if (!monitor->check_queue) {
+		return -1;
+	}
+	
+	/* Special case for handling NULL paths */
+	if (!path) {
+		for (int i = 0; i < monitor->check_queue_size; i++) {
+			if (!monitor->check_queue[i].path) {
+				return i;  /* Found a NULL path entry */
+			}
+		}
+		return -1;  /* No NULL path entries */
+	}
+	
+	/* Normal case - search for a matching path */
+	for (int i = 0; i < monitor->check_queue_size; i++) {
+		/* Skip entries with NULL paths */
+		if (!monitor->check_queue[i].path) {
+			continue;
+		}
+		
+		if (strcmp(monitor->check_queue[i].path, path) == 0) {
+			return i;
+		}
+	}
+	return -1; /* Not found */
+}
+
+
+/* Add or update an entry in the queue */
+static void check_queue_add_or_update(monitor_t *monitor, const char *path, 
+								   watch_entry_t *watch, struct timespec next_check) {
+	if (!monitor->check_queue || !path || !watch) {
+		log_message(LOG_LEVEL_WARNING, "Invalid parameters for check_queue_add_or_update");
+		return;
+	}
+	
+	/* Check if entry already exists for this path (regardless of watch) */
+	int index = check_queue_find_by_path(monitor, path);
+	
+	if (index >= 0) {
+		/* Entry exists - update it */
+		deferred_check_t *entry = &monitor->check_queue[index];
+		
+		/* Add this watch if not already present */
+		if (!check_queue_add_watch(entry, watch)) {
+			log_message(LOG_LEVEL_WARNING, 
+					  "Failed to add watch to existing queue entry for %s", path);
+		}
+		
+		/* Update check time - only if the new time is earlier */
+		if (check_queue_compare(&next_check, &entry->next_check) < 0) {
+			entry->next_check = next_check;
+			
+			/* Restore heap property by trying both up and down heapify */
+			check_queue_heapify_up(monitor->check_queue, index);
+			check_queue_heapify_down(monitor->check_queue, 
+								   monitor->check_queue_size, index);
+								   
+			log_message(LOG_LEVEL_DEBUG, 
+					  "Updated check time for %s (earlier time: %ld.%09ld)",
+					  path, (long)next_check.tv_sec, next_check.tv_nsec);
+		}
+		return;
+	}
+	
+	/* Entry not found, add new one */
+	
+	/* Ensure capacity */
+	if (monitor->check_queue_size >= monitor->check_queue_capacity) {
+		int new_capacity = monitor->check_queue_capacity * 2;
+		deferred_check_t *new_queue = realloc(monitor->check_queue, 
+											new_capacity * sizeof(deferred_check_t));
+		if (!new_queue) {
+			log_message(LOG_LEVEL_ERR, "Failed to resize deferred check queue");
+			return;
+		}
+		monitor->check_queue = new_queue;
+		monitor->check_queue_capacity = new_capacity;
+		
+		/* Zero out new memory */
+		memset(&monitor->check_queue[monitor->check_queue_capacity], 0, 
+			  (new_capacity - monitor->check_queue_capacity) * sizeof(deferred_check_t));
+		
+		monitor->check_queue_capacity = new_capacity;
+	}
+	
+	/* Add new entry */
+	int new_index = monitor->check_queue_size;
+	
+	/* Initialize the new entry */
+	char *path_copy = strdup(path);
+	if (!path_copy) {
+		log_message(LOG_LEVEL_ERR, "Failed to duplicate path for queue entry");
+		return;
+	}
+	
+	/* Clear the new entry first to avoid garbage data */
+	memset(&monitor->check_queue[new_index], 0, sizeof(deferred_check_t));
+	
+	monitor->check_queue[new_index].path = path_copy;
+	monitor->check_queue[new_index].next_check = next_check;
+	monitor->check_queue[new_index].watches = NULL;
+	monitor->check_queue[new_index].watch_count = 0;
+	monitor->check_queue[new_index].watch_capacity = 0;
+	
+	/* Add the watch */
+	if (!check_queue_add_watch(&monitor->check_queue[new_index], watch)) {
+		log_message(LOG_LEVEL_ERR, "Failed to add watch to new queue entry");
+		free(monitor->check_queue[new_index].path);
+		monitor->check_queue[new_index].path = NULL;
+		return;
+	}
+	
+	monitor->check_queue_size++;
+	
+	/* Restore heap property */
+	check_queue_heapify_up(monitor->check_queue, new_index);
+	
+	log_message(LOG_LEVEL_DEBUG, 
+			  "Added new deferred check for %s (next check at %ld.%09ld)",
+			  path, (long)next_check.tv_sec, next_check.tv_nsec);
+}
+
+/* Remove an entry from the queue */
+static void check_queue_remove(monitor_t *monitor, const char *path) {
+	if (!monitor->check_queue || monitor->check_queue_size <= 0) return;
+	
+	int index;
+	
+	/* Special case for empty path - handle corrupted queue entry removal */
+	if (!path || path[0] == '\0') {
+		/* Find first entry with NULL path */
+		for (index = 0; index < monitor->check_queue_size; index++) {
+			if (!monitor->check_queue[index].path) {
+				log_message(LOG_LEVEL_WARNING, "Removing corrupted queue entry at index %d", index);
+				break;
+			}
+		}
+		if (index >= monitor->check_queue_size) {
+			/* No corrupted entries found */
+			return;
+		}
+	} else {
+		/* Normal case - find by path */
+		index = check_queue_find_by_path(monitor, path);
+		if (index < 0) return; /* Not found */
+	}
+	
+	/* Store a copy of the path for logging if available */
+	char path_copy[PATH_MAX] = "<corrupted>";
+	if (monitor->check_queue[index].path) {
+		strncpy(path_copy, monitor->check_queue[index].path, PATH_MAX - 1);
+		path_copy[PATH_MAX - 1] = '\0';
+	}
+	
+	/* Free resources */
+	if (monitor->check_queue[index].path) {
+		free(monitor->check_queue[index].path);
+		monitor->check_queue[index].path = NULL;
+	}
+	
+	if (monitor->check_queue[index].watches) {
+		free(monitor->check_queue[index].watches);
+		monitor->check_queue[index].watches = NULL;
+	}
+	
+	/* Replace with the last element and restore heap property */
+	monitor->check_queue_size--;
+	if (index < monitor->check_queue_size) {
+		/* Move the last element to the removed position */
+		memcpy(&monitor->check_queue[index], 
+			   &monitor->check_queue[monitor->check_queue_size], 
+			   sizeof(deferred_check_t));
+		
+		/* Clear the last element which was just moved */
+		memset(&monitor->check_queue[monitor->check_queue_size], 0, sizeof(deferred_check_t));
+		
+		/* Restore heap property for the moved element */
+		check_queue_heapify_down(monitor->check_queue, monitor->check_queue_size, index);
+	} else {
+		/* Removed the last element, just clear it */
+		memset(&monitor->check_queue[index], 0, sizeof(deferred_check_t));
+	}
+	
+	log_message(LOG_LEVEL_DEBUG, "Removed deferred check for %s", path_copy);
+}
+
 /* Create a new file/directory monitor */
 monitor_t *monitor_create(config_t *config) {
 	monitor_t *monitor;
@@ -46,12 +416,18 @@ monitor_t *monitor_create(config_t *config) {
 	monitor->watch_count = 0;
 	monitor->running = false;
 	monitor->reload_requested = false;
-	
+
 	/* Store config file path for reloading */
 	if (config->config_file != NULL) {
 		monitor->config_file = strdup(config->config_file);
 	}
 	
+	/* Initialize the deferred check queue */
+	check_queue_init(monitor, 16); /* Initial capacity of 16 */
+	
+	/* Set global monitor instance */
+	g_current_monitor = monitor;
+
 	return monitor;
 }
 
@@ -87,7 +463,16 @@ void monitor_destroy(monitor_t *monitor) {
 	}
 	
 	free(monitor->watches);
-	free(monitor->config_file);
+	free(monitor->config_file);	
+
+	/* Clean up the check queue */
+	check_queue_cleanup(monitor);
+	
+	/* Clear global monitor reference if it's this monitor */
+	if (g_current_monitor == monitor) {
+		g_current_monitor = NULL;
+	}
+	
 	free(monitor);
 }
 
@@ -439,383 +824,579 @@ static event_type_t flags_to_event_type(uint32_t flags) {
 	return event;
 }
 
+/* Function to schedule a deferred directory check */
+void schedule_deferred_check(monitor_t *monitor, entity_state_t *state) {
+	if (!monitor || !state) {
+		log_message(LOG_LEVEL_WARNING, "Cannot schedule deferred check - invalid monitor or state");
+		return;
+	}
+	
+	if (!state->path || !state->watch) {
+		log_message(LOG_LEVEL_WARNING, "Cannot schedule deferred check - state has null path or watch");
+		return;
+	}
+	
+	/* Find the root state for this entity */
+	entity_state_t *root_state = find_root_state(state);
+	if (!root_state) {
+		/* If no root found, use the provided state if it's a directory */
+		if (state->type == ENTITY_DIRECTORY) {
+			root_state = state;
+		} else {
+			log_message(LOG_LEVEL_WARNING, 
+					  "Cannot schedule check for %s - no root state found", state->path);
+			return;
+		}
+	}
+	
+	/* Force root state to be active - this was implicit before but now explicit */
+	root_state->activity_in_progress = true;
+	
+	/* Initialize reference stats if needed - CRITICAL for empty directories */
+	if (!root_state->reference_stats_initialized) {
+		root_state->stable_reference_stats = root_state->dir_stats;
+		root_state->reference_stats_initialized = true;
+		log_message(LOG_LEVEL_DEBUG, 
+				  "Initialized reference stats for %s: files=%d, dirs=%d, depth=%d",
+				  root_state->path, root_state->dir_stats.file_count, 
+				  root_state->dir_stats.dir_count, root_state->dir_stats.depth);
+	}
+	
+	/* Force update to cumulative changes if they're all zero and directory is active */
+	if (root_state->cumulative_file_change == 0 && 
+		root_state->cumulative_dir_change == 0 && 
+		root_state->cumulative_depth_change == 0) {
+		
+		/* Force a minimum change of 1 file for ALL active directories */
+		root_state->cumulative_file_change = 1; /* Assume at least one file changed */
+		log_message(LOG_LEVEL_DEBUG, 
+				  "Forcing minimum change (1 file) for active directory %s with no detected changes",
+				  root_state->path);
+	}
+	
+	/* Calculate check time based on quiet period */
+	struct timespec now;
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	
+	/* Fix: Ensure we don't use a timestamp in the past */
+	if (root_state->last_activity_in_tree.tv_sec < now.tv_sec - 10) {
+		log_message(LOG_LEVEL_WARNING, 
+				  "Last activity timestamp for %s is too old, using current time",
+				  root_state->path);
+		root_state->last_activity_in_tree = now;
+	}
+	
+	long required_quiet_period_ms = get_required_quiet_period(root_state);
+	
+	struct timespec next_check;
+	next_check.tv_sec = root_state->last_activity_in_tree.tv_sec + (required_quiet_period_ms / 1000);
+	next_check.tv_nsec = root_state->last_activity_in_tree.tv_nsec + 
+						((required_quiet_period_ms % 1000) * 1000000);
+	
+	/* Normalize nsec */
+	if (next_check.tv_nsec >= 1000000000) {
+		next_check.tv_sec++;
+		next_check.tv_nsec -= 1000000000;
+	}
+	
+	/* Add to queue */
+	check_queue_add_or_update(monitor, root_state->path, root_state->watch, next_check);
+	
+	/* For the synchronization to work correctly, also perform a synchronize_activity_states call */
+	synchronize_activity_states(root_state->path, root_state);
+	
+	log_message(LOG_LEVEL_DEBUG, 
+			  "Scheduled deferred check for %s: in %ld ms (directory with %d files, %d dirs)",
+			  root_state->path, required_quiet_period_ms,
+			  root_state->dir_stats.file_count, root_state->dir_stats.dir_count);
+}
+
 /* Process deferred directory scans after quiet periods */
 static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *current_time) {
-	int total_dir_watches = 0;
-	int watches_with_activity = 0;
 	int commands_attempted = 0;
 	int commands_executed = 0;
 	bool new_directories_found = false;
+	int total_active_dirs = 0;
 	
-	/* Track paths we've already processed in this cycle */
-	char processed_paths[MAX_WATCHES][MAX_PATH_LEN];
-	int processed_count = 0;
-
-	/* Iterate through configured watches */
-	for (int i = 0; i < monitor->config->watch_count; i++) {
-		watch_entry_t *watch = monitor->config->watches[i];
-		
-		/* Only process directory watches */
-		if (watch->type != WATCH_DIRECTORY) continue;
-		
-		total_dir_watches++;
-		
-		/* Check if we've already processed this path */
-		bool already_processed = false;
-		for (int j = 0; j < processed_count; j++) {
-			if (strcmp(processed_paths[j], watch->path) == 0) {
-				already_processed = true;
-				break;
-			}
-		}
-		if (already_processed) continue;
-		
-		/* Add to processed paths */
-		if (processed_count < MAX_WATCHES) {
-			strncpy(processed_paths[processed_count], watch->path, MAX_PATH_LEN - 1);
-			processed_paths[processed_count][MAX_PATH_LEN - 1] = '\0';
-			processed_count++;
-		}
-		
-		/* Get root state */
-		entity_state_t *root_state = get_entity_state(watch->path, ENTITY_DIRECTORY, watch);
-		if (!root_state) {
-			log_message(LOG_LEVEL_WARNING, "Failed to get root state for deferred check: %s (watch: %s)",
-					  watch->path, watch->name);
-			continue;
-		}
-		
-		/* Check for activity in progress */
-		if (root_state->activity_in_progress) {
-			watches_with_activity++;
-			
-			/* First check if the regular quiet period has elapsed */
-			bool quiet_period_has_elapsed = is_quiet_period_elapsed(root_state, current_time);
-			
-			if (quiet_period_has_elapsed) {
-				/* Quiet period elapsed, now do a deeper stability check */
-				log_message(LOG_LEVEL_DEBUG, 
-						  "Quiet period elapsed for %s (watch: %s), performing stability verification",
-						  root_state->path, watch->name);
-				
-				/* For recursive watches, scan for new directories first */
-				int prev_watch_count = monitor->watch_count;
-				if (watch->recursive) {
-					monitor_add_dir_recursive(monitor, root_state->path, watch, true);
-				}
-				
-				/* Check if we found new directories */
-				if (monitor->watch_count > prev_watch_count) {
-					log_message(LOG_LEVEL_DEBUG, "Found %d new directories during scan, deferring command execution",
-							  monitor->watch_count - prev_watch_count);
-					new_directories_found = true;
-					
-					/* Reset the activity timestamp but keep monitoring */
-					root_state->last_activity_in_tree = *current_time;
-					synchronize_activity_states(root_state->path, root_state);
-					continue;
-				}
-				
-				/* Perform recursive stability verification */
-				dir_stats_t current_stats;
-				bool scan_completed = verify_directory_stability(root_state->path, &current_stats, 0);
-				
-				/* Update root state with comprehensive recursive stats from scan, even if not stable */
-				if (scan_completed || current_stats.recursive_file_count > 0 || current_stats.recursive_dir_count > 0) {
-					/* Check if current scan has more complete recursive stats */
-					if (current_stats.recursive_file_count > root_state->dir_stats.recursive_file_count ||
-						current_stats.recursive_dir_count > root_state->dir_stats.recursive_dir_count ||
-						current_stats.max_depth > root_state->dir_stats.max_depth) {
-						
-						log_message(LOG_LEVEL_DEBUG, 
-								  "Updating %s with more comprehensive recursive stats: files=%d, dirs=%d, max_depth=%d",
-								  root_state->path, current_stats.recursive_file_count, 
-								  current_stats.recursive_dir_count, current_stats.max_depth);
-						
-						/* Store comprehensive recursive stats */
-						root_state->dir_stats.recursive_file_count = current_stats.recursive_file_count;
-						root_state->dir_stats.recursive_dir_count = current_stats.recursive_dir_count;
-						root_state->dir_stats.max_depth = current_stats.max_depth;
-						root_state->dir_stats.recursive_total_size = current_stats.recursive_total_size;
-					}
-				}
-				
-				if (!scan_completed) {
-					/* Check if the directory still exists */
-					struct stat st;
-					bool exists = (stat(root_state->path, &st) == 0 && S_ISDIR(st.st_mode));
-					
-					if (!exists) {
-						/* Increment failed checks counter */
-						root_state->failed_checks++;
-						
-						log_message(LOG_LEVEL_DEBUG, 
-								  "Directory %s not found (attempt %d/%d)",
-								  root_state->path, root_state->failed_checks, MAX_FAILED_CHECKS);
-						
-						/* After multiple consecutive failures, consider it permanently deleted */
-						if (root_state->failed_checks >= MAX_FAILED_CHECKS) {
-							log_message(LOG_LEVEL_NOTICE, 
-									  "Directory %s confirmed deleted after %d failed checks, cleaning up",
-									  root_state->path, root_state->failed_checks);
-							
-							/* Mark as not active to stop further checks */
-							root_state->activity_in_progress = false;
-							root_state->exists = false;
-							synchronize_activity_states(root_state->path, root_state);
-							
-							/* Skip to next watch entry */
-							continue;
-						}
-					} else {
-						/* Directory exists but scan failed for some other reason */
-						root_state->failed_checks = 0;  /* Reset counter */
-					}
-				} else {
-					/* Reset failed check counter on successful scan */
-					root_state->failed_checks = 0;
-				}
-				
-				/* Always store the direct stats, regardless of stability */
-				root_state->dir_stats.file_count = current_stats.file_count;
-				root_state->dir_stats.dir_count = current_stats.dir_count;
-				root_state->dir_stats.depth = current_stats.depth;
-				root_state->dir_stats.total_size = current_stats.total_size;
-				
-				/* Log the scan results with both direct and recursive stats */
-				log_message(LOG_LEVEL_DEBUG, 
-					"Stability check #%d for %s: files=%d, dirs=%d, size=%zu, recursive_files=%d, recursive_dirs=%d, max_depth=%d, stable=%s",
-					root_state->stability_check_count + 1, root_state->path, 
-					current_stats.file_count, current_stats.dir_count, current_stats.total_size,
-					current_stats.recursive_file_count, current_stats.recursive_dir_count, 
-					current_stats.max_depth, scan_completed ? "yes" : "no");
-				
-				/* Determine stability based on scan result and comparison */
-				bool is_stable = scan_completed;  /* Initially use scan result */
-				
-				/* Only compare with previous stats if we have a previous scan */
-				if (scan_completed && root_state->stability_check_count > 0) {
-					bool counts_stable = compare_dir_stats(&root_state->prev_stats, &current_stats);
-					if (!counts_stable) {
-						log_message(LOG_LEVEL_DEBUG, "Directory unstable: file/dir count changed from %d/%d to %d/%d",
-								   root_state->prev_stats.file_count, root_state->prev_stats.dir_count, 
-								   current_stats.file_count, current_stats.dir_count);
-						is_stable = false;
-					}
-				}
-				
-				/* Always update previous stats for next comparison */
-				root_state->prev_stats = current_stats;
-				
-				/* Synchronize updated stats with other watches */
-				synchronize_activity_states(root_state->path, root_state);
-				
-				if (is_stable) {
-					/* Only increment stability counter if stable */
-					root_state->stability_check_count++;
-					
-					/* Determine if we've reached enough consecutive stable checks */
-					bool ready_for_command = false;
-					int required_checks;
-					
-					/* Calculate complexity factors */
-					int total_entries = current_stats.recursive_file_count + current_stats.recursive_dir_count;
-					int tree_depth = current_stats.max_depth > 0 ? current_stats.max_depth : current_stats.depth;
-					
-					/* Use cumulative changes for adapting stability requirements */
-					int abs_file_change = abs(root_state->cumulative_file_change);
-					int abs_dir_change = abs(root_state->cumulative_dir_change);
-					int abs_depth_change = abs(root_state->cumulative_depth_change);
-					int abs_change = abs_file_change + abs_dir_change;
-					
-					/* Base checks on size, depth changes, and cumulative changes */
-					if (abs_change <= 1 && abs_depth_change == 0) {
-						/* Single file change - use simpler check requirements */
-						required_checks = 1;
-						
-						/* Only add a check for very complex directories */
-						if (tree_depth >= 5 || total_entries > 1000) {
-							required_checks = 2;
-						}
-					} 
-					else if (abs_change <= 5 && abs_depth_change == 0) {
-						/* Few changes - modest requirements */
-						required_checks = 2;
-					}
-					else if (abs_depth_change > 0) {
-						/* Always use more checks when tree structure changes */
-						required_checks = 2;
-						
-						/* For significant depth changes, use even more checks */
-						if (abs_depth_change > 1) {
-							required_checks = 3;
-						}
-					}
-					else if (abs_change < 20) {
-						/* Moderate changes - standard requirements */
-						required_checks = 2;
-						
-						/* Add a check for complex structures */
-						if (tree_depth >= 4 || total_entries > 500) {
-							required_checks = 3;
-						}
-					}
-					else {
-						/* Many changes - more thorough verification */
-						required_checks = 3;
-						
-						/* For very complex directories with many changes, maximum checks */
-						if (tree_depth >= 5 || total_entries > 1000) {
-							required_checks = 4;
-						}
-					}
-					
-					/* If stability was previously achieved and then lost, reduce requirements slightly */
-					if (root_state->stability_lost && required_checks > 1) {
-						required_checks--;
-						log_message(LOG_LEVEL_DEBUG, 
-								  "Reducing stability requirement due to previously achieved stability");
-					}
-					
-					/* Log with emphasis on cumulative change magnitude */
-					log_message(LOG_LEVEL_DEBUG, 
-							  "Directory stability check for %s: %d/%d checks based on cumulative changes (%+d files, %+d dirs, %+d depth) in dir with %d entries, depth %d",
-							  root_state->path, root_state->stability_check_count, required_checks, 
-							  root_state->cumulative_file_change, root_state->cumulative_dir_change, 
-							  root_state->cumulative_depth_change, total_entries, tree_depth);
-					
-					/* Check if we have enough stable checks */
-					ready_for_command = (root_state->stability_check_count >= required_checks);
-					
-					if (!ready_for_command) {
-						/* Not yet ready, update timestamp and continue monitoring */
-						root_state->last_activity_in_tree = *current_time;
-						synchronize_activity_states(root_state->path, root_state);
-						
-						log_message(LOG_LEVEL_DEBUG, 
-								  "Directory %s is stable but waiting for more confirmation (%d/%d checks)",
-								  root_state->path, root_state->stability_check_count, required_checks);
-						continue;
-					}
-					
-					/* If we get here, we're ready to execute the command */
-					log_message(LOG_LEVEL_DEBUG, 
-							  "Directory %s stability confirmed (%d/%d checks), proceeding to command execution",
-							  root_state->path, root_state->stability_check_count, required_checks);
-				} else {
-					/* Not stable, reset stability check counter */
-					root_state->stability_check_count = 0;
-					
-					/* Store current stats for future comparison */
-					root_state->prev_stats = current_stats;
-					root_state->dir_stats = current_stats;
-					
-					/* Update timestamp and continue monitoring */
-					root_state->last_activity_in_tree = *current_time;
-					synchronize_activity_states(root_state->path, root_state);
-					
-					log_message(LOG_LEVEL_DEBUG, "Directory %s is still unstable, continuing to monitor",
-							  root_state->path);
-					continue;
-				}
-				
-				/* We've confirmed stability, proceed with command execution */
-				commands_attempted++;
-				
-				/* Reset activity flag and stability counter */
-				root_state->activity_in_progress = false;
-				root_state->stability_check_count = 0;
-				
-				/* Create synthetic event and execute command */
-				file_event_t synthetic_event = {
-					.path = root_state->path,
-					.type = EVENT_CONTENT,
-					.time = root_state->last_update,
-					.wall_time = root_state->wall_time,
-					.user_id = getuid()
-				};
-				
-				/* Execute commands for ALL watches of this path */
-				for (int j = 0; j < monitor->config->watch_count; j++) {
-					watch_entry_t *other_watch = monitor->config->watches[j];
-					
-					/* Skip non-directory watches */
-					if (other_watch->type != WATCH_DIRECTORY) continue;
-					
-					/* If this is another watch for the same path */
-					if (strcmp(other_watch->path, root_state->path) == 0) {
-						entity_state_t *other_state = get_entity_state(other_watch->path, ENTITY_DIRECTORY, other_watch);
-						if (!other_state) continue;
-						
-						if (other_state) {
-							/* Use the most accurate statistics available across watches */
-							if (root_state->dir_stats.file_count > other_state->dir_stats.file_count || 
-								root_state->dir_stats.dir_count > other_state->dir_stats.dir_count ||
-								root_state->dir_stats.depth > other_state->dir_stats.depth) {
-								/* Root state has more complete info - update the other state */
-								other_state->dir_stats = root_state->dir_stats;
-								other_state->prev_stats = root_state->prev_stats;
-							} else if (other_state->dir_stats.file_count > root_state->dir_stats.file_count ||
-									  other_state->dir_stats.dir_count > root_state->dir_stats.dir_count ||
-									  other_state->dir_stats.depth > root_state->dir_stats.depth) {
-								/* Other state has more complete info - update root state and all others */
-								root_state->dir_stats = other_state->dir_stats;
-								root_state->prev_stats = other_state->prev_stats;
-								/* Since root state was updated, we need to resync with all watches */
-								synchronize_activity_states(root_state->path, root_state);
-								break;  /* Exit loop as we've already updated all states */
-							}
-						}
-						
-						/* Reset activity flag */
-						other_state->activity_in_progress = false;
-						other_state->stability_check_count = 0;
-						
-						/* Execute command */
-						log_message(LOG_LEVEL_INFO, "Executing deferred command for %s (watch: %s)",
-								  other_state->path, other_watch->name);
-						
-						/* After command execution, reset the cumulative changes */
-						if (command_execute(other_watch, &synthetic_event)) {
-							commands_executed++;
-							
-							/* Update stable reference stats with current values */
-							other_state->stable_reference_stats = other_state->dir_stats;
-							
-							/* Reset cumulative changes after successful command execution */
-							other_state->cumulative_file_change = 0;
-							other_state->cumulative_dir_change = 0;
-							other_state->cumulative_depth_change = 0;
-							other_state->stability_lost = false;
-							
-							/* Reset state change flags */
-							other_state->content_changed = false;
-							other_state->metadata_changed = false;
-							other_state->structure_changed = false;
-							
-							/* Update last command time */
-							other_state->last_command_time = current_time->tv_sec;
-							
-							log_message(LOG_LEVEL_DEBUG, 
-									  "Reset change tracking for %s after successful command execution",
-									  other_state->path);
-						}
-					}
-				}
-			} else {
-				log_message(LOG_LEVEL_DEBUG, "Quiet period not yet elapsed for %s (watch: %s), continuing to monitor",
-						  root_state->path, watch->name);
-			}
-		}
+	/* Count active directories for summary */
+	for (int i = 0; i < monitor->check_queue_size; i++) {
+		total_active_dirs++;
 	}
-
-	/* Log summary if anything interesting happened */
-	if (watches_with_activity > 0 || commands_attempted > 0 || commands_executed > 0 || new_directories_found) {
+	
+	/* Nothing to process if queue is empty */
+	if (monitor->check_queue_size == 0 || !monitor->check_queue) {
+		return;
+	}
+	
+	/* Validate the queue before processing */
+	if (!monitor->check_queue[0].path) {
+		log_message(LOG_LEVEL_WARNING, "Corrupted entry at top of queue, removing");
+		check_queue_remove(monitor, NULL);
+		return;
+	}
+	
+	/* Check if the top entry is ready for processing */
+	deferred_check_t *entry = &monitor->check_queue[0];
+	
+	/* Ensure entry has a valid path */
+	if (!entry->path) {
+		log_message(LOG_LEVEL_WARNING, "Invalid entry at top of check queue (no path), removing");
+		check_queue_remove(monitor, "");  /* Remove invalid entry */
+		return;
+	}
+	
+	/* Check if it's time to process this entry */
+	if (current_time->tv_sec < entry->next_check.tv_sec ||
+		(current_time->tv_sec == entry->next_check.tv_sec && 
+		 current_time->tv_nsec < entry->next_check.tv_nsec)) {
+		/* Not yet time */
+		return;
+	}
+	
+	log_message(LOG_LEVEL_DEBUG, "Processing deferred check for %s with %d watches", 
+			  entry->path, entry->watch_count);
+	
+	/* Get the primary watch (first in the list) */
+	watch_entry_t *primary_watch = entry->watch_count > 0 ? entry->watches[0] : NULL;
+	if (!primary_watch) {
+		log_message(LOG_LEVEL_WARNING, "Deferred check for %s has no watches, removing", entry->path);
+		check_queue_remove(monitor, entry->path);
+		return;
+	}
+	
+	/* Get the root entity state using the primary watch */
+	entity_state_t *root_state = get_entity_state(entry->path, ENTITY_DIRECTORY, primary_watch);
+	if (!root_state) {
+		log_message(LOG_LEVEL_WARNING, "Cannot find state for %s, removing from queue", entry->path);
+		check_queue_remove(monitor, entry->path);
+		return;
+	}
+	
+	/* If the entity is no longer active, just remove from queue */
+	if (!root_state->activity_in_progress) {
+		log_message(LOG_LEVEL_DEBUG, "Directory %s no longer active, removing from queue", entry->path);
+		check_queue_remove(monitor, entry->path);
+		return;
+	}
+	
+	/* Log detailed path analysis for this directory (similar to old implementation) */
+	long elapsed_ms = (current_time->tv_sec - root_state->last_activity_in_tree.tv_sec) * 1000 +
+					 (current_time->tv_nsec - root_state->last_activity_in_tree.tv_nsec) / 1000000;
+	long required_quiet_period_ms = get_required_quiet_period(root_state);
+	
+	log_message(LOG_LEVEL_DEBUG, 
+			  "Path %s: %ld ms elapsed of %ld ms quiet period, direct_entries=%d+%d, recursive_entries=%d+%d, depth=%d, adjusted wait: %ld ms",
+			  entry->path, elapsed_ms, required_quiet_period_ms, 
+			  root_state->dir_stats.file_count, root_state->dir_stats.dir_count,
+			  root_state->dir_stats.recursive_file_count, root_state->dir_stats.recursive_dir_count,
+			  root_state->dir_stats.depth, required_quiet_period_ms - elapsed_ms < 0 ? 0 : required_quiet_period_ms - elapsed_ms);
+	
+	/* Verify that the quiet period has elapsed */
+	bool quiet_period_has_elapsed = is_quiet_period_elapsed(root_state, current_time);
+	
+	if (!quiet_period_has_elapsed) {
+		/* Quiet period not yet elapsed, reschedule */
+		log_message(LOG_LEVEL_DEBUG, "Quiet period not yet elapsed for %s (watch: %s), continuing to monitor",
+				  root_state->path, primary_watch->name);
+		
+		/* Instead of removing and re-adding, update the next check time */
+		struct timespec next_check;
+		
+		next_check.tv_sec = root_state->last_activity_in_tree.tv_sec + (required_quiet_period_ms / 1000);
+		next_check.tv_nsec = root_state->last_activity_in_tree.tv_nsec + 
+						   ((required_quiet_period_ms % 1000) * 1000000);
+		
+		/* Normalize */
+		if (next_check.tv_nsec >= 1000000000) {
+			next_check.tv_sec++;
+			next_check.tv_nsec -= 1000000000;
+		}
+		
+		/* Update the entry in place */
+		entry->next_check = next_check;
+		
+		/* Restore heap property */
+		check_queue_heapify_down(monitor->check_queue, monitor->check_queue_size, 0);
+		
+		/* Log summary using old format */
 		log_message(LOG_LEVEL_DEBUG,
 				  "Deferred processing summary: directories=%d, active=%d, commands_attempted=%d, executed=%d, new_dirs_found=%s",
-				  total_dir_watches, watches_with_activity, commands_attempted, commands_executed, 
+				  total_active_dirs, total_active_dirs, commands_attempted, commands_executed, 
 				  new_directories_found ? "yes" : "no");
+		
+		return;
 	}
+	
+	/* Quiet period elapsed, perform stability check */
+	log_message(LOG_LEVEL_DEBUG, 
+			  "Quiet period elapsed for %s, performing stability verification", entry->path);
+	
+	/* For recursive watches, scan for new directories */
+	int prev_watch_count = monitor->watch_count;
+	for (int i = 0; i < entry->watch_count; i++) {
+		if (entry->watches[i]->recursive) {
+			monitor_add_dir_recursive(monitor, entry->path, entry->watches[i], true);
+		}
+	}
+	
+	/* Check if we found new directories */
+	if (monitor->watch_count > prev_watch_count) {
+		log_message(LOG_LEVEL_DEBUG, "Found %d new directories during scan, deferring command execution",
+				  monitor->watch_count - prev_watch_count);
+		new_directories_found = true;
+		
+		/* Reset the activity timestamp but keep monitoring */
+		root_state->last_activity_in_tree = *current_time;
+		synchronize_activity_states(root_state->path, root_state);
+		
+		/* Reschedule with a shorter interval */
+		struct timespec next_check;
+		next_check.tv_sec = current_time->tv_sec;
+		next_check.tv_nsec = current_time->tv_nsec + 200000000; /* 200ms */
+		if (next_check.tv_nsec >= 1000000000) {
+			next_check.tv_sec++;
+			next_check.tv_nsec -= 1000000000;
+		}
+		
+		/* Update entry in place */
+		entry->next_check = next_check;
+		check_queue_heapify_down(monitor->check_queue, monitor->check_queue_size, 0);
+		
+		return;
+	}
+	
+	/* Perform recursive stability verification */
+	dir_stats_t current_stats;
+	bool scan_completed = verify_directory_stability(entry->path, &current_stats, 0);
+	
+	/* Update root state with comprehensive recursive stats from scan, even if not stable */
+	if (scan_completed || current_stats.recursive_file_count > 0 || current_stats.recursive_dir_count > 0) {
+		/* Check if current scan has more complete recursive stats */
+		if (current_stats.recursive_file_count > root_state->dir_stats.recursive_file_count ||
+			current_stats.recursive_dir_count > root_state->dir_stats.recursive_dir_count ||
+			current_stats.max_depth > root_state->dir_stats.max_depth) {
+			
+			log_message(LOG_LEVEL_DEBUG, 
+					  "Updating %s with more comprehensive recursive stats: files=%d, dirs=%d, max_depth=%d",
+					  root_state->path, current_stats.recursive_file_count, 
+					  current_stats.recursive_dir_count, current_stats.max_depth);
+			
+			/* Store comprehensive recursive stats */
+			root_state->dir_stats.recursive_file_count = current_stats.recursive_file_count;
+			root_state->dir_stats.recursive_dir_count = current_stats.recursive_dir_count;
+			root_state->dir_stats.max_depth = current_stats.max_depth;
+			root_state->dir_stats.recursive_total_size = current_stats.recursive_total_size;
+		}
+	}
+	
+	/* Handle scan failure */
+	if (!scan_completed) {
+		/* Check if the directory still exists */
+		struct stat st;
+		bool exists = (stat(entry->path, &st) == 0 && S_ISDIR(st.st_mode));
+		
+		if (!exists) {
+			/* Increment failed checks counter */
+			root_state->failed_checks++;
+			
+			log_message(LOG_LEVEL_DEBUG, 
+					  "Directory %s not found (attempt %d/%d)",
+					  entry->path, root_state->failed_checks, MAX_FAILED_CHECKS);
+			
+			/* After multiple consecutive failures, consider it permanently deleted */
+			if (root_state->failed_checks >= MAX_FAILED_CHECKS) {
+				log_message(LOG_LEVEL_NOTICE, 
+						  "Directory %s confirmed deleted after %d failed checks, cleaning up",
+						  entry->path, root_state->failed_checks);
+				
+				/* Mark as not active for all watches */
+				root_state->activity_in_progress = false;
+				root_state->exists = false;
+				synchronize_activity_states(entry->path, root_state);
+				
+				/* Remove from queue */
+				check_queue_remove(monitor, entry->path);
+				return;
+			}
+			
+			/* Reschedule with a longer timeout for the next check */
+			struct timespec next_check;
+			next_check.tv_sec = current_time->tv_sec + 2; /* 2 seconds */
+			next_check.tv_nsec = current_time->tv_nsec;
+			
+			/* Update entry in place */
+			entry->next_check = next_check;
+			check_queue_heapify_down(monitor->check_queue, monitor->check_queue_size, 0);
+			return;
+		} else {
+			/* Directory exists but scan failed for some other reason */
+			root_state->failed_checks = 0;  /* Reset counter */
+		}
+	} else {
+		/* Reset failed check counter on successful scan */
+		root_state->failed_checks = 0;
+	}
+	
+	/* Always store the direct stats, regardless of stability */
+	root_state->dir_stats.file_count = current_stats.file_count;
+	root_state->dir_stats.dir_count = current_stats.dir_count;
+	root_state->dir_stats.depth = current_stats.depth;
+	root_state->dir_stats.total_size = current_stats.total_size;
+	
+	/* Update previous stats for next comparison */
+	bool has_prev_stats = (root_state->prev_stats.file_count > 0 || 
+						 root_state->prev_stats.dir_count > 0);
+	
+	/* Log the scan results with both direct and recursive stats */
+	log_message(LOG_LEVEL_DEBUG, 
+		"Stability check #%d for %s: files=%d, dirs=%d, size=%zu, recursive_files=%d, recursive_dirs=%d, max_depth=%d, stable=%s",
+		root_state->stability_check_count + 1, entry->path, 
+		current_stats.file_count, current_stats.dir_count, current_stats.total_size,
+		current_stats.recursive_file_count, current_stats.recursive_dir_count, 
+		current_stats.max_depth, scan_completed ? "yes" : "no");
+	
+	/* Determine stability based on scan result and comparison */
+	bool is_stable = scan_completed;  /* Initially use scan result */
+	
+	/* Only compare with previous stats if we have a previous scan */
+	if (scan_completed && has_prev_stats) {
+		bool counts_stable = compare_dir_stats(&root_state->prev_stats, &current_stats);
+		if (!counts_stable) {
+			log_message(LOG_LEVEL_DEBUG, "Directory unstable: file/dir count changed from %d/%d to %d/%d",
+					   root_state->prev_stats.file_count, root_state->prev_stats.dir_count, 
+					   current_stats.file_count, current_stats.dir_count);
+			is_stable = false;
+		}
+	}
+	
+	/* Store previous stats temporarily */
+	dir_stats_t temp_prev_stats = root_state->prev_stats;
+	
+	/* Always update previous stats for next comparison */
+	root_state->prev_stats = current_stats;
+	
+	/* Save current stats so we can calculate changes properly */
+	dir_stats_t saved_current_stats = root_state->dir_stats;
+	
+	/* Update current stats with new values */
+	root_state->dir_stats = current_stats;
+	
+	/* Now restore previous stats temporarily to calculate the real change */
+	root_state->prev_stats = temp_prev_stats;
+	
+	/* Update cumulative changes based on real difference */
+	update_cumulative_changes(root_state);
+	
+	/* Restore proper previous stats to prevent double-counting in future */
+	root_state->prev_stats = current_stats;
+	
+	/* Synchronize updated stats with other watches */
+	synchronize_activity_states(entry->path, root_state);
+	
+	if (!is_stable) {
+		/* Not stable, reset stability check counter */
+		root_state->stability_check_count = 0;
+		
+		/* Store current stats for future comparison */
+		root_state->prev_stats = current_stats;
+		root_state->dir_stats = current_stats;
+		
+		/* Update cumulative changes if new files/directories detected */
+		if (current_stats.recursive_file_count != root_state->prev_stats.recursive_file_count ||
+			current_stats.recursive_dir_count != root_state->prev_stats.recursive_dir_count) {
+			/* Force an update to cumulative changes to match actual detected changes */
+			int file_change, dir_change;
+			
+			/* Ensure reference stats are initialized */
+			if (!root_state->reference_stats_initialized) {
+				/* Initialize reference stats with previous stable ones */
+				root_state->stable_reference_stats = root_state->prev_stats; 
+				root_state->reference_stats_initialized = true;
+				log_message(LOG_LEVEL_DEBUG, "Initialized reference stats for %s during scan", root_state->path);
+			}
+			
+			file_change = current_stats.recursive_file_count - root_state->stable_reference_stats.recursive_file_count;
+			dir_change = current_stats.recursive_dir_count - root_state->stable_reference_stats.recursive_dir_count;
+			
+			if (file_change != 0) {
+				root_state->cumulative_file_change += file_change;
+				log_message(LOG_LEVEL_DEBUG, "Setting absolute cumulative file change: %+d", file_change);
+			}
+			
+			if (dir_change != 0) {
+				root_state->cumulative_dir_change = dir_change;
+				log_message(LOG_LEVEL_DEBUG, "Setting absolute cumulative dir change: %+d", dir_change);
+			}
+		}
+		
+		/* Update timestamp and continue monitoring */
+		root_state->last_activity_in_tree = *current_time;
+		synchronize_activity_states(entry->path, root_state);
+		
+		log_message(LOG_LEVEL_DEBUG, "Directory %s is still unstable, continuing to monitor",
+				  entry->path);
+		
+		/* Reschedule with adaptive timing */
+		struct timespec next_check;
+		long adaptive_period_ms = get_required_quiet_period(root_state);
+		
+		/* For unstable directories, reschedule more quickly */
+		adaptive_period_ms = adaptive_period_ms / 2;
+		if (adaptive_period_ms < 200) adaptive_period_ms = 200;
+		
+		next_check.tv_sec = current_time->tv_sec + (adaptive_period_ms / 1000);
+		next_check.tv_nsec = current_time->tv_nsec + ((adaptive_period_ms % 1000) * 1000000);
+		
+		/* Normalize */
+		if (next_check.tv_nsec >= 1000000000) {
+			next_check.tv_sec++;
+			next_check.tv_nsec -= 1000000000;
+		}
+		
+		/* Update entry */
+		entry->next_check = next_check;
+		check_queue_heapify_down(monitor->check_queue, monitor->check_queue_size, 0);
+		return;
+	}
+	
+	/* Stable - determine if ready for command */
+	root_state->stability_check_count++;
+	
+	/* Determine required checks based on complexity */
+	int required_checks;
+	
+	/* Calculate complexity factors */
+	int total_entries = current_stats.recursive_file_count + current_stats.recursive_dir_count;
+	int tree_depth = current_stats.max_depth > 0 ? current_stats.max_depth : current_stats.depth;
+	
+	/* Use cumulative changes for adapting stability requirements */
+	int abs_file_change = abs(root_state->cumulative_file_change);
+	int abs_dir_change = abs(root_state->cumulative_dir_change);
+	int abs_depth_change = abs(root_state->cumulative_depth_change);
+	int abs_change = abs_file_change + abs_dir_change;
+	
+	/* Base checks on complexity factors */
+	if (abs_change <= 1 && abs_depth_change == 0) {
+		required_checks = 1;
+		if (tree_depth >= 5 || total_entries > 1000) required_checks = 2;
+	} 
+	else if (abs_change <= 5 && abs_depth_change == 0) {
+		required_checks = 2;
+	}
+	else if (abs_depth_change > 0) {
+		required_checks = 2;
+		if (abs_depth_change > 1) required_checks = 3;
+	}
+	else if (abs_change < 20) {
+		required_checks = 2;
+		if (tree_depth >= 4 || total_entries > 500) required_checks = 3;
+	}
+	else {
+		required_checks = 3;
+		if (tree_depth >= 5 || total_entries > 1000) required_checks = 4;
+	}
+	
+	/* Adjust for previously achieved stability */
+	if (root_state->stability_lost && required_checks > 1) {
+		required_checks--;
+	}
+	
+	log_message(LOG_LEVEL_DEBUG, 
+	  "Directory stability check for %s: %d/%d checks based on cumulative changes (%+d files, %+d dirs, %+d depth) in dir with %d entries, depth %d",
+	  root_state->path, root_state->stability_check_count, required_checks, 
+	  root_state->cumulative_file_change, root_state->cumulative_dir_change, 
+	  root_state->cumulative_depth_change, total_entries, tree_depth);
+	
+	/* Check if we have enough stable checks */
+	if (root_state->stability_check_count < required_checks) {
+		/* Not enough checks yet, reschedule for quick follow-up */
+		struct timespec next_check;
+		next_check.tv_sec = current_time->tv_sec;
+		next_check.tv_nsec = current_time->tv_nsec + 200000000; /* 200ms */
+		
+		/* Normalize */
+		if (next_check.tv_nsec >= 1000000000) {
+			next_check.tv_sec++;
+			next_check.tv_nsec -= 1000000000;
+		}
+		
+		/* Update entry */
+		entry->next_check = next_check;
+		check_queue_heapify_down(monitor->check_queue, monitor->check_queue_size, 0);
+		return;
+	}
+	
+	/* If we're here, directory is stable and ready for command execution */
+	commands_attempted++;
+	log_message(LOG_LEVEL_INFO, 
+	  "Directory %s stability confirmed (%d/%d checks), proceeding to command execution",
+	  root_state->path, root_state->stability_check_count, required_checks);
+	
+	/* Reset activity flag and stability counter */
+	root_state->activity_in_progress = false;
+	root_state->stability_check_count = 0;
+	
+	/* Create synthetic event */
+	file_event_t synthetic_event = {
+		.path = entry->path,
+		.type = EVENT_CONTENT,
+		.time = root_state->last_update,
+		.wall_time = root_state->wall_time,
+		.user_id = getuid()
+	};
+	
+	/* Execute commands for ALL watches of this path (which are conveniently in our entry) */
+	for (int i = 0; i < entry->watch_count; i++) {
+		watch_entry_t *watch = entry->watches[i];
+		
+		/* Get or create state for this specific watch */
+		entity_state_t *watch_state = get_entity_state(entry->path, ENTITY_DIRECTORY, watch);
+		if (!watch_state) continue;
+		
+		/* Reset activity flag */
+		watch_state->activity_in_progress = false;
+		watch_state->stability_check_count = 0;
+		
+		/* Execute command */
+		log_message(LOG_LEVEL_INFO, "Executing deferred command for %s (watch: %s)",
+				  entry->path, watch->name);
+		
+		/* After command execution, reset the cumulative changes */
+		if (command_execute(watch, &synthetic_event)) {
+			commands_executed++;
+			
+			/* Update stable reference stats with current values */
+			watch_state->stable_reference_stats = watch_state->dir_stats;
+			
+			/* Reset cumulative changes after successful command execution */
+			watch_state->cumulative_file_change = 0;
+			watch_state->cumulative_dir_change = 0;
+			watch_state->cumulative_depth_change = 0;
+			watch_state->stability_lost = false;
+			
+			/* Reset state change flags */
+			watch_state->content_changed = false;
+			watch_state->metadata_changed = false;
+			watch_state->structure_changed = false;
+			
+			/* Update last command time */
+			watch_state->last_command_time = current_time->tv_sec;
+			
+			log_message(LOG_LEVEL_DEBUG, 
+					  "Reset change tracking for %s (watch: %s) after successful command execution",
+					  entry->path, watch->name);
+		}
+	}
+	
+	/* Remove the entry from the queue after processing all watches */
+	check_queue_remove(monitor, entry->path);
+	
+	/* Log summary */
+	log_message(LOG_LEVEL_DEBUG,
+	  "Deferred processing summary: directories=%d, active=%d, commands_attempted=%d, executed=%d, new_dirs_found=%s",
+	  total_active_dirs, total_active_dirs - 1, /* -1 because we're removing one */
+	  commands_attempted, commands_executed, 
+	  new_directories_found ? "yes" : "no");
 }
 
 /* Process events from kqueue and handle commands */
@@ -832,163 +1413,76 @@ bool monitor_process_events(monitor_t *monitor) {
 		}
 	}
 	
-	if (!monitor || monitor->kq < 0) {
-		log_message(LOG_LEVEL_ERR, "Invalid monitor state");
-		return false;
-	}
-	
-	/* Calculate timeout based on pending deferred scans */
-	memset(&timeout, 0, sizeof(timeout));
-	p_timeout = NULL;
-	bool need_wakeup = false;
-	struct timespec now_monotonic;
-	clock_gettime(CLOCK_MONOTONIC, &now_monotonic);
-	
-	time_t earliest_wakeup_sec = now_monotonic.tv_sec + 3600; /* 1 hour is max timeout */
-	long earliest_wakeup_nsec = now_monotonic.tv_nsec;
-	
-	/* Track unique paths to avoid duplicate processing */
-	char unique_paths[MAX_WATCHES][PATH_MAX];
-	int max_quiet_period_ms[MAX_WATCHES];
-	int path_count = 0;
-	
-	/* First pass: find unique paths and their maximum quiet periods */
-	for (int i = 0; i < monitor->config->watch_count; i++) {
-		watch_entry_t *watch = monitor->config->watches[i];
-		if (watch->type != WATCH_DIRECTORY) continue;
-		
-		/* Get the state for the root of the watch */
-		entity_state_t *root_state = get_entity_state(watch->path, ENTITY_DIRECTORY, watch);
-		if (!root_state || !root_state->activity_in_progress) continue;
-		
-		/* Check if we've already seen this path */
-		bool path_seen = false;
-		for (int j = 0; j < path_count; j++) {
-			if (strcmp(unique_paths[j], watch->path) == 0) {
-				/* Update with maximum quiet period */
-				int quiet_period = get_required_quiet_period(root_state);
-				if (quiet_period > max_quiet_period_ms[j]) {
-					max_quiet_period_ms[j] = quiet_period;
-				}
-				path_seen = true;
-				break;
+    if (!monitor || monitor->kq < 0) {
+        log_message(LOG_LEVEL_ERR, "Invalid monitor state");
+        return false;
+    }
+    
+    /* Calculate timeout based on pending deferred scans */
+    memset(&timeout, 0, sizeof(timeout));
+    p_timeout = NULL;
+    
+    struct timespec now_monotonic;
+    clock_gettime(CLOCK_MONOTONIC, &now_monotonic);
+    
+    /* Check if we have any pending deferred checks */
+    if (monitor->check_queue_size > 0 && monitor->check_queue) {
+        /* Debug output for the queue status */
+        if (monitor->check_queue[0].path) {
+            log_message(LOG_LEVEL_DEBUG, "Deferred queue status: %d entries, next check for path %s", 
+                      monitor->check_queue_size, monitor->check_queue[0].path);
+        }
+        
+        /* Get the earliest check time (top of min-heap) */
+        struct timespec next_check = monitor->check_queue[0].next_check;
+        
+        /* Calculate relative timeout */
+        if (now_monotonic.tv_sec < next_check.tv_sec ||
+            (now_monotonic.tv_sec == next_check.tv_sec && 
+             now_monotonic.tv_nsec < next_check.tv_nsec)) {
+            
+            /* Time until next check */
+            timeout.tv_sec = next_check.tv_sec - now_monotonic.tv_sec;
+			if (next_check.tv_nsec >= now_monotonic.tv_nsec) {
+				timeout.tv_nsec = next_check.tv_nsec - now_monotonic.tv_nsec;
+			} else {
+				timeout.tv_sec--;
+				timeout.tv_nsec = 1000000000 + next_check.tv_nsec - now_monotonic.tv_nsec;
 			}
-		}
-		
-		/* If this is a new path, add to our tracking */
-		if (!path_seen && path_count < MAX_WATCHES) {
-			strncpy(unique_paths[path_count], watch->path, PATH_MAX - 1);
-			unique_paths[path_count][PATH_MAX - 1] = '\0';
-			max_quiet_period_ms[path_count] = get_required_quiet_period(root_state);
-			path_count++;
-		}
-	}
-	
-	/* Second pass: calculate optimal wakeup time */
-	for (int i = 0; i < path_count; i++) {
-		/* Find the first watch entry for this path */
-		entity_state_t *root_state = NULL;
-		for (int j = 0; j < monitor->config->watch_count; j++) {
-			watch_entry_t *watch = monitor->config->watches[j];
-			if (watch->type == WATCH_DIRECTORY && strcmp(watch->path, unique_paths[i]) == 0) {
-				root_state = get_entity_state(watch->path, ENTITY_DIRECTORY, watch);
-				break;
-			}
-		}
-		
-		if (!root_state || !root_state->activity_in_progress) continue;
-		
-		need_wakeup = true;
-		
-		/* Use the root's last_activity_in_tree timestamp */
-		struct timespec *last_activity = &root_state->last_activity_in_tree;
-		
-		/* Use the maximum quiet period for this path */
-		long required_quiet_period_ms = max_quiet_period_ms[i];
-		
-		/* Calculate elapsed time since last activity */
-		long elapsed_ms = (now_monotonic.tv_sec - last_activity->tv_sec) * 1000 +
-						 (now_monotonic.tv_nsec - last_activity->tv_nsec) / 1000000;
-		
-		/* Calculate time remaining until quiet period elapses */
-		long remaining_ms = required_quiet_period_ms - elapsed_ms;
-		
-		/* Progressive backoff for near-timeouts */
-		if (remaining_ms <= 0) {
-			/* Already elapsed - use a modest delay */
-			remaining_ms = 200; /* 200ms */
-		} else if (remaining_ms < 50) {
-			/* Very close - don't check too quickly */
-			remaining_ms = 50; /* 50ms */
-		} else if (remaining_ms < 100) {
-			/* Close but not imminent */
-			remaining_ms = 100; /* 100ms */
-		} else if (remaining_ms < 500) {
-			/* Take a little longer before checking again */
-			remaining_ms = remaining_ms / 2 + 50;
-		}
-		
-		log_message(LOG_LEVEL_DEBUG, 
-		  "Path %s: %ld ms elapsed of %ld ms quiet period, direct_entries=%d+%d, recursive_entries=%d+%d, depth=%d, adjusted wait: %ld ms",
-						unique_paths[i], elapsed_ms, required_quiet_period_ms, 
-						root_state->dir_stats.file_count, root_state->dir_stats.dir_count,
-						root_state->dir_stats.recursive_file_count, root_state->dir_stats.recursive_dir_count,
-						root_state->dir_stats.depth, remaining_ms);
-		
-		/* Calculate absolute wakeup time */
-		time_t wake_sec = now_monotonic.tv_sec + (remaining_ms / 1000);
-		long wake_nsec = now_monotonic.tv_nsec + ((remaining_ms % 1000) * 1000000);
-		
-		/* Normalize wake_nsec */
-		if (wake_nsec >= 1000000000) {
-			wake_sec++;
-			wake_nsec -= 1000000000;
-		}
-		
-		/* Update earliest wake time if this one is sooner */
-		if (wake_sec < earliest_wakeup_sec ||
-			(wake_sec == earliest_wakeup_sec && wake_nsec < earliest_wakeup_nsec)) {
-			earliest_wakeup_sec = wake_sec;
-			earliest_wakeup_nsec = wake_nsec;
-		}
-	}
-	
-	/* Calculate relative timeout if needed */
-	if (need_wakeup) {
-		/* Calculate timeout based on earliest_wakeup */
-		timeout.tv_sec = earliest_wakeup_sec - now_monotonic.tv_sec;
-		
-		if (earliest_wakeup_nsec >= now_monotonic.tv_nsec) {
-			timeout.tv_nsec = earliest_wakeup_nsec - now_monotonic.tv_nsec;
-		} else {
-			timeout.tv_sec--;
-			timeout.tv_nsec = 1000000000 + earliest_wakeup_nsec - now_monotonic.tv_nsec;
-		}
-		
-		/* Ensure sane values */
-		if (timeout.tv_sec < 0) {
-			timeout.tv_sec = 0;
-			timeout.tv_nsec = 50000000; /* 50ms minimum */
-		} else if (timeout.tv_sec == 0 && timeout.tv_nsec < 10000000) {
-			timeout.tv_nsec = 50000000; /* 50ms minimum */
-		}
-		
-		p_timeout = &timeout;
-		log_message(LOG_LEVEL_DEBUG, "Next scheduled wakeup in %ld.%09ld seconds",
-				  timeout.tv_sec, timeout.tv_nsec);
-	} else {
-		log_message(LOG_LEVEL_DEBUG, "No pending directory activity, waiting indefinitely");
-		p_timeout = NULL;
-	}
+            
+            /* Ensure sane values */
+            if (timeout.tv_sec < 0) {
+                timeout.tv_sec = 0;
+                timeout.tv_nsec = 50000000; /* 50ms minimum */
+            } else if (timeout.tv_sec == 0 && timeout.tv_nsec < 10000000) {
+                timeout.tv_nsec = 50000000; /* 50ms minimum */
+            }
+            
+            p_timeout = &timeout;
+            
+            /* Use original log format for next scheduled wakeup */
+            log_message(LOG_LEVEL_DEBUG, "Next scheduled wakeup in %ld.%09ld seconds",
+                       timeout.tv_sec, timeout.tv_nsec);
+        } else {
+            /* Check time already passed, use minimal timeout */
+            timeout.tv_sec = 0;
+            timeout.tv_nsec = 10000000; /* 10ms */
+            p_timeout = &timeout;
+            log_message(LOG_LEVEL_DEBUG, "Deferred check overdue, using minimal timeout");
+        }
+    } else {
+        log_message(LOG_LEVEL_DEBUG, "No pending directory activity, waiting indefinitely");
+        p_timeout = NULL;
+    }
 
-	/* Wait for events */
-	nev = kevent(monitor->kq, NULL, 0, events, MAX_EVENTS, p_timeout);
+    /* Wait for events */
+    nev = kevent(monitor->kq, NULL, 0, events, MAX_EVENTS, p_timeout);
 
-	/* Get time after kevent returns */
+    /* Get time after kevent returns */
 	struct timespec after_kevent_time;
 	clock_gettime(CLOCK_MONOTONIC, &after_kevent_time);
 
-	/* Handle kevent result */
+    /* Handle kevent result */
 	if (nev == -1) {
 		if (errno == EINTR) {
 			log_message(LOG_LEVEL_DEBUG, "kevent interrupted by signal, returning to main loop");

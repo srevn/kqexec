@@ -19,8 +19,8 @@
 /* Program name */
 static const char *program_name;
 
-/* Global monitor */
-static monitor_t *g_monitor = NULL;
+/* Global monitor pointer */
+monitor_t *g_monitor = NULL;
 
 /* Print usage */
 static void print_usage(void) {

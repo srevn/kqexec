@@ -7,12 +7,19 @@
 #include <sys/types.h>
 
 #include "config.h"
-#include "monitor.h"
+
+/* Forward declaration for monitor_t */
+struct monitor;
+typedef struct monitor monitor_t;
 
 /* Activity window size for detecting quiet periods (in milliseconds) */
 #define QUIET_PERIOD_MS 500       /* Default quiet period */
 #define DIR_QUIET_PERIOD_MS 1000  /* Longer quiet period for directory operations */
 #define MAX_ACTIVITY_SAMPLES 5    /* Number of recent events to track for activity analysis */
+
+/* Forward declaration for file_event_t */
+struct file_event;
+typedef struct file_event file_event_t;
 
 /* Entity type for clarity in handling */
 typedef enum {
@@ -122,5 +129,8 @@ bool verify_directory_stability(const char *dir_path, dir_stats_t *stats, int re
 bool compare_dir_stats(dir_stats_t *prev, dir_stats_t *current);
 void update_cumulative_changes(entity_state_t *state);
 void init_change_tracking(entity_state_t *state);
+
+/* External reference to the current monitor instance */
+extern monitor_t *g_current_monitor;
 
 #endif /* STATES_H */
