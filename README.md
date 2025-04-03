@@ -6,7 +6,7 @@ A lightweight file and directory monitoring utility for FreeBSD and macOS that u
 
 - **Efficient Monitoring**: Uses Kqueue mechanism for low-overhead file system monitoring
 - **Flexible Configuration**: Monitor specific files or entire directory trees
-- **Event Filtering**: Select which event types to monitor (create, modify, delete, etc.)
+- **Event Filtering**: Select which event types to monitor (content, modify, metadata, etc.)
 - **Custom Commands**: Execute arbitrary commands when events occur
 - **Recursive Monitoring**: Automatically monitor new files and directories
 - **Dynamic Directory Scanning**: Automatically detects and monitors new files and directories as they are created
@@ -23,7 +23,7 @@ A lightweight file and directory monitoring utility for FreeBSD and macOS that u
 
 - FreeBSD/macOS operating system
 - Standard C compiler (cc)
-- Make utility
+- Make utility (preferably GNU Make)
 
 ## Installation
 
@@ -48,6 +48,18 @@ Generate a sample configuration:
 
 ```sh
 make config
+```
+
+Note: Due to incompatibilities between macOS and FreeBSD Make utility, it's best to use gmake on FreeBSD.
+
+```sh
+pkg install gmake
+
+gmake
+
+gmake config
+
+gmake install
 ```
 
 ## Usage
@@ -179,7 +191,21 @@ recursive = false
 
 ## Running as a Service
 
-### Setting Up the RC Script
+### launchd on macOS
+
+To load the daemon:
+
+```sh
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.kqexec.daemon.plist
+```
+
+To unload the daemon:
+
+```sh
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.kqexec.daemon.plist
+```
+
+### RC Script on FreeBSD
 
 Create an RC script in `/usr/local/etc/rc.d/kqexec`:
 

@@ -4,20 +4,23 @@
 <dict>
     <key>Label</key>
     <string>com.kqexec.daemon</string>
+    <key>Program</key>
+    <string>@KQEXEC_BIN@</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/bin/kqexec</string>
-        <string>-c</string>
-        <string>/usr/local/etc/kqexec.conf</string>
         <string>-d</string>
+        <string>-c</string>
+        <string>@KQEXEC_CONF@</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
     <key>StandardErrorPath</key>
-    <string>/var/log/kqexec.err</string>
+    <string>@KQEXEC_LOG@</string>
     <key>StandardOutPath</key>
-    <string>/var/log/kqexec.log</string>
+    <string>@KQEXEC_LOG@</string>
+    <key>ProcessType</key>
+    <string>Background</string>
 </dict>
 </plist>
