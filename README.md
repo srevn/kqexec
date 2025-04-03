@@ -1,4 +1,4 @@
-# Kqexec - File and Directory Monitor for FreeBSD and macOS
+# kqexec
 
 A lightweight file and directory monitoring utility for FreeBSD and macOS that uses the Kqueue to watch for filesystem changes and execute custom commands in response to events.
 
@@ -325,10 +325,16 @@ Check syslog for messages from kqexec:
 grep kqexec /var/log/messages
 ```
 
-Or, if you prefer separate log file, add this line to `/etc/syslog.conf`
+If you prefer separate log file, add this line to `/etc/syslog.conf`
 
 ```ini
 daemon.notice      /var/log/kqexec.log
+```
+
+On macOS:
+
+```sh
+tail ~/Library/Logs/kqexec.log
 ```
 
 Increase log verbosity for debugging:
