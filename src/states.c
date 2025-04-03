@@ -699,6 +699,9 @@ void synchronize_activity_states(const char *path, entity_state_t *trigger_state
 					latest_activity_time = state->last_activity_in_tree;
 				}
 				
+				/* Synchronize scheduling state */
+				state->checking_scheduled = trigger_state->checking_scheduled;
+				
 				/* Record if any watch has active status */
 				any_watch_active = any_watch_active || state->activity_in_progress;
 			}
@@ -1213,6 +1216,7 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 	state->cumulative_dir_change = 0;
 	state->cumulative_depth_change = 0;
 	state->stability_lost = false;
+	state->checking_scheduled = false;
 	
 	/* If this is a directory, gather initial statistics */
 	if (state->type == ENTITY_DIRECTORY && state->exists) {
@@ -1348,20 +1352,17 @@ bool should_execute_command(entity_state_t *state, operation_type_t op, int defa
 			/* Synchronize with other watches for the same path */
 			synchronize_activity_states(root->path, root);
 			
-			/* Schedule the deferred check using the global monitor instance */
-			if (g_current_monitor) {
+			/* Only schedule a check if one isn't already scheduled */
+			if (!root->checking_scheduled && g_current_monitor) {
 				schedule_deferred_check(g_current_monitor, root);
 				log_message(LOG_LEVEL_DEBUG, "Added directory %s to deferred check queue", root->path);
-			} else {
-				log_message(LOG_LEVEL_WARNING, "Global monitor not available, cannot schedule deferred check for %s", 
-					root->path);
-			}
-		} else {
-			log_message(LOG_LEVEL_WARNING, "Directory content change for %s, but could not find root state for deferral",
-					  state->path);
-		}
-		return false; /* Decision happens later in process_deferred_dir_scans */
-	}
+            } else if (root->checking_scheduled) {
+                log_message(LOG_LEVEL_DEBUG, "Check already scheduled for directory %s, not rescheduling", 
+                        root->path);
+            }
+        }
+        return false; /* Decision happens later in process_deferred_dir_scans */
+    }
 
 	/* Standard time-based debounce for non-directory-content operations */
 	long elapsed_ms_since_command = (now.tv_sec - state->last_command_time) * 1000;

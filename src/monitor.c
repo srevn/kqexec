@@ -849,7 +849,10 @@ void schedule_deferred_check(monitor_t *monitor, entity_state_t *state) {
 		}
 	}
 	
-	/* Force root state to be active - this was implicit before but now explicit */
+	/* Mark that a check is scheduled */
+	root_state->checking_scheduled = true;
+	
+	/* Force root state to be active */
 	root_state->activity_in_progress = true;
 	
 	/* Initialize reference stats if needed - CRITICAL for empty directories */
@@ -1316,6 +1319,7 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 	/* Reset activity flag and stability counter */
 	root_state->activity_in_progress = false;
 	root_state->stability_check_count = 0;
+	root_state->checking_scheduled = false;
 	
 	/* Propagate status to all related states */
 	synchronize_activity_states(root_state->path, root_state);

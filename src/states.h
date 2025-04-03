@@ -104,6 +104,7 @@ typedef struct entity_state {
     int cumulative_dir_change;           /* Running total of directory changes */
     int cumulative_depth_change;         /* Running total of depth changes */
     bool stability_lost;                 /* Flag indicating stability was previously achieved and lost */
+    bool checking_scheduled;             /* Flag indicating a deferred check is scheduled */
     
     struct timespec last_activity_in_tree;  /* Latest activity anywhere in the tree */
     
@@ -124,7 +125,6 @@ bool is_quiet_period_elapsed(entity_state_t *state, struct timespec *now);
 long get_required_quiet_period(entity_state_t *state);
 bool is_activity_burst(entity_state_t *state);
 entity_state_t *find_root_state(entity_state_t *state);
-long get_required_quiet_period(entity_state_t *state);
 bool verify_directory_stability(const char *dir_path, dir_stats_t *stats, int recursion_depth);
 bool compare_dir_stats(dir_stats_t *prev, dir_stats_t *current);
 void update_cumulative_changes(entity_state_t *state);
