@@ -181,6 +181,22 @@ command = mail -s "New database backup created: %p" admin@example.com
 recursive = false
 ```
 
+### Reloading Configuration
+
+kqexec accepts SIGHUP signal for reloading configuration without restarting the application.
+
+On FreeBSD you can run:
+
+```sh
+service kqexec reload
+```
+
+Or, on macOS:
+
+```sh
+launchctl kill SIGHUP gui/$(id -u)/com.kqexec.daemon
+```
+
 ### Common Use Cases
 
 1. **Automatic deployment**: Monitor a git repository directory and trigger deployment when files change
