@@ -1050,8 +1050,7 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 				  monitor->watch_count - prev_watch_count);
 		new_directories_found = true;
 		
-		/* Reset activity timestamp but continue monitoring */
-		root_state->last_activity_in_tree = *current_time;
+		/* Synchronize state after adding watches but before rescheduling */
 		synchronize_activity_states(root_state->path, root_state);
 		
 		/* Reschedule with a shorter interval for quick follow-up */
