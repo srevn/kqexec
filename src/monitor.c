@@ -1453,10 +1453,7 @@ bool monitor_process_events(monitor_t *monitor) {
             }
             
             p_timeout = &timeout;
-            
-            /* Use original log format for next scheduled wakeup */
-            log_message(LOG_LEVEL_DEBUG, "Next scheduled wakeup in %ld.%09ld seconds",
-                       timeout.tv_sec, timeout.tv_nsec);
+			
         } else {
             /* Check time already passed, use minimal timeout */
             timeout.tv_sec = 0;
@@ -1568,7 +1565,12 @@ bool monitor_process_events(monitor_t *monitor) {
 		}
 	} else {
 		/* nev == 0 means timeout occurred */
-		log_message(LOG_LEVEL_DEBUG, "Timeout occurred, checking deferred scans");
+		if (p_timeout) {
+			log_message(LOG_LEVEL_DEBUG, "Timeout occurred after %ld.%09ld seconds, checking deferred scans", 
+					  p_timeout->tv_sec, p_timeout->tv_nsec);
+		} else {
+			log_message(LOG_LEVEL_DEBUG, "Timeout occurred, checking deferred scans");
+		}
 	}
 
 	/* Check deferred scans */
