@@ -817,16 +817,6 @@ void synchronize_activity_states(const char *path, entity_state_t *trigger_state
 							state->cumulative_depth_change = trigger_state->cumulative_depth_change;
 						}
 						
-						/* Ensure active directories have at least minimal changes tracked */
-						if (state->activity_in_progress && 
-							state->cumulative_file_change == 0 && 
-							state->cumulative_dir_change == 0 && 
-							state->cumulative_depth_change == 0) {
-							state->cumulative_file_change = 1;
-							log_message(LOG_LEVEL_DEBUG, 
-									  "Forcing minimum change tracking for active directory %s", state->path);
-						}
-						
 						/* Stability lost flag - make this consistent across watches */
 						state->stability_lost = state->stability_lost || trigger_state->stability_lost;
 					}

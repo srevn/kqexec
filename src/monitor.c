@@ -865,18 +865,6 @@ void schedule_deferred_check(monitor_t *monitor, entity_state_t *state) {
 				  root_state->dir_stats.dir_count, root_state->dir_stats.depth);
 	}
 	
-	/* Force update to cumulative changes if they're all zero and directory is active */
-	if (root_state->cumulative_file_change == 0 && 
-		root_state->cumulative_dir_change == 0 && 
-		root_state->cumulative_depth_change == 0) {
-		
-		/* Force a minimum change of 1 file for ALL active directories */
-		root_state->cumulative_file_change = 1; /* Assume at least one file changed */
-		log_message(LOG_LEVEL_DEBUG, 
-				  "Forcing minimum change (1 file) for active directory %s with no detected changes",
-				  root_state->path);
-	}
-	
 	/* Calculate check time based on quiet period */
 	struct timespec now;
 	clock_gettime(CLOCK_MONOTONIC, &now);
