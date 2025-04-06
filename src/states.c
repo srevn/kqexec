@@ -1346,13 +1346,13 @@ bool should_execute_command(entity_state_t *state, operation_type_t op, int defa
 			if (!root->checking_scheduled && g_current_monitor) {
 				schedule_deferred_check(g_current_monitor, root);
 				log_message(LOG_LEVEL_DEBUG, "Added directory %s to deferred check queue", root->path);
-            } else if (root->checking_scheduled) {
-                log_message(LOG_LEVEL_DEBUG, "Check already scheduled for directory %s, not rescheduling", 
-                        root->path);
-            }
-        }
-        return false; /* Decision happens later in process_deferred_dir_scans */
-    }
+			} else if (root->checking_scheduled) {
+				log_message(LOG_LEVEL_DEBUG, "Check already scheduled for directory %s, not rescheduling", 
+						root->path);
+			}
+		}
+		return false; /* Decision happens later in process_deferred_dir_scans */
+	}
 
 	/* Standard time-based debounce for non-directory-content operations */
 	long elapsed_ms_since_command = (now.tv_sec - state->last_command_time) * 1000;
