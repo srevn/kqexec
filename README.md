@@ -341,10 +341,11 @@ Check syslog for messages from kqexec:
 grep kqexec /var/log/messages
 ```
 
-If you prefer separate log file, add this line to `/etc/syslog.conf`
+If you prefer separate log file, add this lines to `/etc/syslog.conf`
 
 ```ini
-daemon.notice      /var/log/kqexec.log
+!kqexec
+*.*              /var/log/kqexec.log
 ```
 
 On macOS:
