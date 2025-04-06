@@ -1147,9 +1147,9 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 	
 	/* Log scan results with detailed stats */
 	log_message(LOG_LEVEL_DEBUG, 
-			  "Stability check #%d for %s: files=%d, dirs=%d, size=%zu, recursive_files=%d, recursive_dirs=%d, max_depth=%d, stable=%s",
+			  "Stability check #%d for %s: files=%d, dirs=%d, size=%.2f MB, recursive_files=%d, recursive_dirs=%d, max_depth=%d, stable=%s",
 			  root_state->stability_check_count + 1, entry->path, 
-			  current_stats.file_count, current_stats.dir_count, current_stats.total_size,
+			  current_stats.file_count, current_stats.dir_count, current_stats.total_size / (1024.0 * 1024.0),
 			  current_stats.recursive_file_count, current_stats.recursive_dir_count, 
 			  current_stats.max_depth, scan_completed ? "yes" : "no");
 	

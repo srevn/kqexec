@@ -1013,10 +1013,10 @@ long get_required_quiet_period(entity_state_t *state) {
 			/* Start with a base quiet period based primarily on change magnitude */
 			if (total_change == 0 && abs_depth_change == 0) {
 				/* No change - minimal quiet period */
-				required_ms = 500; 
+				required_ms = 250; 
 			} else if (total_change == 1 && abs_depth_change == 0) {
 				/* Single file change with no structural changes - very short quiet period */
-				required_ms = 800;
+				required_ms = 500;
 			} else if (total_change < 5 && abs_depth_change == 0) {
 				/* Few files changed, no structural changes - modest quiet period */
 				required_ms = 1000;
@@ -1219,9 +1219,9 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 			state->reference_stats_initialized = true;
 			
 			log_message(LOG_LEVEL_DEBUG, 
-					  "Initialized directory stats for %s: files=%d, dirs=%d, depth=%d, size=%zu",
+					  "Initialized directory stats for %s: files=%d, dirs=%d, depth=%d, size=%.2f MB",
 					  state->path, state->dir_stats.file_count, state->dir_stats.dir_count, 
-					  state->dir_stats.depth, state->dir_stats.total_size);
+					  state->dir_stats.depth, state->dir_stats.total_size / (1024.0 * 1024.0));
 		} else {
 			log_message(LOG_LEVEL_WARNING, 
 					  "Failed to gather initial stats for directory: %s", state->path);
