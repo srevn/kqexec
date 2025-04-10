@@ -2,7 +2,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <math.h>
 #include <limits.h>
 #include <sys/stat.h>
 #include <libgen.h>
@@ -208,13 +207,9 @@ static bool gather_basic_directory_stats(const char *dir_path, dir_stats_t *stat
 			if (st.st_mtime > stats->latest_mtime) {
 				stats->latest_mtime = st.st_mtime;
 			}
+		
 		} else if (S_ISDIR(st.st_mode)) {
 			stats->dir_count++;
-			
-			/* Limit recursion depth for quick initialization */
-			if (recursion_depth > 5) {
-				continue;
-			}
 			
 			dir_stats_t subdir_stats;
 			if (gather_basic_directory_stats(path, &subdir_stats, recursion_depth + 1)) {
@@ -223,9 +218,7 @@ static bool gather_basic_directory_stats(const char *dir_path, dir_stats_t *stat
 					stats->depth = subdir_stats.depth + 1;
 				}
 				
-				/* Incorporate subdirectory stats */
-				stats->file_count += subdir_stats.file_count;
-				stats->dir_count += subdir_stats.dir_count;
+				/* Incorporate subdirectory size */
 				stats->total_size += subdir_stats.total_size;
 				
 				/* Calculate and update recursive stats */
@@ -285,7 +278,7 @@ bool compare_dir_stats(dir_stats_t *prev, dir_stats_t *current) {
 	/* Log depth changes */
 	if (depth_change != 0) {
 		log_message(LOG_LEVEL_DEBUG, "Directory tree depth changed: %d -> %d (%+d levels)",
-				  		prev->depth, current->depth, depth_change);
+						  prev->depth, current->depth, depth_change);
 	}
 	
 	/* Allow small changes for larger directories */
@@ -321,7 +314,7 @@ bool compare_dir_stats(dir_stats_t *prev, dir_stats_t *current) {
 	/* Always consider unstable if tree depth changes significantly */
 	if (abs(depth_change) > 1) {
 		log_message(LOG_LEVEL_DEBUG, "Directory unstable: significant tree depth change (%+d levels)",
-				  		depth_change);
+						  depth_change);
 		return false;
 	}
 	
@@ -332,7 +325,7 @@ bool compare_dir_stats(dir_stats_t *prev, dir_stats_t *current) {
 		if (total_change > 0 || depth_change != 0) {
 			log_message(LOG_LEVEL_DEBUG, 
 					  "Directory considered stable despite small changes: %+d files, %+d dirs, %+d depth (%.1f%% change)",
-					  	file_change, dir_change, depth_change, change_percentage);
+						  file_change, dir_change, depth_change, change_percentage);
 		}
 		return true;
 	}
@@ -593,11 +586,6 @@ bool verify_directory_stability(const char *dir_path, dir_stats_t *stats, int re
 		} else if (S_ISDIR(st.st_mode)) {
 			stats->dir_count++;
 			
-			/* Skip deep recursion but don't mark as unstable */
-			if (recursion_depth > 10) {
-				continue;
-			}
-			
 			dir_stats_t subdir_stats;
 			if (!verify_directory_stability(path, &subdir_stats, recursion_depth + 1)) {
 				closedir(dir);
@@ -609,10 +597,10 @@ bool verify_directory_stability(const char *dir_path, dir_stats_t *stats, int re
 				stats->depth = subdir_stats.depth + 1;
 			}
 			
-			/* Incorporate subdirectory stats */
-			stats->file_count += subdir_stats.file_count;
-			stats->dir_count += subdir_stats.dir_count;
+			/* Incorporate subdirectory size */
 			stats->total_size += subdir_stats.total_size;
+			
+			/* Check for temp files */
 			stats->has_temp_files |= subdir_stats.has_temp_files;
 			
 			/* Calculate and update recursive stats */
