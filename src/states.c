@@ -503,7 +503,6 @@ bool verify_directory_stability(const char *dir_path, dir_stats_t *stats, int re
 				memset(&subdir_stats, 0, sizeof(dir_stats_t));
 				
 				if (!verify_directory_stability(path, &subdir_stats, recursion_depth + 1)) {
-					stats->has_temp_files = true;
 					closedir(dir);
 					return false;
 				}
@@ -923,7 +922,9 @@ void record_activity(entity_state_t *state, operation_type_t op) {
 			if (op == OP_DIR_CONTENT_CHANGED && state->type == ENTITY_DIRECTORY) {
 				dir_stats_t new_stats;
 				if (gather_basic_directory_stats(state->path, &new_stats, 0)) {
+					/* Save previous stats for comparison */
 					state->prev_stats = state->dir_stats;
+					/* Update with new stats */
 					state->dir_stats = new_stats;
 					
 					/* Update cumulative changes */
@@ -1321,23 +1322,14 @@ bool should_execute_command(entity_state_t *state, operation_type_t op, int defa
 	/* Directory content changes always defer execution to process_deferred_dir_scans */
 	if (op == OP_DIR_CONTENT_CHANGED) {
 		entity_state_t *root = find_root_state(state);
-		if (root) {
-			/* Set activity_in_progress on the ROOT state to trigger deferred check */
+		if (root && g_current_monitor) {
+			/* Always trigger a deferred check; queue deduplicates */
 			root->activity_in_progress = true;
 			log_message(LOG_LEVEL_DEBUG, "Directory content change for %s, marked root %s as active - command deferred",
-					  state->path, root->path);
-			
-			/* Synchronize with other watches for the same path */
+					   state->path, root->path);
 			synchronize_activity_states(root->path, root);
-			
-			/* Only schedule a check if one isn't already scheduled */
-			if (!root->checking_scheduled && g_current_monitor) {
-				schedule_deferred_check(g_current_monitor, root);
-				log_message(LOG_LEVEL_DEBUG, "Added directory %s to deferred check queue", root->path);
-			} else if (root->checking_scheduled) {
-				log_message(LOG_LEVEL_DEBUG, "Check already scheduled for directory %s, not rescheduling", 
-						root->path);
-			}
+			schedule_deferred_check(g_current_monitor, root);
+			log_message(LOG_LEVEL_DEBUG, "Added directory %s to deferred check queue", root->path);
 		}
 		return false; /* Decision happens later in process_deferred_dir_scans */
 	}
