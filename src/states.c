@@ -1002,11 +1002,11 @@ long get_required_quiet_period(entity_state_t *state) {
 			if (total_change == 0 && abs_depth_change == 0) {
 				/* No change - minimal quiet period */
 				required_ms = 250; 
-			} else if (total_change == 1 && abs_depth_change == 0) {
-				/* Single file change with no structural changes - very short quiet period */
-				required_ms = 500;
 			} else if (total_change < 5 && abs_depth_change == 0) {
-				/* Few files changed, no structural changes - modest quiet period */
+				/* Few files change with no structural changes - short quiet period */
+				required_ms = 500;
+			} else if (total_change < 10 && abs_depth_change == 0) {
+				/* Several files changed, no structural changes - modest quiet period */
 				required_ms = 1000;
 			} else if (abs_depth_change > 0) {
 				/* Structural depth changes - significant quiet period */
