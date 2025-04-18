@@ -121,6 +121,7 @@ event_type_t operation_to_event_type(operation_type_t op);
 bool should_execute_command(entity_state_t *state, operation_type_t op, int debounce_ms);
 bool process_event(watch_entry_t *watch, file_event_t *event, entity_type_t entity_type);
 void synchronize_activity_states(const char *path, entity_state_t *trigger_state);
+bool gather_basic_directory_stats(const char *dir_path, dir_stats_t *stats, int recursion_depth);
 bool is_quiet_period_elapsed(entity_state_t *state, struct timespec *now);
 long get_required_quiet_period(entity_state_t *state);
 bool is_activity_burst(entity_state_t *state);

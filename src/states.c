@@ -164,7 +164,7 @@ void update_cumulative_changes(entity_state_t *state) {
 }
 
 /* Gather basic directory statistics */
-static bool gather_basic_directory_stats(const char *dir_path, dir_stats_t *stats, int recursion_depth) {
+bool gather_basic_directory_stats(const char *dir_path, dir_stats_t *stats, int recursion_depth) {
 	DIR *dir;
 	struct dirent *entry;
 	struct stat st;

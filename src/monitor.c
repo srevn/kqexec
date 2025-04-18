@@ -1064,6 +1064,12 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 	dir_stats_t current_stats;
 	bool scan_completed = verify_directory_stability(entry->path, &current_stats, 0);
 	
+	/* Ensure comprehensive stats for accurate cumulative changes */
+	dir_stats_t comprehensive_stats;
+	if (gather_basic_directory_stats(entry->path, &comprehensive_stats, 0)) {
+		current_stats = comprehensive_stats;
+	}
+	
 	/* Update root state with latest stats, even if not stable */
 	if (scan_completed || current_stats.recursive_file_count > 0 || current_stats.recursive_dir_count > 0) {
 		/* Check if current scan has more complete recursive stats */
