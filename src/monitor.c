@@ -463,7 +463,7 @@ void monitor_destroy(monitor_t *monitor) {
 	}
 	
 	free(monitor->watches);
-	free(monitor->config_file);	
+	free(monitor->config_file);
 
 	/* Clean up the check queue */
 	check_queue_cleanup(monitor);
@@ -565,6 +565,11 @@ static bool monitor_add_dir_recursive(monitor_t *monitor, const char *dir_path, 
 	
 	/* Check if there's an existing watch for this directory path that we can reuse */
 	watch_info_t *existing_info = monitor_find_watch_info_by_path(monitor, dir_path);
+	
+	/* Ignore existing watches that are marked for removal */
+	if (existing_info != NULL && existing_info->watch == NULL) {
+		existing_info = NULL;
+	}
 	
 	if (existing_info != NULL && !skip_existing) {
 		/* Reuse the existing file descriptor */
@@ -717,6 +722,14 @@ bool monitor_add_watch(monitor_t *monitor, watch_entry_t *watch) {
 		/* Update the existing info to also mark it as shared */
 		existing_info->is_shared_fd = true;
 		
+		/* For directories with recursive monitoring, we still need to discover subdirectories */
+		if (watch->type == WATCH_DIRECTORY && watch->recursive) {
+			struct stat st;
+			if (stat(watch->path, &st) == 0 && S_ISDIR(st.st_mode)) {
+				monitor_add_dir_recursive(monitor, watch->path, watch, true); /* true = skip existing main dir */
+			}
+		}
+		
 		/* No need to add kqueue watch again since we're using the same FD */
 		return true;
 	}
@@ -796,6 +809,46 @@ bool monitor_setup(monitor_t *monitor) {
 			log_message(LOG_LEVEL_ERR, "Failed to add watch for %s", 
 					  monitor->config->watches[i]->path);
 			return false;
+		}
+	}
+	
+	/* Add config file watch for hot reload by adding it to the config structure */
+	if (monitor->config_file != NULL) {
+		watch_entry_t *config_watch = calloc(1, sizeof(watch_entry_t));
+		if (config_watch == NULL) {
+			log_message(LOG_LEVEL_ERR, "Failed to allocate memory for config file watch");
+			return false;
+		}
+		
+		config_watch->name = strdup("__config_file__");
+		config_watch->path = strdup(monitor->config_file);
+		config_watch->type = WATCH_FILE;
+		config_watch->events = EVENT_MODIFY;
+		config_watch->command = strdup("__config_reload__");
+		config_watch->log_output = false;
+		config_watch->recursive = false;
+		config_watch->hidden = false;
+		
+		/* Add to config structure so it gets managed properly */
+		watch_entry_t **new_watches = realloc(monitor->config->watches, (monitor->config->watch_count + 1) * sizeof(watch_entry_t *));
+		if (new_watches == NULL) {
+			log_message(LOG_LEVEL_WARNING, "Failed to add config watch to config structure");
+			free(config_watch->name);
+			free(config_watch->path);
+			free(config_watch->command);
+			free(config_watch);
+		} else {
+			monitor->config->watches = new_watches;
+			monitor->config->watches[monitor->config->watch_count] = config_watch;
+			monitor->config->watch_count++;
+			
+			if (!monitor_add_watch(monitor, config_watch)) {
+				log_message(LOG_LEVEL_WARNING, "Failed to add config file watch for %s", monitor->config_file);
+				/* Remove from config since it wasn't added to monitor */
+				monitor->config->watch_count--;
+			} else {
+				log_message(LOG_LEVEL_DEBUG, "Added config file watch for %s", monitor->config_file);
+			}
 		}
 	}
 	
@@ -1524,7 +1577,7 @@ bool monitor_process_events(monitor_t *monitor) {
 						}
 					}
 					
-					log_message(LOG_LEVEL_INFO, "Re-opened %s after DELETE/REVOKE (new descriptor: %d)", 
+					log_message(LOG_LEVEL_DEBUG, "Re-opened %s after DELETE/REVOKE (new descriptor: %d)", 
 							 primary_info->path, new_fd);
 							 
 					if (!monitor_add_kqueue_watch(monitor, primary_info)) {
@@ -1608,6 +1661,7 @@ bool monitor_reload(monitor_t *monitor) {
 	}
 	
 	log_message(LOG_LEVEL_NOTICE, "Reloading configuration from %s", monitor->config_file);
+	log_message(LOG_LEVEL_DEBUG, "Current configuration has %d watches", monitor->watch_count);
 	
 	/* Save existing config to compare later */
 	config_t *old_config = monitor->config;
@@ -1625,129 +1679,135 @@ bool monitor_reload(monitor_t *monitor) {
 	
 	/* Parse configuration file */
 	if (!config_parse_file(new_config, monitor->config_file)) {
-		log_message(LOG_LEVEL_ERR, "Failed to parse configuration file during reload: %s", 
-				  monitor->config_file);
+		log_message(LOG_LEVEL_ERR, "Failed to parse configuration file during reload: %s", monitor->config_file);
 		config_destroy(new_config);
 		return false;
 	}
 	
-	/* Create arrays for tracking which watches to add, modify, or remove */
-	bool *old_watch_processed = calloc(old_config->watch_count, sizeof(bool));
+	log_message(LOG_LEVEL_DEBUG, "Found %d watch entries in new configuration", new_config->watch_count);
+
+    /* Create and add the new config file watch entry to the new_config */
+    watch_entry_t *new_config_watch_entry = calloc(1, sizeof(watch_entry_t));
+    if (!new_config_watch_entry) {
+        log_message(LOG_LEVEL_ERR, "Failed to allocate memory for new config watch entry");
+        config_destroy(new_config);
+        return false;
+    }
+    new_config_watch_entry->name = strdup("__config_file__");
+    new_config_watch_entry->path = strdup(monitor->config_file);
+    new_config_watch_entry->type = WATCH_FILE;
+    new_config_watch_entry->events = EVENT_MODIFY;
+    new_config_watch_entry->command = strdup("__config_reload__");
+
+    watch_entry_t **temp_watches = realloc(new_config->watches, (new_config->watch_count + 1) * sizeof(watch_entry_t *));
+    if (!temp_watches) {
+        log_message(LOG_LEVEL_ERR, "Failed to realloc watches for new config entry");
+        free(new_config_watch_entry->name);
+        free(new_config_watch_entry->path);
+        free(new_config_watch_entry->command);
+        free(new_config_watch_entry);
+        config_destroy(new_config);
+        return false;
+    }
+    new_config->watches = temp_watches;
+    new_config->watches[new_config->watch_count] = new_config_watch_entry;
+    new_config->watch_count++;
+
+	/* Allocate space for the list of watches that will be kept */
+	watch_info_t **retained_watches = calloc(monitor->watch_count + new_config->watch_count, sizeof(watch_info_t *));
+	int retained_count = 0;
+	if (!retained_watches) {
+		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for retained watches array");
+		config_destroy(new_config);
+		return false;
+	}
+
+	/* Track which new watches have been processed */
 	bool *new_watch_processed = calloc(new_config->watch_count, sizeof(bool));
-	
-	if (!old_watch_processed || !new_watch_processed) {
-		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for reload processing");
-		free(old_watch_processed);
-		free(new_watch_processed);
+	if (!new_watch_processed) {
+		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for watch processing tracker");
+		free(retained_watches);
 		config_destroy(new_config);
 		return false;
 	}
-	
-	/* First pass: Find watches that exist in both configs with same settings (no change needed) */
-	for (int i = 0; i < old_config->watch_count; i++) {
-		watch_entry_t *old_watch = old_config->watches[i];
-		
-		for (int j = 0; j < new_config->watch_count; j++) {
-			if (new_watch_processed[j]) continue;
-			
-			watch_entry_t *new_watch = new_config->watches[j];
-			
-			/* Check if watches are identical */
-			if (strcmp(old_watch->path, new_watch->path) == 0 &&
-				old_watch->type == new_watch->type &&
-				old_watch->events == new_watch->events &&
-				old_watch->recursive == new_watch->recursive &&
-				old_watch->hidden == new_watch->hidden &&
-				strcmp(old_watch->command, new_watch->command) == 0) {
-				
-				/* Watches are identical, mark them as processed */
-				old_watch_processed[i] = true;
-				new_watch_processed[j] = true;
-				
-				log_message(LOG_LEVEL_DEBUG, "Watch for %s (watch: %s) unchanged during reload",
-						  old_watch->path, old_watch->name);
-				break;
-			}
-		}
-	}
-	
-	/* Second pass: Remove watches that are no longer in the config or have changed */
+
+	/* Pass 1: First, find the old config file watch_info, retain it, and point it to the new entry */
 	for (int i = 0; i < monitor->watch_count; i++) {
-		watch_info_t *watch_info = monitor->watches[i];
-		bool found = false;
-		
-		/* Check if this watch_info corresponds to an unchanged watch */
-		for (int j = 0; j < old_config->watch_count; j++) {
-			if (old_watch_processed[j] && watch_info->watch == old_config->watches[j]) {
-				found = true;
-				break;
-			}
-		}
-		
-		/* If not found among unchanged watches, it needs to be removed */
-		if (!found) {
-			/* Only close the file descriptor if it's not shared */
-			if (!watch_info->is_shared_fd && watch_info->wd >= 0) {
-				/* Remove kqueue watch */
-				struct kevent changes[1];
-				EV_SET(&changes[0], watch_info->wd, EVFILT_VNODE, EV_DELETE, 0, 0, NULL);
-				kevent(monitor->kq, changes, 1, NULL, 0, NULL);
-				
-				/* Close the file descriptor */
-				close(watch_info->wd);
-				watch_info->wd = -1;
-				
-				log_message(LOG_LEVEL_DEBUG, "Removed kqueue watch for %s during reload",
-						  watch_info->path);
-			}
-			
-			/* Mark for removal (will be cleaned up later) */
-			watch_info->watch = NULL;
-			
-			log_message(LOG_LEVEL_INFO, "Marked watch for %s as removed during reload",
-					  watch_info->path);
+		if (monitor->watches[i] && monitor->watches[i]->watch && strcmp(monitor->watches[i]->watch->name, "__config_file__") == 0) {
+			monitor->watches[i]->watch = new_config_watch_entry; /* Point to the new entry */
+			retained_watches[retained_count++] = monitor->watches[i];
+			monitor->watches[i] = NULL; /* Mark as retained */
+			log_message(LOG_LEVEL_DEBUG, "Preserving and updating config file watch");
+			break;
 		}
 	}
-	
-	/* Third pass: Add new watches */
+
+	/* Find user-defined watches that are identical in both old and new configs */
 	for (int i = 0; i < new_config->watch_count; i++) {
-		if (!new_watch_processed[i]) {
-			watch_entry_t *new_watch = new_config->watches[i];
+		if (new_config->watches[i] == new_config_watch_entry) continue;
+		
+		watch_entry_t *new_watch = new_config->watches[i];
+		for (int j = 0; j < old_config->watch_count; j++) {
+			watch_entry_t *old_watch = old_config->watches[j];
+			if (old_watch == NULL || strcmp(old_watch->name, "__config_file__") == 0) continue;
 			
-			/* Add the new watch */
-			if (!monitor_add_watch(monitor, new_watch)) {
-				log_message(LOG_LEVEL_ERR, "Failed to add new watch for %s during reload",
-						  new_watch->path);
-			} else {
-				log_message(LOG_LEVEL_INFO, "Added new watch for %s (watch: %s) during reload",
-						  new_watch->path, new_watch->name);
+			/* Check for identity */
+			if (strcmp(new_watch->path, old_watch->path) == 0 &&
+				strcmp(new_watch->name, old_watch->name) == 0 &&
+				new_watch->type == old_watch->type &&
+				new_watch->events == old_watch->events &&
+				new_watch->recursive == old_watch->recursive &&
+				new_watch->hidden == old_watch->hidden &&
+				strcmp(new_watch->command, old_watch->command) == 0) {
+				
+				log_message(LOG_LEVEL_DEBUG, "Watch unchanged: %s (watch: %s)", new_watch->path, new_watch->name);
+				new_watch_processed[i] = true;
+				
+				/* Retain all watch_info structs associated with this old_watch definition */
+				for (int k = 0; k < monitor->watch_count; k++) {
+					if (monitor->watches[k] && monitor->watches[k]->watch == old_watch) {
+						monitor->watches[k]->watch = new_watch;
+						retained_watches[retained_count++] = monitor->watches[k];
+						monitor->watches[k] = NULL;
+					}
+				}
+				old_config->watches[j] = NULL;
+				break;
 			}
 		}
 	}
-	
-	/* Clean up the watch array by removing entries with NULL watch pointers */
-	int new_count = 0;
+
+	/* Pass 2: Destroy old and modified watches */
 	for (int i = 0; i < monitor->watch_count; i++) {
-		if (monitor->watches[i]->watch != NULL) {
-			monitor->watches[new_count++] = monitor->watches[i];
-		} else {
+		if (monitor->watches[i]) {
+			log_message(LOG_LEVEL_DEBUG, "Removing watch for %s (watch: %s)",
+						monitor->watches[i]->path, monitor->watches[i]->watch ? monitor->watches[i]->watch->name : "<unknown>");
 			watch_info_destroy(monitor->watches[i]);
 		}
 	}
-	
-	log_message(LOG_LEVEL_INFO, "Reload cleanup: reduced watch count from %d to %d",
-			  monitor->watch_count, new_count);
-	monitor->watch_count = new_count;
-	
-	/* Update the monitor's config pointer */
-	monitor->config = new_config;
-	
-	/* Clean up old config */
-	config_destroy(old_config);
-	free(old_watch_processed);
+	free(monitor->watches);
+
+	/* Pass 3: Add new and modified watches */
+	monitor->watches = retained_watches;
+	monitor->watch_count = retained_count;
+
+	for (int i = 0; i < new_config->watch_count; i++) {
+        if (new_config->watches[i] == new_config_watch_entry) continue;
+		if (!new_watch_processed[i]) {
+			watch_entry_t *watch_to_add = new_config->watches[i];
+			log_message(LOG_LEVEL_DEBUG, "Watch added or modified: %s (watch: %s)", watch_to_add->path, watch_to_add->name);
+			if (!monitor_add_watch(monitor, watch_to_add)) {
+				log_message(LOG_LEVEL_ERR, "Failed to add new/modified watch for %s", watch_to_add->path);
+			}
+		}
+	}
+
+	/* Finalization */
 	free(new_watch_processed);
-	
-	log_message(LOG_LEVEL_NOTICE, "Configuration reload completed successfully");
+	config_destroy(old_config);
+	monitor->config = new_config;
+
+	log_message(LOG_LEVEL_NOTICE, "Configuration reload complete: %d active watches", monitor->watch_count);
 	return true;
 }
 

@@ -218,7 +218,6 @@ int main(int argc, char *argv[]) {
 	}
 	
 	monitor_destroy(monitor);
-	config_destroy(config);
 	command_intent_cleanup();
 	entity_state_cleanup();
 	log_close();

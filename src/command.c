@@ -53,16 +53,27 @@ void command_intent_init(void) {
 
 /* Clean up command intent tracking */
 void command_intent_cleanup(void) {
+	sigset_t mask, oldmask;
+	
+	/* Block SIGCHLD to prevent race condition with signal handler */
+	sigemptyset(&mask);
+	sigaddset(&mask, SIGCHLD);
+	sigprocmask(SIG_BLOCK, &mask, &oldmask);
+	
 	for (int i = 0; i < MAX_COMMAND_INTENTS; i++) {
 		if (command_intents[i].active && command_intents[i].affected_paths) {
 			for (int j = 0; j < command_intents[i].affected_path_count; j++) {
 				free(command_intents[i].affected_paths[j]);
 			}
 			free(command_intents[i].affected_paths);
+			command_intents[i].affected_paths = NULL;
 		}
 	}
 	memset(command_intents, 0, sizeof(command_intents));
 	active_intent_count = 0;
+	
+	/* Restore previous signal mask */
+	sigprocmask(SIG_SETMASK, &oldmask, NULL);
 }
 
 /* Check if a path is affected by any active command */

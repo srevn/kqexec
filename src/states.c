@@ -13,6 +13,7 @@
 #include "states.h"
 #include "command.h"
 #include "log.h"
+#include "monitor.h"
 
 /* Hash table size for storing entity states */
 #define ENTITY_HASH_SIZE 1024
@@ -1374,6 +1375,17 @@ bool process_event(watch_entry_t *watch, file_event_t *event, entity_type_t enti
 	
 	log_message(LOG_LEVEL_DEBUG, "Processing event for %s (watch: %s, type: %s)",
 			  event->path, watch->name, event_type_to_string(event->type));
+	
+	/* Handle config file events specially for hot reload */
+	if (watch->name != NULL && strcmp(watch->name, "__config_file__") == 0) {
+		log_message(LOG_LEVEL_NOTICE, "Configuraion changed: %s", event->path);
+		if (g_current_monitor != NULL) {
+			monitor_request_reload(g_current_monitor);
+		} else {
+			log_message(LOG_LEVEL_WARNING, "Config file changed but no monitor available for reload");
+		}
+		return true;
+	}
 	
 	/* Check if this event was caused by one of our commands */
 	if (is_path_affected_by_command(event->path)) {
