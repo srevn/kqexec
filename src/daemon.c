@@ -26,7 +26,7 @@ static void signal_handler(int sig) {
 			running = 0;
 			/* Stop the monitor if available */
 			if (g_monitor != NULL) {
-				log_message(LOG_LEVEL_NOTICE, "Daemon received signal %d, stopping monitor", sig);
+				log_message(LOG_LEVEL_INFO, "Daemon received signal %d, stopping monitor", sig);
 				monitor_stop(g_monitor);
 			} else {
 				log_message(LOG_LEVEL_WARNING, "Daemon received signal %d but monitor is not available", sig);
@@ -36,7 +36,7 @@ static void signal_handler(int sig) {
 			reload_requested = 1;
 			/* Request reload if monitor is available */
 			if (g_monitor != NULL) {
-				log_message(LOG_LEVEL_NOTICE, "Daemon received SIGHUP, requesting configuration reload");
+				log_message(LOG_LEVEL_INFO, "Daemon received SIGHUP, requesting configuration reload");
 				monitor_request_reload(g_monitor);
 			} else {
 				log_message(LOG_LEVEL_WARNING, "Daemon received SIGHUP but monitor is not available");
@@ -142,7 +142,7 @@ bool daemon_start(config_t *config) {
 	/* Set file creation mask */
 	umask(0);
 	
-	log_message(LOG_LEVEL_NOTICE, "Started daemon with PID %d", getpid());
+	log_message(LOG_LEVEL_INFO, "Started daemon with PID %d", getpid());
 	
 	return true;
 }

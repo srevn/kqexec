@@ -235,7 +235,6 @@ static int check_queue_find_by_path(monitor_t *monitor, const char *path) {
 	return -1; /* Not found */
 }
 
-
 /* Add or update an entry in the queue */
 static void check_queue_add_or_update(monitor_t *monitor, const char *path, 
 								   watch_entry_t *watch, struct timespec next_check) {
@@ -1153,15 +1152,13 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 			/* Increment failed checks counter */
 			root_state->failed_checks++;
 			
-			log_message(LOG_LEVEL_DEBUG, 
-					  "Directory %s not found (attempt %d/%d)",
+			log_message(LOG_LEVEL_DEBUG, "Directory %s not found (attempt %d/%d)",
 					  entry->path, root_state->failed_checks, MAX_FAILED_CHECKS);
 			
 			/* After multiple consecutive failures, consider it permanently deleted */
 			if (root_state->failed_checks >= MAX_FAILED_CHECKS) {
-				log_message(LOG_LEVEL_NOTICE, 
-						  "Directory %s confirmed deleted after %d failed checks, cleaning up",
-						  entry->path, root_state->failed_checks);
+				log_message(LOG_LEVEL_INFO, "Directory %s confirmed deleted after %d failed checks, cleaning up",
+					  entry->path, root_state->failed_checks);
 				
 				/* Mark as not active for all watches */
 				root_state->activity_in_progress = false;
@@ -1247,8 +1244,7 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 		root_state->last_activity_in_tree = *current_time;
 		synchronize_activity_states(entry->path, root_state);
 		
-		log_message(LOG_LEVEL_DEBUG, "Directory %s is still unstable, continuing to monitor",
-				  entry->path);
+		log_message(LOG_LEVEL_DEBUG, "Directory %s is still unstable, continuing to monitor", entry->path);
 		
 		/* Calculate adaptive quiet period for rescheduling */
 		long adaptive_period_ms = get_required_quiet_period(root_state);
@@ -1644,12 +1640,11 @@ bool monitor_start(monitor_t *monitor) {
 	return true;
 }
 
-
 /* Request a configuration reload */
 void monitor_request_reload(monitor_t *monitor) {
 	if (monitor != NULL) {
 		monitor->reload_requested = true;
-		log_message(LOG_LEVEL_NOTICE, "Configuration reload requested");
+		log_message(LOG_LEVEL_INFO, "Configuration reload requested");
 	}
 }
 
@@ -1660,7 +1655,7 @@ bool monitor_reload(monitor_t *monitor) {
 		return false;
 	}
 	
-	log_message(LOG_LEVEL_NOTICE, "Reloading configuration from %s", monitor->config_file);
+	log_message(LOG_LEVEL_INFO, "Reloading configuration from %s", monitor->config_file);
 	log_message(LOG_LEVEL_DEBUG, "Current configuration has %d watches", monitor->watch_count);
 	
 	/* Save existing config to compare later */
@@ -1813,10 +1808,9 @@ bool monitor_reload(monitor_t *monitor) {
 	config_destroy(old_config);
 	monitor->config = new_config;
 
-	log_message(LOG_LEVEL_NOTICE, "Configuration reload complete: %d active watches", monitor->watch_count);
+	log_message(LOG_LEVEL_INFO, "Configuration reload complete: %d active watches", monitor->watch_count);
 	return true;
 }
-
 
 /* Stop the monitor by setting the running flag to false */
 void monitor_stop(monitor_t *monitor) {

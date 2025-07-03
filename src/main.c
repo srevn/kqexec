@@ -38,7 +38,7 @@ static void signal_handler(int sig) {
 	switch (sig) {
 		case SIGINT:
 		case SIGTERM:
-			log_message(LOG_LEVEL_NOTICE, "Received signal %d, shutting down", sig);
+			log_message(LOG_LEVEL_INFO, "Received signal %d, shutting down", sig);
 			if (g_monitor != NULL) {
 				monitor_stop(g_monitor);
 			} else {
@@ -48,7 +48,7 @@ static void signal_handler(int sig) {
 			break;
 		case SIGHUP:
 			if (g_monitor != NULL) {
-				log_message(LOG_LEVEL_NOTICE, "Received SIGHUP, requesting configuration reload");
+				log_message(LOG_LEVEL_INFO, "Received SIGHUP, requesting configuration reload");
 				monitor_request_reload(g_monitor);
 			} else {
 				log_message(LOG_LEVEL_WARNING, "Received SIGHUP but no monitor available");
