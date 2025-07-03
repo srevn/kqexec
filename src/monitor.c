@@ -545,96 +545,86 @@ static bool is_hidden_path(const char *path) {
 }
 
 /* Recursively add watches for a directory and its subdirectories */
-static bool monitor_add_dir_recursive(monitor_t *monitor, const char *dir_path, watch_entry_t *watch, bool skip_existing) {
+static bool monitor_add_dir_recursive(monitor_t *monitor, const char *dir_path, watch_entry_t *watch) {
 	DIR *dir;
 	struct dirent *entry;
-	
+
 	/* Skip hidden directories unless hidden is true */
 	if (!watch->hidden && is_hidden_path(dir_path)) {
 		log_message(LOG_LEVEL_DEBUG, "Skipping hidden directory: %s", dir_path);
 		return true; /* Not an error, just skipping */
 	}
-	
+
+	/* Check if a watch_info for this path and watch already exists */
+	bool already_exists = false;
+	for (int i = 0; i < monitor->watch_count; i++) {
+		if (strcmp(monitor->watches[i]->path, dir_path) == 0 && monitor->watches[i]->watch == watch) {
+			already_exists = true;
+			break;
+		}
+	}
+
+	if (!already_exists) {
+		watch_info_t *existing_info = monitor_find_watch_info_by_path(monitor, dir_path);
+		if (existing_info != NULL) {
+			/* Reuse the existing file descriptor */
+			int fd = existing_info->wd;
+			watch_info_t *info = calloc(1, sizeof(watch_info_t));
+			if (info == NULL) {
+				log_message(LOG_LEVEL_ERR, "Failed to allocate memory for watch info");
+				return false;
+			}
+			
+			info->wd = fd;
+			info->path = strdup(dir_path);
+			info->watch = watch;
+			info->is_shared_fd = true;
+			existing_info->is_shared_fd = true;
+			if (!monitor_add_watch_info(monitor, info)) {
+				watch_info_destroy(info);
+				return false;
+			}
+			
+			log_message(LOG_LEVEL_DEBUG, "Added additional watch for directory: %s (with shared FD)", dir_path);
+		} else {
+			/* Create a new watch with a new file descriptor */
+			int fd = open(dir_path, O_RDONLY);
+			if (fd == -1) {
+				log_message(LOG_LEVEL_ERR, "Failed to open %s: %s", dir_path, strerror(errno));
+				return false;
+			}
+			
+			watch_info_t *info = calloc(1, sizeof(watch_info_t));
+			if (info == NULL) {
+				log_message(LOG_LEVEL_ERR, "Failed to allocate memory for watch info");
+				close(fd);
+				return false;
+			}
+			
+			info->wd = fd;
+			info->path = strdup(dir_path);
+			info->watch = watch;
+			info->is_shared_fd = false;
+			if (!monitor_add_watch_info(monitor, info)) {
+				watch_info_destroy(info);
+				close(fd);
+				return false;
+			}
+			
+			if (!monitor_add_kqueue_watch(monitor, info)) {
+				/* The watch_info is already in the monitor's list, so it will be cleaned up on monitor_destroy */
+				return false;
+			}
+			log_message(LOG_LEVEL_DEBUG, "Added new watch for directory: %s", dir_path);
+		}
+	}
+
 	dir = opendir(dir_path);
 	if (dir == NULL) {
-		log_message(LOG_LEVEL_ERR, "Failed to open directory %s: %s", 
-				  dir_path, strerror(errno));
+		log_message(LOG_LEVEL_ERR, "Failed to open directory %s: %s", dir_path, strerror(errno));
 		return false;
 	}
-	
-	/* Check if there's an existing watch for this directory path that we can reuse */
-	watch_info_t *existing_info = monitor_find_watch_info_by_path(monitor, dir_path);
-	
-	/* Ignore existing watches that are marked for removal */
-	if (existing_info != NULL && existing_info->watch == NULL) {
-		existing_info = NULL;
-	}
-	
-	if (existing_info != NULL && !skip_existing) {
-		/* Reuse the existing file descriptor */
-		int fd = existing_info->wd;
-		
-		watch_info_t *info = calloc(1, sizeof(watch_info_t));
-		if (info == NULL) {
-			log_message(LOG_LEVEL_ERR, "Failed to allocate memory for watch info");
-			closedir(dir);
-			return false;
-		}
-		
-		info->wd = fd;
-		info->path = strdup(dir_path);
-		info->watch = watch;
-		info->is_shared_fd = true; /* Mark as shared */
-		
-		/* Update the existing info to also mark it as shared */
-		existing_info->is_shared_fd = true;
-		
-		if (!monitor_add_watch_info(monitor, info)) {
-			watch_info_destroy(info);
-			closedir(dir);
-			return false;
-		}
-		
-		log_message(LOG_LEVEL_DEBUG, "Added additional watch for directory: %s (with shared FD)", dir_path);
-	}
-	/* If no existing watch or if skip_existing is true but no watch exists yet */
-	else if (existing_info == NULL || (skip_existing && monitor_find_watch_info_by_path(monitor, dir_path) == NULL)) {
-		int fd = open(dir_path, O_RDONLY);
-		if (fd == -1) {
-			log_message(LOG_LEVEL_ERR, "Failed to open %s: %s", 
-					  dir_path, strerror(errno));
-			closedir(dir);
-			return false;
-		}
-		
-		watch_info_t *info = calloc(1, sizeof(watch_info_t));
-		if (info == NULL) {
-			log_message(LOG_LEVEL_ERR, "Failed to allocate memory for watch info");
-			close(fd);
-			closedir(dir);
-			return false;
-		}
-		
-		info->wd = fd;
-		info->path = strdup(dir_path);
-		info->watch = watch;
-		info->is_shared_fd = false; /* Initially not shared */
-		
-		if (!monitor_add_watch_info(monitor, info)) {
-			watch_info_destroy(info);
-			closedir(dir);
-			return false;
-		}
-		
-		if (!monitor_add_kqueue_watch(monitor, info)) {
-			closedir(dir);
-			return false;
-		}
-		
-		log_message(LOG_LEVEL_DEBUG, "Added new watch for directory: %s", dir_path);
-	}
-	
-	/* If recursive monitoring is enabled, process subdirectories */
+
 	if (watch->recursive) {
 		while ((entry = readdir(dir)) != NULL) {
 			char path[MAX_PATH_LEN];
@@ -653,35 +643,21 @@ static bool monitor_add_dir_recursive(monitor_t *monitor, const char *dir_path, 
 			
 			snprintf(path, sizeof(path), "%s/%s", dir_path, entry->d_name);
 			
-			/* Check for existence if we're skipping existing paths */
-			bool path_exists = false;
-			if (skip_existing) {
-				for (int i = 0; i < monitor->watch_count; i++) {
-					if (strcmp(monitor->watches[i]->path, path) == 0 && 
-						monitor->watches[i]->watch == watch) {
-						path_exists = true;
-						break;
-					}
-				}
-				if (path_exists) continue;
-			}
-			
 			if (stat(path, &st) == -1) {
-				log_message(LOG_LEVEL_WARNING, "Failed to stat %s: %s", 
-						  path, strerror(errno));
+				log_message(LOG_LEVEL_WARNING, "Failed to stat %s: %s", path, strerror(errno));
 				continue;
 			}
 			
 			if (S_ISDIR(st.st_mode)) {
 				/* Recursively add subdirectory */
-				if (!monitor_add_dir_recursive(monitor, path, watch, skip_existing)) {
+				if (!monitor_add_dir_recursive(monitor, path, watch)) {
 					log_message(LOG_LEVEL_WARNING, "Failed to add recursive watch for %s", path);
 					/* Continue with other directories */
 				}
 			}
 		}
 	}
-	
+
 	closedir(dir);
 	return true;
 }
@@ -725,7 +701,7 @@ bool monitor_add_watch(monitor_t *monitor, watch_entry_t *watch) {
 		if (watch->type == WATCH_DIRECTORY && watch->recursive) {
 			struct stat st;
 			if (stat(watch->path, &st) == 0 && S_ISDIR(st.st_mode)) {
-				monitor_add_dir_recursive(monitor, watch->path, watch, true); /* true = skip existing main dir */
+				monitor_add_dir_recursive(monitor, watch->path, watch); /* true = skip existing main dir */
 			}
 		}
 		
@@ -746,7 +722,7 @@ bool monitor_add_watch(monitor_t *monitor, watch_entry_t *watch) {
 			watch->type = WATCH_DIRECTORY;
 		}
 		
-		return monitor_add_dir_recursive(monitor, watch->path, watch, false);  /* false = don't skip existing */
+		return monitor_add_dir_recursive(monitor, watch->path, watch);  /* false = don't skip existing */
 	} 
 	/* Handle regular files */
 	else if (S_ISREG(st.st_mode)) {
@@ -1077,7 +1053,7 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 	int prev_watch_count = monitor->watch_count;
 	for (int i = 0; i < entry->watch_count; i++) {
 		if (entry->watches[i]->recursive) {
-			monitor_add_dir_recursive(monitor, entry->path, entry->watches[i], true);
+			monitor_add_dir_recursive(monitor, entry->path, entry->watches[i]);
 		}
 	}
 	
