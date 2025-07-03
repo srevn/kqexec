@@ -124,6 +124,7 @@ kqexec.conf.sample:
 	@echo "events = MODIFY" >> $@
 	@echo "command = logger -p daemon.notice \"Configuration changed in %p\"" >> $@
 	@echo "log_output = false" >> $@
+	@echo "buffer_output = false" >> $@
 	@echo "recursive = true" >> $@
 	@echo "hidden = false" >> $@
 	@echo "" >> $@

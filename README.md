@@ -91,6 +91,7 @@ directory = /path/to/dir     # For monitoring a directory
 events = EVENT1,EVENT2       # Comma-separated list of events
 command = command to execute # Command to run when events occur
 log_output = false           # Whether to capture and log command output (default: false)
+buffer_output = false        # Whether to buffer log output until command completes (default: false)
 recursive = true             # For recursive directory monitoring (default: true)
 hidden = false               # Whether to monitor hidden files/dirs (default: false)
 ```
@@ -157,6 +158,7 @@ directory = /usr/local/www/data
 events = CONTENT
 command = /usr/local/bin/refresh_cache.sh %p %e
 log_output = true
+buffer_output = true
 recursive = true
 hidden = false
 
@@ -179,6 +181,7 @@ hidden = true
 directory = /var/db/backups
 events = ALL
 command = mail -s "New database backup created: %p" admin@example.com
+log_output = false
 recursive = false
 ```
 
