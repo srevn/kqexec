@@ -12,7 +12,6 @@
 /* Global thread pool instance */
 static thread_pool_t *g_thread_pool = NULL;
 
-
 /* Deep copy a watch entry for thread safety */
 static watch_entry_t *copy_watch_entry(const watch_entry_t *watch) {
 	if (!watch) return NULL;

@@ -646,7 +646,6 @@ bool command_execute(const watch_entry_t *watch, const file_event_t *event) {
 	return thread_pool_submit(watch, event);
 }
 
-
 /* Clean up command subsystem */
 void command_cleanup(void) {
 	/* Wait for all pending commands to complete */

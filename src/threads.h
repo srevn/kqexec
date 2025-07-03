@@ -8,8 +8,8 @@
 #include "monitor.h"
 
 /* Thread pool configuration */
-#define MAX_WORKER_THREADS 4
-#define MAX_WORK_QUEUE_SIZE 32
+#define MAX_WORKER_THREADS 2
+#define MAX_WORK_QUEUE_SIZE 8
 
 /* Work item for thread pool */
 typedef struct work_item {
@@ -36,6 +36,5 @@ bool thread_pool_init(void);
 void thread_pool_destroy(void);
 bool thread_pool_submit(const watch_entry_t *watch, const file_event_t *event);
 void thread_pool_wait_all(void);
-
 
 #endif /* THREAD_POOL_H */
