@@ -4,6 +4,7 @@
 #include <string.h>
 #include <syslog.h>
 #include <time.h>
+#include <pthread.h>
 #include "log.h"
 
 /* Global log level */
@@ -14,6 +15,9 @@ static int syslog_initialized = 0;
 
 /* Flag indicating whether to use console output */
 static int console_output = 0;
+
+/* Mutex for thread-safe logging */
+static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* Initialize logging */
 void log_init(const char *ident, int facility, log_level_t level, int use_console) {
@@ -41,6 +45,9 @@ void log_message(log_level_t level, const char *format, ...) {
 	if (level > current_log_level) {
 		return;
 	}
+	
+	/* Lock for thread-safe logging */
+	pthread_mutex_lock(&log_mutex);
 	
 	va_start(args, format);
 	
@@ -103,4 +110,7 @@ void log_message(log_level_t level, const char *format, ...) {
 	}
 	
 	va_end(args);
+	
+	/* Unlock after logging */
+	pthread_mutex_unlock(&log_mutex);
 }

@@ -1771,11 +1771,17 @@ bool monitor_reload(monitor_t *monitor) {
 						monitor->watches[k] = NULL;
 					}
 				}
+				
+				log_message(LOG_LEVEL_DEBUG, "Skipping entity state update for unchanged watch: %s", new_watch->name);
+				
 				old_config->watches[j] = NULL;
 				break;
 			}
 		}
 	}
+
+	/* Clean up orphaned entity states before destroying old watches */
+	cleanup_orphaned_entity_states(old_config);
 
 	/* Pass 2: Destroy old and modified watches */
 	for (int i = 0; i < monitor->watch_count; i++) {
@@ -1801,7 +1807,7 @@ bool monitor_reload(monitor_t *monitor) {
 			}
 		}
 	}
-
+	
 	/* Finalization */
 	free(new_watch_processed);
 	config_destroy(old_config);

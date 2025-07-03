@@ -4,7 +4,7 @@ UNAME_S := $(shell uname -s)
 # Compiler and flags
 CC = cc
 CFLAGS = -Wall -Wextra -std=c11 -pedantic -g
-LDFLAGS = -lm
+LDFLAGS = -lm -lpthread
 
 # OS-specific settings
 ifeq ($(UNAME_S),FreeBSD)
@@ -30,6 +30,7 @@ SRCS = src/main.c \
 	   src/config.c \
 	   src/monitor.c \
 	   src/command.c \
+	   src/threads.c \
 	   src/states.c \
 	   src/daemon.c \
 	   src/log.c

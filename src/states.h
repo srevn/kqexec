@@ -68,8 +68,12 @@ typedef struct {
     size_t recursive_total_size;        /* Total size of all files in tree */
 } dir_stats_t;
 
+/* Magic number for entity state corruption detection */
+#define ENTITY_STATE_MAGIC 0x4B514558  /* "KQEX" */
+
 /* Entity state tracking */
 typedef struct entity_state {
+    uint32_t magic;                      /* Magic number for corruption detection */
     char *path;                          /* Path to the entity */
     entity_type_t type;                  /* File or directory */
     watch_entry_t *watch;                /* The watch entry for this state */
@@ -130,5 +134,7 @@ bool verify_directory_stability(const char *dir_path, dir_stats_t *stats, int re
 bool compare_dir_stats(dir_stats_t *prev, dir_stats_t *current);
 void update_cumulative_changes(entity_state_t *state);
 void init_change_tracking(entity_state_t *state);
+void update_entity_states_after_reload(watch_entry_t *old_watch, watch_entry_t *new_watch);
+void cleanup_orphaned_entity_states(config_t *old_config);
 
 #endif /* STATES_H */

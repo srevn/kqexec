@@ -6,7 +6,7 @@
 
 /* Event types that can be monitored */
 typedef enum {
-	EVENT_NONE = 0,			   /* No events */
+	EVENT_NONE = 0,            /* No events */
 	EVENT_CONTENT = 1 << 0,    /* File content changes (WRITE, EXTEND) */
 	EVENT_METADATA = 1 << 1,   /* Metadata changes (ATTRIB, LINK) */
 	EVENT_MODIFY = 1 << 2,     /* Modification events (CREATE, DELETE, RENAME) */
@@ -21,14 +21,15 @@ typedef enum {
 
 /* Structure for a watch entry in the configuration */
 typedef struct {
-	char *name;             	/* Section name in config */
-	char *path;             	/* Path to watch */
-	watch_type_t type;      	/* File or directory */
-	event_type_t events;    	/* Events to monitor */
-	char *command;          	/* Command to execute */
-	bool log_output;        	/* Whether to capture and log command output */
-	bool recursive;         	/* Whether to recursively monitor (for directories) */
-	bool hidden;    			/* Whether to monitor hidden files/directories */
+	char *name;                 /* Section name in config */
+	char *path;                 /* Path to watch */
+	watch_type_t type;          /* File or directory */
+	event_type_t events;        /* Events to monitor */
+	char *command;              /* Command to execute */
+	bool log_output;            /* Whether to capture and log command output */
+	bool buffer_output;         /* Whether to buffer output until command completes */
+	bool recursive;             /* Whether to recursively monitor (for directories) */
+	bool hidden;                /* Whether to monitor hidden files/directories */
 } watch_entry_t;
 
 /* Global configuration structure */

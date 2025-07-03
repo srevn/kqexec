@@ -6,9 +6,13 @@
 #include <pwd.h>
 #include <signal.h>
 #include <errno.h>
+#include <stdarg.h>
+#include <pthread.h>
 #include <sys/wait.h>
+#include <sys/select.h>
 
 #include "command.h"
+#include "threads.h"
 #include "states.h"
 #include "log.h"
 
@@ -22,6 +26,23 @@ static int active_intent_count = 0;
 
 /* Debounce time in milliseconds */
 static int debounce_time_ms = DEFAULT_DEBOUNCE_TIME_MS;
+
+/* Thread-safe logging wrapper */
+void thread_safe_log(int level, const char *format, ...) {
+	static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
+	va_list args;
+	
+	pthread_mutex_lock(&log_mutex);
+	va_start(args, format);
+	
+	/* Use a buffer for thread-safe logging */
+	char buffer[2048];
+	vsnprintf(buffer, sizeof(buffer), format, args);
+	log_message(level, "%s", buffer);
+	
+	va_end(args);
+	pthread_mutex_unlock(&log_mutex);
+}
 
 /* SIGCHLD handler to reap child processes and mark command intents as complete */
 static void command_sigchld_handler(int sig) {
@@ -43,6 +64,9 @@ void command_init(void) {
 	sa.sa_handler = command_sigchld_handler;
 	sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
 	sigaction(SIGCHLD, &sa, NULL);
+	
+	/* Initialize thread pool */
+	thread_pool_init();
 }
 
 /* Initialize command intent tracking */
@@ -375,17 +399,64 @@ char *command_substitute_placeholders(const char *command, const file_event_t *e
 	return result;
 }
 
-/* Execute a command */
-bool command_execute(const watch_entry_t *watch, const file_event_t *event) {
+/* Add line to output buffer */
+static bool add_to_output_buffer(char ***buffer, int *count, int *capacity, const char *line) {
+	if (*count >= *capacity) {
+		int new_capacity = *capacity == 0 ? 16 : *capacity * 2;
+		char **new_buffer = realloc(*buffer, new_capacity * sizeof(char*));
+		if (!new_buffer) {
+			return false;
+		}
+		*buffer = new_buffer;
+		*capacity = new_capacity;
+	}
+	
+	(*buffer)[*count] = strdup(line);
+	if (!(*buffer)[*count]) {
+		return false;
+	}
+	(*count)++;
+	return true;
+}
+
+/* Flush buffered output */
+static void flush_output_buffer(const watch_entry_t *watch, char **buffer, int count) {
+	if (count == 0) return;
+	
+	for (int i = 0; i < count; i++) {
+		if (buffer[i]) {
+			thread_safe_log(LOG_LEVEL_NOTICE, "[%s]: %s", watch->name, buffer[i]);
+		}
+	}
+}
+
+/* Synchronous command execution with robust output capture */
+bool command_execute_sync(const watch_entry_t *watch, const file_event_t *event) {
 	pid_t pid;
 	char *command;
 	int stdout_pipe[2] = {-1, -1}, stderr_pipe[2] = {-1, -1};
 	bool capture_output = watch->log_output;
+	bool buffer_output = watch->buffer_output;
+	time_t start_time, end_time;
+	
+	/* Output buffering variables */
+	char **output_buffer = NULL;
+	int output_count = 0;
+	int output_capacity = 0;
 	
 	if (watch == NULL || event == NULL) {
-		log_message(LOG_LEVEL_ERR, "Invalid arguments to command_execute");
+		thread_safe_log(LOG_LEVEL_ERR, "Invalid arguments to command_execute_sync_internal");
 		return false;
 	}
+	
+	/* Handle special config reload command */
+	if (strcmp(watch->command, "__config_reload__") == 0) {
+		/* This is handled by the monitor, not executed as a shell command */
+		return true;
+	}
+	
+	/* Record start time */
+	time(&start_time);
 	
 	/* Substitute placeholders in the command */
 	command = command_substitute_placeholders(watch->command, event);
@@ -393,13 +464,12 @@ bool command_execute(const watch_entry_t *watch, const file_event_t *event) {
 		return false;
 	}
 	
-	log_message(LOG_LEVEL_INFO, "Executing command: %s", command);
-	log_message(LOG_LEVEL_NOTICE, "[%s]: %s", watch->name, command);
+	thread_safe_log(LOG_LEVEL_INFO, "Executing command: %s", command);
 	
 	/* Create pipes for stdout and stderr if configured to capture output */
 	if (capture_output) {
 		if (pipe(stdout_pipe) < 0 || pipe(stderr_pipe) < 0) {
-			log_message(LOG_LEVEL_ERR, "Failed to create pipes: %s", strerror(errno));
+			thread_safe_log(LOG_LEVEL_ERR, "Failed to create pipes: %s", strerror(errno));
 			free(command);
 			return false;
 		}
@@ -408,7 +478,7 @@ bool command_execute(const watch_entry_t *watch, const file_event_t *event) {
 	/* Fork a child process */
 	pid = fork();
 	if (pid == -1) {
-		log_message(LOG_LEVEL_ERR, "Failed to fork: %s", strerror(errno));
+		thread_safe_log(LOG_LEVEL_ERR, "Failed to fork: %s", strerror(errno));
 		if (capture_output) {
 			close(stdout_pipe[0]); close(stdout_pipe[1]);
 			close(stderr_pipe[0]); close(stderr_pipe[1]);
@@ -438,55 +508,42 @@ bool command_execute(const watch_entry_t *watch, const file_event_t *event) {
 		execl("/bin/sh", "sh", "-c", command, NULL);
 		
 		/* If we get here, execl failed */
-		log_message(LOG_LEVEL_ERR, "Failed to execute command: %s", strerror(errno));
+		thread_safe_log(LOG_LEVEL_ERR, "Failed to execute command: %s", strerror(errno));
 		exit(EXIT_FAILURE);
 	}
 	
-	/* Read and log output line by line */
+	/* Parent process - create command intent */
+	command_intent_create(pid, command, event->path);
+	
+	/* Read and log output if configured - robust version */
 	if (capture_output) {
-		char buffer[4096] = {0};
-		char line_buffer[4096] = {0};
+		/* Close write ends in parent */
+		close(stdout_pipe[1]);
+		close(stderr_pipe[1]);
+		
+		char buffer[8192] = {0};
+		char line_buffer[8192] = {0};
 		size_t line_pos = 0;
 		ssize_t bytes_read;
 		fd_set read_fds;
-		struct timeval timeout;
 		int max_fd = (stdout_pipe[0] > stderr_pipe[0]) ? stdout_pipe[0] : stderr_pipe[0];
 		bool stdout_open = true, stderr_open = true;
-		int empty_read_count = 0;
-		bool last_line_was_empty = false;
 		
-		/* Process all output until both pipes are closed or timeout */
+		/* Read until both pipes are closed */
 		while (stdout_open || stderr_open) {
 			FD_ZERO(&read_fds);
 			if (stdout_open) FD_SET(stdout_pipe[0], &read_fds);
 			if (stderr_open) FD_SET(stderr_pipe[0], &read_fds);
 			
-			timeout.tv_sec = 0;
-			timeout.tv_usec = 100000; /* 100ms timeout */
+			/* No timeout - wait until data is available or pipes close */
+			int select_result = select(max_fd + 1, &read_fds, NULL, NULL, NULL);
 			
-			int select_result = select(max_fd + 1, &read_fds, NULL, NULL, &timeout);
-			
-			/* Timeout or error */
 			if (select_result <= 0) {
-				empty_read_count++;
-				
-				/* Log any partial lines remaining */
-				if (line_pos > 0) {
-					line_buffer[line_pos] = '\0';
-					log_message(LOG_LEVEL_NOTICE, "[%s]: %s", watch->name, line_buffer);
-					line_pos = 0;
+				if (select_result < 0 && errno != EINTR) {
+					thread_safe_log(LOG_LEVEL_WARNING, "select() failed: %s", strerror(errno));
 				}
-				
-				/* Break after several consecutive empty reads */
-				if (empty_read_count >= 5) {
-					break;  /* Exit the loop after 5 consecutive timeouts */
-				}
-				
 				continue;
 			}
-			
-			/* Reset counter when we get data */
-			empty_read_count = 0;
 			
 			/* Process stdout */
 			if (stdout_open && FD_ISSET(stdout_pipe[0], &read_fds)) {
@@ -500,17 +557,22 @@ bool command_execute(const watch_entry_t *watch, const file_event_t *event) {
 					/* Process line by line */
 					for (size_t i = 0; i < (size_t)bytes_read; i++) {
 						if (buffer[i] == '\n') {
-							/* Avoid consecutive empty lines */
 							line_buffer[line_pos] = '\0';
-							
-							if (line_pos > 0 || !last_line_was_empty) {
-								log_message(LOG_LEVEL_NOTICE, "[%s]: %s", watch->name, line_buffer);
+							if (line_pos > 0) {
+								if (buffer_output) {
+									/* Add to buffer */
+									if (!add_to_output_buffer(&output_buffer, &output_count, &output_capacity, line_buffer)) {
+										thread_safe_log(LOG_LEVEL_WARNING, "[%s]: Failed to buffer output, switching to real-time", watch->name);
+										buffer_output = false;
+										thread_safe_log(LOG_LEVEL_NOTICE, "[%s]: %s", watch->name, line_buffer);
+									}
+								} else {
+									/* Real-time logging */
+									thread_safe_log(LOG_LEVEL_NOTICE, "[%s]: %s", watch->name, line_buffer);
+								}
 							}
-							
-							last_line_was_empty = (line_pos == 0);
 							line_pos = 0;
 						} else if (line_pos < sizeof(line_buffer) - 1) {
-							/* Add character to buffer */
 							line_buffer[line_pos++] = buffer[i];
 						}
 					}
@@ -525,19 +587,49 @@ bool command_execute(const watch_entry_t *watch, const file_event_t *event) {
 					stderr_open = false;
 				} else {
 					buffer[bytes_read] = '\0';
-					/* Log stderr directly */
-					log_message(LOG_LEVEL_WARNING, "[%s]: %s", watch->name, buffer);
+					thread_safe_log(LOG_LEVEL_WARNING, "[%s]: %s", watch->name, buffer);
 				}
 			}
 		}
 		
-		/* Close read ends of pipes */
+		/* Log any remaining partial line */
+		if (line_pos > 0) {
+			line_buffer[line_pos] = '\0';
+			if (buffer_output) {
+				if (!add_to_output_buffer(&output_buffer, &output_count, &output_capacity, line_buffer)) {
+					thread_safe_log(LOG_LEVEL_NOTICE, "[%s]: %s", watch->name, line_buffer);
+				}
+			} else {
+				thread_safe_log(LOG_LEVEL_NOTICE, "[%s]: %s", watch->name, line_buffer);
+			}
+		}
+		
+		/* Close read ends */
 		close(stdout_pipe[0]);
 		close(stderr_pipe[0]);
 	}
 	
-	/* Parent process - create command intent */
-	command_intent_create(pid, command, event->path);
+	/* Wait for child process to complete */
+	int status;
+	waitpid(pid, &status, 0);
+	
+	/* Record end time */
+	time(&end_time);
+	
+	/* Flush buffered output if buffering was enabled */
+	if (capture_output && buffer_output && output_buffer) {
+		flush_output_buffer(watch, output_buffer, output_count);
+		
+		/* Clean up buffer */
+		for (int i = 0; i < output_count; i++) {
+			free(output_buffer[i]);
+		}
+		free(output_buffer);
+	}
+	
+	/* Log command completion */
+	thread_safe_log(LOG_LEVEL_INFO, "[%s] Finished execution (pid %d, duration: %lds, exit: %d)", 
+					watch->name, pid, end_time - start_time, WEXITSTATUS(status));
 	
 	/* Mark the entity state with the command execution */
 	entity_state_t *state = get_entity_state(event->path, ENTITY_UNKNOWN, (watch_entry_t *)watch);
@@ -546,6 +638,23 @@ bool command_execute(const watch_entry_t *watch, const file_event_t *event) {
 	}
 	
 	free(command);
-	
 	return true;
+}
+
+/* Command execution using thread pool */
+bool command_execute(const watch_entry_t *watch, const file_event_t *event) {
+	return thread_pool_submit(watch, event);
+}
+
+
+/* Clean up command subsystem */
+void command_cleanup(void) {
+	/* Wait for all pending commands to complete */
+	thread_pool_wait_all();
+	
+	/* Destroy thread pool */
+	thread_pool_destroy();
+	
+	/* Clean up command intents */
+	command_intent_cleanup();
 }

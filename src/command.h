@@ -3,9 +3,11 @@
 
 #include <stdbool.h>
 #include <time.h>
+#include <pthread.h>
 
 #include "config.h"
 #include "monitor.h"
+#include "threads.h"
 
 /* Debounce time in milliseconds (default: 500ms) */
 #define DEFAULT_DEBOUNCE_TIME_MS 500
@@ -28,7 +30,9 @@ typedef struct {
 
 /* Function prototypes */
 bool command_execute(const watch_entry_t *watch, const file_event_t *event);
+bool command_execute_sync(const watch_entry_t *watch, const file_event_t *event);
 char *command_substitute_placeholders(const char *command, const file_event_t *event);
+void thread_safe_log(int level, const char *format, ...);
 
 /* Initialize command subsystem */
 void command_init(void);

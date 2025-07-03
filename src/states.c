@@ -64,13 +64,40 @@ void entity_state_cleanup(void) {
 
 /* Calculate a hash value for a path and watch combination */
 static unsigned int hash_path_watch(const char *path, watch_entry_t *watch) {
-	unsigned int hash = 0;
-	if (!path || !watch) return 0;
+	unsigned int hash = 5381; /* djb2 hash initial value */
+	if (!path || !watch || !watch->name) return 0;
 	
-	/* Simple hash combining path and watch pointer address */
-	for (const char *p = path; *p; p++) hash = hash * 31 + *p;
-	hash = hash * 31 + (uintptr_t)watch; /* Ensure uniqueness per watch config */
+	/* djb2 hash algorithm for better distribution */
+	for (const char *p = path; *p; p++) {
+		hash = ((hash << 5) + hash) + (unsigned char)*p;
+	}
+	
+	/* Add separator to distinguish path from watch name */
+	hash = ((hash << 5) + hash) + '|';
+	
+	for (const char *p = watch->name; *p; p++) {
+		hash = ((hash << 5) + hash) + (unsigned char)*p;
+	}
+	
 	return hash % ENTITY_HASH_SIZE;
+}
+
+/* Check if an entity state is corrupted */
+static bool is_entity_state_corrupted(entity_state_t *state) {
+	if (!state) return true;
+	
+	/* Basic sanity check - try to detect completely invalid pointers */
+	if ((uintptr_t)state < 0x1000 || ((uintptr_t)state & 0x7) != 0) {
+		log_message(LOG_LEVEL_WARNING, "Entity state appears to be invalid pointer: %p", state);
+		return true;
+	}
+	
+	if (state->magic != ENTITY_STATE_MAGIC) {
+		log_message(LOG_LEVEL_WARNING, "Entity state corruption detected: magic=0x%x, expected=0x%x", 
+				   state->magic, ENTITY_STATE_MAGIC);
+		return true;
+	}
+	return false;
 }
 
 /* Initialize activity tracking for a new entity state */
@@ -679,6 +706,13 @@ void synchronize_activity_states(const char *path, entity_state_t *trigger_state
 	for (int i = 0; i < ENTITY_HASH_SIZE; i++) {
 		entity_state_t *state = entity_states[i];
 		while (state) {
+			/* Skip corrupted or invalid states */
+			if (is_entity_state_corrupted(state) || !state->path || !state->watch) {
+				log_message(LOG_LEVEL_DEBUG, "Skipping corrupted or invalid state during sync");
+				state = state->next;
+				continue;
+			}
+			
 			if (strcmp(state->path, path) == 0 && state != trigger_state) {
 				/* Take the most recent time between this state and our current latest */
 				if (state->last_activity_in_tree.tv_sec > latest_activity_time.tv_sec ||
@@ -701,17 +735,26 @@ void synchronize_activity_states(const char *path, entity_state_t *trigger_state
 	for (int i = 0; i < ENTITY_HASH_SIZE; i++) {
 		entity_state_t *state = entity_states[i];
 		while (state) {
+			/* Skip corrupted or invalid states */
+			if (is_entity_state_corrupted(state) || !state->path || !state->watch) {
+				log_message(LOG_LEVEL_DEBUG, "Skipping corrupted or invalid state during sync");
+				state = state->next;
+				continue;
+			}
+			
 			if (strcmp(state->path, path) == 0 && state != trigger_state) {
 				log_message(LOG_LEVEL_DEBUG, "Synchronizing state for path %s (watch: %s) with trigger (watch: %s)",
-					   path, state->watch ? state->watch->name : "unknown", 
-					   trigger_state->watch ? trigger_state->watch->name : "unknown");
+					   path, (state->watch && state->watch->name) ? state->watch->name : "unknown", 
+					   (trigger_state->watch && trigger_state->watch->name) ? trigger_state->watch->name : "unknown");
 				
 				/* Determine watch configuration compatibility */
 				bool fully_compatible = false;
 				bool partially_compatible = false;
 				
 				/* Skip invalid states */
-				if (!state->watch || !trigger_state->watch) {
+				if (!state->watch || !trigger_state->watch || 
+					!state->watch->name || !trigger_state->watch->name) {
+					log_message(LOG_LEVEL_DEBUG, "Skipping state with invalid watch pointers during sync");
 					continue;
 				}
 				
@@ -1145,10 +1188,14 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 
 	/* Look for existing state matching both path AND watch */
 	while (state) {
-		if (strcmp(state->path, path) == 0 && state->watch == watch) {
+		if (strcmp(state->path, path) == 0 && 
+		    state->watch && watch && state->watch->name && watch->name &&
+		    strcmp(state->watch->name, watch->name) == 0) {
 			if (state->type == ENTITY_UNKNOWN && type != ENTITY_UNKNOWN) {
 				state->type = type; /* Update type if it becomes known */
 			}
+			/* Update watch pointer to point to current configuration */
+			state->watch = watch;
 			return state;
 		}
 		state = state->next;
@@ -1161,6 +1208,9 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 		return NULL;
 	}
 
+	/* Initialize magic number for corruption detection */
+	state->magic = ENTITY_STATE_MAGIC;
+	
 	state->path = strdup(path);
 	if (!state->path) {
 		log_message(LOG_LEVEL_ERR, "Failed to duplicate path string for entity state: %s", path);
@@ -1373,6 +1423,12 @@ bool process_event(watch_entry_t *watch, file_event_t *event, entity_type_t enti
 		return false;
 	}
 	
+	/* Additional safety checks for watch structure */
+	if (!watch->name || !watch->command) {
+		log_message(LOG_LEVEL_ERR, "process_event: Watch has NULL name or command");
+		return false;
+	}
+	
 	log_message(LOG_LEVEL_DEBUG, "Processing event for %s (watch: %s, type: %s)",
 			  event->path, watch->name, event_type_to_string(event->type));
 	
@@ -1451,5 +1507,69 @@ bool process_event(watch_entry_t *watch, file_event_t *event, entity_type_t enti
 	} else {
 		log_message(LOG_LEVEL_DEBUG, "Command for %s (op %d) deferred or debounced", state->path, op);
 		return false;
+	}
+}
+
+/* Update entity states with new watch pointers after config reload */
+void update_entity_states_after_reload(watch_entry_t *old_watch, watch_entry_t *new_watch) {
+	if (!old_watch || !new_watch || !old_watch->name || !new_watch->name || !entity_states) {
+		return;
+	}
+	
+	log_message(LOG_LEVEL_DEBUG, "Updating entity states for watch: %s", old_watch->name);
+	
+	/* Iterate through all entity states and update pointers by name comparison */
+	for (int i = 0; i < ENTITY_HASH_SIZE; i++) {
+		entity_state_t *state = entity_states[i];
+		while (state) {
+			entity_state_t *next = state->next; /* Save next pointer early */
+			
+			/* Skip corrupted or invalid states */
+			if (is_entity_state_corrupted(state) || !state->path || !state->watch) {
+				log_message(LOG_LEVEL_DEBUG, "Skipping corrupted state during watch update");
+				state = next;
+				continue;
+			}
+			
+			/* Update both exact pointer matches and name matches */
+			if ((state->watch == old_watch) || 
+			    (state->watch->name && strcmp(state->watch->name, old_watch->name) == 0)) {
+				log_message(LOG_LEVEL_DEBUG, "Updated watch pointer for state: %s", state->path);
+				state->watch = new_watch;
+			}
+			state = next;
+		}
+	}
+}
+
+/* Clean up entity states that reference deleted watches after config reload */
+void cleanup_orphaned_entity_states(config_t *old_config) {
+	if (!old_config || !entity_states) {
+		return;
+	}
+	
+	log_message(LOG_LEVEL_DEBUG, "Cleaning up orphaned entity states after config reload");
+	
+	/* Remove all entity states - they will be recreated as needed with new watch pointers */
+	for (int i = 0; i < ENTITY_HASH_SIZE; i++) {
+		entity_state_t *state = entity_states[i];
+		
+		while (state) {
+			entity_state_t *next = state->next;
+			
+			log_message(LOG_LEVEL_DEBUG, "Removing entity state for path %s during cleanup", 
+					   state->path ? state->path : "<unknown>");
+			
+			/* Free the state */
+			if (state->path) {
+				free(state->path);
+			}
+			free(state);
+			
+			state = next;
+		}
+		
+		/* Clear the hash table entry */
+		entity_states[i] = NULL;
 	}
 }

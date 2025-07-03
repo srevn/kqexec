@@ -1,8 +1,9 @@
+/src/main.o
 /src/states.o
 /src/monitor.o
-/src/main.o
-/src/log.o
+/src/threads.o
 /src/daemon.o
 /src/config.o
 /src/command.o
+/src/log.o
 /kqexec

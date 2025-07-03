@@ -157,6 +157,15 @@ void config_destroy(config_t *config) {
 static bool config_add_watch(config_t *config, watch_entry_t *watch) {
 	watch_entry_t **new_watches;
 	
+	/* Check for duplicate watch names */
+	for (int i = 0; i < config->watch_count; i++) {
+		if (config->watches[i] && config->watches[i]->name && watch->name &&
+		    strcmp(config->watches[i]->name, watch->name) == 0) {
+			log_message(LOG_LEVEL_ERR, "Duplicate watch name '%s' found in configuration", watch->name);
+			return false;
+		}
+	}
+	
 	new_watches = realloc(config->watches, (config->watch_count + 1) * sizeof(watch_entry_t *));
 	if (new_watches == NULL) {
 		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for watch entry");
@@ -263,9 +272,10 @@ bool config_parse_file(config_t *config, const char *filename) {
 			}
 			
 			current_watch->name = strdup(str + 1);
-			current_watch->log_output = false; /* Default to not logging command output */
-			current_watch->recursive = true;  /* Default to recursive for directories */
-			current_watch->hidden = false;	/* Default to not including hidden files */
+			current_watch->log_output = false;     /* Default to not logging command output */
+			current_watch->buffer_output = false;  /* Default to not buffering output */
+			current_watch->recursive = true;       /* Default to recursive for directories */
+			current_watch->hidden = false;         /* Default to not including hidden files */
 			state = SECTION_ENTRY;
 			
 			continue;
@@ -311,6 +321,15 @@ bool config_parse_file(config_t *config, const char *filename) {
 					current_watch->log_output = false;
 				} else {
 					log_message(LOG_LEVEL_WARNING, "Invalid value for log_output at line %d: %s", 
+							  line_number, value);
+				}
+			} else if (strcasecmp(key, "buffer_output") == 0) {
+				if (strcasecmp(value, "true") == 0 || strcmp(value, "1") == 0) {
+					current_watch->buffer_output = true;
+				} else if (strcasecmp(value, "false") == 0 || strcmp(value, "0") == 0) {
+					current_watch->buffer_output = false;
+				} else {
+					log_message(LOG_LEVEL_WARNING, "Invalid value for buffer_output at line %d: %s", 
 							  line_number, value);
 				}
 			} else if (strcasecmp(key, "recursive") == 0) {

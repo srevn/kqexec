@@ -218,8 +218,8 @@ int main(int argc, char *argv[]) {
 	}
 	
 	monitor_destroy(monitor);
-	command_intent_cleanup();
 	entity_state_cleanup();
+	command_cleanup();
 	log_close();
 	
 	return EXIT_SUCCESS;
