@@ -87,6 +87,7 @@ else ifeq ($(UNAME_S),Darwin)
 		echo "Installing launchd plist to $(LAUNCHD_DIR)"; \
 		mkdir -p $(LAUNCHD_DIR); \
 		install -m 644 etc/com.kqexec.daemon.plist.sample $(LAUNCHD_DIR)/com.kqexec.daemon.plist; \
+		rm -f etc/com.kqexec.daemon.plist.sample; \
 		echo "Installed: $(LAUNCHD_DIR)/com.kqexec.daemon.plist"; \
 		echo "To load the daemon now, run:"; \
 		echo "launchctl bootstrap gui/`id -u` $(LAUNCHD_DIR)/com.kqexec.daemon.plist"; \
