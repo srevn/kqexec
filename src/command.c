@@ -119,6 +119,17 @@ bool is_path_affected_by_command(const char *path) {
 		if (now > command_intents[i].expected_end_time) {
 			log_message(LOG_LEVEL_DEBUG, "Command intent %d expired", i);
 			command_intents[i].active = false;
+			active_intent_count--;
+			
+			/* Free affected paths memory to prevent leak */
+			if (command_intents[i].affected_paths) {
+				for (int j = 0; j < command_intents[i].affected_path_count; j++) {
+					free(command_intents[i].affected_paths[j]);
+				}
+				free(command_intents[i].affected_paths);
+				command_intents[i].affected_paths = NULL;
+			}
+			command_intents[i].affected_path_count = 0;
 			continue;
 		}
 		
