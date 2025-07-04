@@ -256,19 +256,15 @@ static void check_queue_add_or_update(monitor_t *monitor, const char *path,
 					  "Failed to add watch to existing queue entry for %s", path);
 		}
 		
-		/* Update check time - only if the new time is earlier */
-		if (check_queue_compare(&next_check, &entry->next_check) < 0) {
-			entry->next_check = next_check;
-			
-			/* Restore heap property by trying both up and down heapify */
-			check_queue_heapify_up(monitor->check_queue, index);
-			check_queue_heapify_down(monitor->check_queue, 
-								   monitor->check_queue_size, index);
-								   
-			log_message(LOG_LEVEL_DEBUG, 
-					  "Updated check time for %s (earlier time: %ld.%09ld)",
+		/* Update check time - always update to the new time */
+		entry->next_check = next_check;
+		
+		/* Restore heap property by trying both up and down heapify */
+		check_queue_heapify_up(monitor->check_queue, index);
+		check_queue_heapify_down(monitor->check_queue, monitor->check_queue_size, index);
+		
+		log_message(LOG_LEVEL_DEBUG, "Updated check time for %s (new time: %ld.%09ld)",
 					  path, (long)next_check.tv_sec, next_check.tv_nsec);
-		}
 		return;
 	}
 	
@@ -915,7 +911,7 @@ void schedule_deferred_check(monitor_t *monitor, entity_state_t *state) {
 	
 	/* Fix: Ensure we don't use a timestamp in the past */
 	if (root_state->last_activity_in_tree.tv_sec < now.tv_sec - 10) {
-		log_message(LOG_LEVEL_WARNING, 
+		log_message(LOG_LEVEL_DEBUG, 
 				  "Last activity timestamp for %s is too old, using current time",
 				  root_state->path);
 		root_state->last_activity_in_tree = now;

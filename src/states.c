@@ -891,10 +891,13 @@ void record_activity(entity_state_t *state, operation_type_t op) {
 	if (state->activity_sample_count < MAX_ACTIVITY_SAMPLES) {
 		state->activity_sample_count++;
 	}
-
+	
 	/* Reset stability check counter when new activity occurs */
 	state->stability_check_count = 0;
-
+	
+	/* Update activity timestamp for this state, which is the basis for tree activity time */
+	state->last_activity_in_tree = state->last_update;
+	
 	/* Update Root State's Tree Activity Time for recursive watches */
 	if (state->watch && state->watch->recursive) {
 		/* First, find the root state */
