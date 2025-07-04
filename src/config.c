@@ -203,6 +203,7 @@ bool config_parse_file(config_t *config, const char *filename) {
 	
 	while (fgets(line, sizeof(line), fp) != NULL) {
 		char *str;
+		char continued_line[MAX_LINE_LEN * 10] = {0};  /* Buffer for continued lines */
 		
 		line_number++;
 		
@@ -219,6 +220,52 @@ bool config_parse_file(config_t *config, const char *filename) {
 		if (*str == '\0') {
 			continue;
 		}
+		
+		/* Handle line continuation */
+		strcpy(continued_line, str);
+		
+		/* Check if line ends with backslash for continuation */
+		while (strlen(continued_line) > 0 && continued_line[strlen(continued_line) - 1] == '\\') {
+			char next_line[MAX_LINE_LEN];
+			char *next_str;
+			
+			/* Remove the trailing backslash */
+			continued_line[strlen(continued_line) - 1] = '\0';
+			
+			/* Read next line */
+			if (fgets(next_line, sizeof(next_line), fp) == NULL) {
+				break;  /* End of file */
+			}
+			
+			line_number++;
+			
+			/* Remove comments from next line */
+			next_str = strchr(next_line, '#');
+			if (next_str != NULL) {
+				*next_str = '\0';
+			}
+			
+			/* Trim whitespace from next line */
+			next_str = trim(next_line);
+			
+			/* Skip empty continuation lines */
+			if (*next_str == '\0') {
+				continue;
+			}
+			
+			/* Append next line with a space separator */
+			if (strlen(continued_line) + strlen(next_str) + 1 < sizeof(continued_line)) {
+				strcat(continued_line, " ");
+				strcat(continued_line, next_str);
+			} else {
+				log_message(LOG_LEVEL_ERR, "Line too long after continuation at line %d", line_number);
+				fclose(fp);
+				return false;
+			}
+		}
+		
+		/* Use the continued line for further processing */
+		str = continued_line;
 		
 		/* Parse section header */
 		if (*str == '[') {
