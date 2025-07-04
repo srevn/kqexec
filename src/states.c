@@ -695,7 +695,10 @@ entity_state_t *find_root_state(entity_state_t *state) {
 
 /* Find all entity states for a path (regardless of watch) */
 void synchronize_activity_states(const char *path, entity_state_t *trigger_state) {
-	if (!path || !trigger_state || !entity_states) {
+	if (!path || !trigger_state || !entity_states || is_entity_state_corrupted(trigger_state)) {
+		if (trigger_state && is_entity_state_corrupted(trigger_state)) {
+			log_message(LOG_LEVEL_WARNING, "Skipping synchronization due to corrupted trigger state");
+		}
 		return;
 	}
 	
@@ -889,7 +892,7 @@ void record_activity(entity_state_t *state, operation_type_t op) {
 	if (state->watch && state->watch->recursive) {
 		/* First, find the root state */
 		entity_state_t *root = find_root_state(state);
-		if (root) {
+		if (root && !is_entity_state_corrupted(root)) {
 			/* Update the root's tree activity time */
 			root->last_activity_in_tree = state->last_update;
 			root->activity_in_progress = true;
@@ -1426,7 +1429,7 @@ bool should_execute_command(entity_state_t *state, operation_type_t op, int defa
 	/* Directory content changes always defer execution to process_deferred_dir_scans */
 	if (op == OP_DIR_CONTENT_CHANGED) {
 		entity_state_t *root = find_root_state(state);
-		if (root && g_current_monitor) {
+		if (root && g_current_monitor && !is_entity_state_corrupted(root)) {
 			/* Always trigger a deferred check; queue deduplicates */
 			root->activity_in_progress = true;
 			log_message(LOG_LEVEL_DEBUG, "Directory content change for %s, marked root %s as active - command deferred",

@@ -672,9 +672,21 @@ bool command_execute_sync(const watch_entry_t *watch, const file_event_t *event)
 		close(stderr_pipe[0]);
 	}
 	
+	/* Block SIGCHLD to prevent race condition with signal handler */
+	sigset_t mask, oldmask;
+	sigemptyset(&mask);
+	sigaddset(&mask, SIGCHLD);
+	sigprocmask(SIG_BLOCK, &mask, &oldmask);
+	
 	/* Wait for child process to complete */
 	int status;
 	waitpid(pid, &status, 0);
+	
+	/* Mark the command intent as complete immediately */
+	command_intent_mark_complete(pid);
+	
+	/* Restore previous signal mask */
+	sigprocmask(SIG_SETMASK, &oldmask, NULL);
 	
 	/* Record end time */
 	time(&end_time);
