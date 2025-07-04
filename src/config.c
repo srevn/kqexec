@@ -63,12 +63,12 @@ event_type_t config_parse_events(const char *events_str) {
 	while (token != NULL) {
 		char *trimmed_token = trim(token);
 		
-		if (strcasecmp(trimmed_token, "CONTENT") == 0) {
-			events |= EVENT_CONTENT;
+		if (strcasecmp(trimmed_token, "STRUCTURE") == 0) {
+			events |= EVENT_STRUCTURE;
 		} else if (strcasecmp(trimmed_token, "METADATA") == 0) {
 			events |= EVENT_METADATA;
-		} else if (strcasecmp(trimmed_token, "MODIFY") == 0) {
-			events |= EVENT_MODIFY;
+		} else if (strcasecmp(trimmed_token, "CONTENT") == 0) {
+			events |= EVENT_CONTENT;
 		} else if (strcasecmp(trimmed_token, "ALL") == 0) {
 			events |= EVENT_ALL;
 		} else {
@@ -90,14 +90,14 @@ const char *event_type_to_string(event_type_t event) {
 	static char buffer[64];
 	buffer[0] = '\0';
 	
-	if (event & EVENT_CONTENT) {
-		strcat(buffer, "CONTENT ");
+	if (event & EVENT_STRUCTURE) {
+		strcat(buffer, "STRUCTURE ");
 	}
 	if (event & EVENT_METADATA) {
 		strcat(buffer, "METADATA ");
 	}
-	if (event & EVENT_MODIFY) {
-		strcat(buffer, "MODIFY ");
+	if (event & EVENT_CONTENT) {
+		strcat(buffer, "CONTENT ");
 	}
 	
 	/* Remove trailing space if any */

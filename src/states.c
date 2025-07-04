@@ -811,14 +811,14 @@ void synchronize_activity_states(const char *path, entity_state_t *trigger_state
 				state->activity_in_progress = any_watch_active;
 				
 				/* Sync change detection flags based on overlapping event types */
-				if (state->watch->events & EVENT_CONTENT && trigger_state->watch->events & EVENT_CONTENT) {
-					state->content_changed = state->content_changed || trigger_state->content_changed;
+				if (state->watch->events & EVENT_STRUCTURE && trigger_state->watch->events & EVENT_STRUCTURE) {
+					state->structure_changed = state->structure_changed || trigger_state->structure_changed;
 				}
 				if (state->watch->events & EVENT_METADATA && trigger_state->watch->events & EVENT_METADATA) {
 					state->metadata_changed = state->metadata_changed || trigger_state->metadata_changed;
 				}
-				if (state->watch->events & EVENT_MODIFY && trigger_state->watch->events & EVENT_MODIFY) {
-					state->structure_changed = state->structure_changed || trigger_state->structure_changed;
+				if (state->watch->events & EVENT_CONTENT && trigger_state->watch->events & EVENT_CONTENT) {
+					state->content_changed = state->content_changed || trigger_state->content_changed;
 				}
 				
 				/* Only sync directory statistics for fully or partially compatible watches */
@@ -1311,9 +1311,9 @@ operation_type_t determine_operation(entity_state_t *state, event_type_t new_eve
 	if (!state) return OP_NONE;
 
 	/* Update state change flags based on the new event type */
-	if (new_event_type & EVENT_CONTENT) state->content_changed = true;
+	if (new_event_type & EVENT_STRUCTURE) state->structure_changed = true;
 	if (new_event_type & EVENT_METADATA) state->metadata_changed = true;
-	if (new_event_type & EVENT_MODIFY) state->structure_changed = true;
+	if (new_event_type & EVENT_CONTENT) state->content_changed = true;
 
 	/* Check current existence vs tracked existence */
 	struct stat st;
@@ -1348,13 +1348,13 @@ operation_type_t determine_operation(entity_state_t *state, event_type_t new_eve
 		state->exists = true;
 		
 		/* Prioritize which operation to report if multiple flags are set */
-		if (state->type == ENTITY_DIRECTORY && (state->structure_changed || state->content_changed)) {
+		if (state->type == ENTITY_DIRECTORY && (state->content_changed || state->structure_changed)) {
 			determined_op = OP_DIR_CONTENT_CHANGED;
-			log_message(LOG_LEVEL_DEBUG, "Directory %s content/structure changed", state->path);
-		} else if (state->type == ENTITY_FILE && state->structure_changed) {
-			determined_op = OP_FILE_RENAMED;
-			log_message(LOG_LEVEL_DEBUG, "File %s structure changed (possible rename)", state->path);
+			log_message(LOG_LEVEL_DEBUG, "Directory %s structure changed", state->path);
 		} else if (state->type == ENTITY_FILE && state->content_changed) {
+			determined_op = OP_FILE_RENAMED;
+			log_message(LOG_LEVEL_DEBUG, "File %s content changed", state->path);
+		} else if (state->type == ENTITY_FILE && state->structure_changed) {
 			determined_op = OP_FILE_CONTENT_CHANGED;
 			log_message(LOG_LEVEL_DEBUG, "File %s content changed", state->path);
 		} else if (state->metadata_changed) {
@@ -1376,12 +1376,12 @@ operation_type_t determine_operation(entity_state_t *state, event_type_t new_eve
 event_type_t operation_to_event_type(operation_type_t op) {
 	switch (op) {
 		case OP_FILE_CONTENT_CHANGED:
-		case OP_DIR_CONTENT_CHANGED:    return EVENT_CONTENT;
+		case OP_DIR_CONTENT_CHANGED:    return EVENT_STRUCTURE;
 		case OP_FILE_CREATED:
 		case OP_FILE_DELETED:
 		case OP_FILE_RENAMED:
 		case OP_DIR_CREATED:
-		case OP_DIR_DELETED:            return EVENT_MODIFY;
+		case OP_DIR_DELETED:            return EVENT_CONTENT;
 		case OP_FILE_METADATA_CHANGED:
 		case OP_DIR_METADATA_CHANGED:   return EVENT_METADATA;
 		default:                        return EVENT_NONE;
@@ -1528,9 +1528,9 @@ bool process_event(watch_entry_t *watch, file_event_t *event, entity_type_t enti
 			
 			/* Update last command time and reset change flags */
 			state->last_command_time = state->last_update.tv_sec;
-			state->content_changed = false;
-			state->metadata_changed = false;
 			state->structure_changed = false;
+			state->metadata_changed = false;
+			state->content_changed = false;
 			
 			return true;
 		} else {

@@ -525,13 +525,13 @@ static bool monitor_add_kqueue_watch(monitor_t *monitor, watch_info_t *info) {
 	int flags = 0;
 	
 	/* Set up flags based on consolidated events */
-	if (info->watch->events & EVENT_CONTENT) {
+	if (info->watch->events & EVENT_STRUCTURE) {
 		flags |= NOTE_WRITE | NOTE_EXTEND;
 	}
 	if (info->watch->events & EVENT_METADATA) {
 		flags |= NOTE_ATTRIB | NOTE_LINK;
 	}
-	if (info->watch->events & EVENT_MODIFY) {
+	if (info->watch->events & EVENT_CONTENT) {
 		flags |= NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE;
 	}
 	
@@ -814,7 +814,7 @@ bool monitor_setup(monitor_t *monitor) {
 		config_watch->name = strdup("__config_file__");
 		config_watch->path = strdup(monitor->config_file);
 		config_watch->type = WATCH_FILE;
-		config_watch->events = EVENT_MODIFY;
+		config_watch->events = EVENT_CONTENT;
 		config_watch->command = strdup("__config_reload__");
 		config_watch->log_output = false;
 		config_watch->recursive = false;
@@ -852,7 +852,7 @@ static event_type_t flags_to_event_type(uint32_t flags) {
 	
 	/* Content changes */
 	if (flags & (NOTE_WRITE | NOTE_EXTEND)) {
-		event |= EVENT_CONTENT;
+		event |= EVENT_STRUCTURE;
 	}
 	
 	/* Metadata changes */
@@ -862,7 +862,7 @@ static event_type_t flags_to_event_type(uint32_t flags) {
 	
 	/* Modification events */
 	if (flags & (NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE)) {
-		event |= EVENT_MODIFY;
+		event |= EVENT_CONTENT;
 	}
 	
 	return event;
@@ -1357,7 +1357,7 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 	/* Create synthetic event */
 	file_event_t synthetic_event = {
 		.path = entry->path,
-		.type = EVENT_CONTENT,
+		.type = EVENT_STRUCTURE,
 		.time = root_state->last_update,
 		.wall_time = root_state->wall_time,
 		.user_id = getuid()
@@ -1397,9 +1397,9 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 			watch_state->stability_lost = false;
 			
 			/* Reset state change flags */
-			watch_state->content_changed = false;
-			watch_state->metadata_changed = false;
 			watch_state->structure_changed = false;
+			watch_state->metadata_changed = false;
+			watch_state->content_changed = false;
 			
 			/* Update last command time */
 			watch_state->last_command_time = current_time->tv_sec;
@@ -1736,7 +1736,7 @@ bool monitor_reload(monitor_t *monitor) {
     new_config_watch_entry->name = strdup("__config_file__");
     new_config_watch_entry->path = strdup(monitor->config_file);
     new_config_watch_entry->type = WATCH_FILE;
-    new_config_watch_entry->events = EVENT_MODIFY;
+    new_config_watch_entry->events = EVENT_CONTENT;
     new_config_watch_entry->command = strdup("__config_reload__");
 
     watch_entry_t **temp_watches = realloc(new_config->watches, (new_config->watch_count + 1) * sizeof(watch_entry_t *));

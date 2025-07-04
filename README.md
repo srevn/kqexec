@@ -102,7 +102,7 @@ hidden = false               # Whether to monitor hidden files/dirs (default: fa
 
 Kqexec supports the following event types that can be specified in the configuration file:
 
-- `CONTENT`: Monitors directory structure changes
+- `STRUCTURE`: Monitors directory structure changes
   - Maps to NOTE_WRITE and NOTE_EXTEND in kqueue
   - Most effective for directories, not files
   - Triggers when a file's content is modified within a directory
@@ -115,7 +115,7 @@ Kqexec supports the following event types that can be specified in the configura
   - Triggers when permissions, timestamps, or link counts change
   - Example: When `chmod` or `chown` is used on a file or directory
 
-- `MODIFY`: Monitors changes to file contents
+- `CONTENT`: Monitors changes to file contents
   - Maps to NOTE_DELETE, NOTE_RENAME, and NOTE_REVOKE in kqueue
   - Triggers when a file's content is modified
   - Example: When a text editor saves changes to a file
@@ -139,7 +139,7 @@ Commands can include the following placeholders that will be replaced at runtime
 [Configuration Files]
 # Monitor system configuration files
 directory = /usr/local/etc
-events = CONTENT
+events = STRUCTURE,METADATA
 command = logger -p daemon.notice "Configuration changed in %p"
 recursive = true
 hidden = false
@@ -147,7 +147,7 @@ hidden = false
 [Log File]
 # Monitor a specific log file
 file = /var/log/kqexec.log
-events = MODIFY
+events = CONTENT
 command = echo "Log file %p was modified at %t by user %u (event: %e)" >> /var/log/kqexec_activity.log
 ```
 
@@ -157,7 +157,7 @@ command = echo "Log file %p was modified at %t by user %u (event: %e)" >> /var/l
 [Web Content]
 # Monitor web server content directory recursively
 directory = /usr/local/www/data
-events = CONTENT
+events = STRUCTURE
 command = /usr/local/bin/refresh_cache.sh %p %e
 log_output = true
 buffer_output = true
@@ -167,13 +167,13 @@ hidden = false
 [SSL Certificates]
 # Monitor certificate expiration
 file = /etc/ssl/certs
-events = MODIFY,CONTENT,METADATA
+events = CONTENT,STRUCTURE,METADATA
 command = /usr/local/bin/cert_check.sh
 
 [User Configuration]
 # Monitor user config directories, including hidden files
 directory = /home/user/.config
-events = CONTENT
+events = STRUCTURE
 command = logger -p user.notice "User config changed: %p"
 recursive = true
 hidden = true
@@ -327,7 +327,7 @@ Enable hidden file monitoring with the `hidden` or `include_hidden` option in th
 ```ini
 [User Configs]
 directory = /home/user/.config
-events = MODIFY,CREATE
+events = STRUCTURE
 command = logger "Config changed: %p"
 recursive = true
 hidden = true
@@ -352,6 +352,13 @@ If you prefer separate log file, add this lines to `/etc/syslog.conf`
 ```ini
 !kqexec
 *.*              /var/log/kqexec.log
+```
+
+or
+
+```ini
+!kqexec
+*.notice         /var/log/kqexec.log
 ```
 
 On macOS:

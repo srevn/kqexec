@@ -17,9 +17,9 @@ struct file_event;
 typedef struct file_event file_event_t;
 
 /* Activity window size for detecting quiet periods (in milliseconds) */
-#define QUIET_PERIOD_MS 500       /* Default quiet period */
-#define DIR_QUIET_PERIOD_MS 1000  /* Longer quiet period for directory operations */
-#define MAX_ACTIVITY_SAMPLES 5    /* Number of recent events to track for activity analysis */
+#define QUIET_PERIOD_MS 500            /* Default quiet period */
+#define DIR_QUIET_PERIOD_MS 1000       /* Longer quiet period for directory operations */
+#define MAX_ACTIVITY_SAMPLES 5         /* Number of recent events to track for activity analysis */
 
 /* Entity type for clarity in handling */
 typedef enum {
@@ -82,9 +82,9 @@ typedef struct entity_state {
     
     /* Current state */
     bool exists;                         /* Entity currently exists */
-    bool content_changed;                /* Content has changed */
-    bool metadata_changed;               /* Metadata has changed */
     bool structure_changed;              /* Structural change occurred */
+    bool metadata_changed;               /* Metadata has changed */
+    bool content_changed;                /* Content has changed */
     int failed_checks;                   /* Number of consecutive failed stability checks */
     
     /* Command tracking */

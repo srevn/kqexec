@@ -122,7 +122,7 @@ kqexec.conf.sample:
 	@echo "[Configuration]" > $@
 	@echo "# Monitor system config files" >> $@
 	@echo "directory = /usr/local/etc" >> $@
-	@echo "events = MODIFY" >> $@
+	@echo "events = CONTENT" >> $@
 	@echo "command = logger -p daemon.notice \"Configuration changed in %p\"" >> $@
 	@echo "log_output = false" >> $@
 	@echo "buffer_output = false" >> $@
@@ -132,7 +132,7 @@ kqexec.conf.sample:
 	@echo "[Log File]" >> $@
 	@echo "# Monitor file" >> $@
 	@echo "file = /var/log/kqexec.log" >> $@
-	@echo "events = MODIFY" >> $@
+	@echo "events = CONTENT" >> $@
 	@echo "command = echo \"Log file %p was modified at %t by user %u (event: %e)\" >> /var/log/kqexec_activity.log" >> $@
 	@echo "log_output = true" >> $@
 	@echo "processing_delay = 100" >> $@
@@ -144,7 +144,7 @@ ifeq ($(UNAME_S),Darwin)
 else
 	@echo "directory = /home/user/.config" >> $@
 endif
-	@echo "events = MODIFY,CONTENT,METADATA" >> $@
+	@echo "events = CONTENT,STRUCTURE,METADATA" >> $@
 	@echo "command = logger -p user.notice \"User configuration changed in %p\"" >> $@
 	@echo "recursive = true" >> $@
 	@echo "hidden = true" >> $@
