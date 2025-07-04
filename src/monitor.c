@@ -817,8 +817,11 @@ bool monitor_setup(monitor_t *monitor) {
 		config_watch->events = EVENT_CONTENT;
 		config_watch->command = strdup("__config_reload__");
 		config_watch->log_output = false;
+		config_watch->buffer_output = false;
 		config_watch->recursive = false;
 		config_watch->hidden = false;
+		config_watch->complexity = 1.0;
+		config_watch->processing_delay = 0;
 		
 		/* Add to config structure so it gets managed properly */
 		watch_entry_t **new_watches = realloc(monitor->config->watches, (monitor->config->watch_count + 1) * sizeof(watch_entry_t *));
@@ -1738,6 +1741,12 @@ bool monitor_reload(monitor_t *monitor) {
     new_config_watch_entry->type = WATCH_FILE;
     new_config_watch_entry->events = EVENT_CONTENT;
     new_config_watch_entry->command = strdup("__config_reload__");
+    new_config_watch_entry->log_output = false;
+    new_config_watch_entry->buffer_output = false;
+    new_config_watch_entry->recursive = false;
+    new_config_watch_entry->hidden = false;
+    new_config_watch_entry->complexity = 1.0;
+    new_config_watch_entry->processing_delay = 0;
 
     watch_entry_t **temp_watches = realloc(new_config->watches, (new_config->watch_count + 1) * sizeof(watch_entry_t *));
     if (!temp_watches) {
@@ -1798,6 +1807,10 @@ bool monitor_reload(monitor_t *monitor) {
 				new_watch->events == old_watch->events &&
 				new_watch->recursive == old_watch->recursive &&
 				new_watch->hidden == old_watch->hidden &&
+				new_watch->log_output == old_watch->log_output &&
+				new_watch->buffer_output == old_watch->buffer_output &&
+				new_watch->complexity == old_watch->complexity &&
+				new_watch->processing_delay == old_watch->processing_delay &&
 				strcmp(new_watch->command, old_watch->command) == 0) {
 				
 				log_message(LOG_LEVEL_DEBUG, "Watch unchanged: %s (watch: %s)", new_watch->path, new_watch->name);
