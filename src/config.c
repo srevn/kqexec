@@ -324,6 +324,7 @@ bool config_parse_file(config_t *config, const char *filename) {
 			current_watch->recursive = true;       /* Default to recursive for directories */
 			current_watch->hidden = false;         /* Default to not including hidden files */
 			current_watch->processing_delay = 0;   /* Default to no delay */
+			current_watch->complexity = 1.0;       /* Default complexity multiplier */
 			state = SECTION_ENTRY;
 			
 			continue;
@@ -398,6 +399,15 @@ bool config_parse_file(config_t *config, const char *filename) {
 					log_message(LOG_LEVEL_WARNING, "Invalid value for hidden at line %d: %s", 
 							  line_number, value);
 				}
+			} else if (strcasecmp(key, "complexity") == 0) {
+				double complexity_value = atof(value);
+				if (complexity_value <= 0) {
+					log_message(LOG_LEVEL_WARNING, "Invalid complexity value at line %d: %s (must be > 0)",
+							  line_number, value);
+					current_watch->complexity = 1.0;
+				} else {
+					current_watch->complexity = complexity_value;
+				}	
 			} else if (strcasecmp(key, "processing_delay") == 0) {
 				int delay_value = atoi(value);
 				if (delay_value < 0) {

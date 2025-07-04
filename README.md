@@ -90,11 +90,12 @@ file = /path/to/file         # For monitoring a single file
 directory = /path/to/dir     # For monitoring a directory
 events = EVENT1,EVENT2       # Comma-separated list of events
 command = command to execute # Command to run when events occur
+processing_delay = 5000      # Delay in milliseconds before processing events (default: 0)
+complexity = 2.5             # Higher values reduce I/O by waiting longer for stability checks. (default: 1.0)
 log_output = false           # Whether to capture and log command output (default: false)
 buffer_output = false        # Whether to buffer log output until command completes (default: false)
 recursive = true             # For recursive directory monitoring (default: true)
 hidden = false               # Whether to monitor hidden files/dirs (default: false)
-processing_delay = 1000      # Delay in milliseconds before processing events (default: 0)
 ```
 
 ### Event Types

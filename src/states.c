@@ -1120,6 +1120,11 @@ long get_required_quiet_period(entity_state_t *state) {
 	/* Set reasonable limits */
 	if (required_ms < 10) required_ms = 10;
 	if (required_ms > 10000) required_ms = 10000;  /* Cap at 10 seconds */
+
+	/* Apply complexity multiplier from watch config */
+	if (state->watch && state->watch->complexity > 0) {
+		required_ms = (long)(required_ms * state->watch->complexity);
+	}
 	
 	return required_ms;
 }
