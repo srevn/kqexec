@@ -185,6 +185,14 @@ log_output = false
 recursive = false
 ```
 
+### Common Use Cases
+
+1. **Automatic deployment**: Monitor a git repository directory and trigger deployment when files change
+2. **Configuration management**: Restart services when their configuration files are modified
+3. **Security monitoring**: Log all changes to sensitive directories
+4. **Backup verification**: Ensure backup jobs complete by monitoring the creation of expected files
+5. **Hidden file monitoring**: Track changes in user configuration directories like .config
+
 ### Reloading Configuration
 
 kqexec accepts SIGHUP signal for reloading configuration without restarting the application.
@@ -201,13 +209,7 @@ Or, on macOS:
 launchctl kill SIGHUP gui/$(id -u)/com.kqexec.daemon
 ```
 
-### Common Use Cases
-
-1. **Automatic deployment**: Monitor a git repository directory and trigger deployment when files change
-2. **Configuration management**: Restart services when their configuration files are modified
-3. **Security monitoring**: Log all changes to sensitive directories
-4. **Backup verification**: Ensure backup jobs complete by monitoring the creation of expected files
-5. **Hidden file monitoring**: Track changes in user configuration directories like .config
+Note: kqexec automatically monitors changes to its configuration file and reloads when modified.
 
 ## Running as a Service
 
@@ -277,7 +279,7 @@ service kqexec start
 
 ### State-Based Event Processing
 
-Kqexec uses an intelligent state tracking system to detect meaningful file system events. Rather than simply reacting to raw kqueue events, kqexec:
+Kqexec uses a state tracking system to detect meaningful file system events. Rather than simply reacting to raw kqueue events, kqexec:
 
 1. Tracks the state of each monitored file and directory
 2. Compares new events against the known state
@@ -328,16 +330,14 @@ command = logger "Config changed: %p"
 recursive = true
 hidden = true
 ```
-
-## Troubleshooting
-
-### Common Issues
-
-1. **"Failed to open file/directory"**: Ensure the user running kqexec has appropriate permissions
-2. **"Failed to create kqueue"**: Check system limits for open file descriptors
-3. **Missing events**: Check if the path is hidden and the `hidden` option is set to `true`
-
 ### Viewing Logs
+
+When running commands, you have two options for handling their output: streaming it directly to logs as it is generated or buffering and flushing it once the command completes. Using `buffer_output` can be particularly helpful with verbose commands that produce extensive output.
+
+```ini
+log_output = true           # Whether to capture and log command output (default: false)
+buffer_output = true        # Whether to buffer log output until command completes (default: false)
+```
 
 Check syslog for messages from kqexec:
 
