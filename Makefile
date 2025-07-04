@@ -135,6 +135,7 @@ kqexec.conf.sample:
 	@echo "events = MODIFY" >> $@
 	@echo "command = echo \"Log file %p was modified at %t by user %u (event: %e)\" >> /var/log/kqexec_activity.log" >> $@
 	@echo "log_output = true" >> $@
+	@echo "processing_delay = 100" >> $@
 	@echo "" >> $@
 	@echo "[User Config]" >> $@
 	@echo "# Monitor user configuration directory including hidden files" >> $@

@@ -276,6 +276,7 @@ bool config_parse_file(config_t *config, const char *filename) {
 			current_watch->buffer_output = false;  /* Default to not buffering output */
 			current_watch->recursive = true;       /* Default to recursive for directories */
 			current_watch->hidden = false;         /* Default to not including hidden files */
+			current_watch->processing_delay = 0;   /* Default to no delay */
 			state = SECTION_ENTRY;
 			
 			continue;
@@ -349,6 +350,15 @@ bool config_parse_file(config_t *config, const char *filename) {
 				} else {
 					log_message(LOG_LEVEL_WARNING, "Invalid value for hidden at line %d: %s", 
 							  line_number, value);
+				}
+			} else if (strcasecmp(key, "processing_delay") == 0) {
+				int delay_value = atoi(value);
+				if (delay_value < 0) {
+					log_message(LOG_LEVEL_WARNING, "Invalid processing_delay value at line %d: %s (must be >= 0)", 
+							  line_number, value);
+					current_watch->processing_delay = 0;
+				} else {
+					current_watch->processing_delay = delay_value;
 				}
 			} else {
 				log_message(LOG_LEVEL_WARNING, "Unknown key at line %d: %s", line_number, key);

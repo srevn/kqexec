@@ -94,6 +94,7 @@ log_output = false           # Whether to capture and log command output (defaul
 buffer_output = false        # Whether to buffer log output until command completes (default: false)
 recursive = true             # For recursive directory monitoring (default: true)
 hidden = false               # Whether to monitor hidden files/dirs (default: false)
+processing_delay = 1000      # Delay in milliseconds before processing events (default: 0)
 ```
 
 ### Event Types

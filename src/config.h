@@ -30,6 +30,7 @@ typedef struct {
 	bool buffer_output;         /* Whether to buffer output until command completes */
 	bool recursive;             /* Whether to recursively monitor (for directories) */
 	bool hidden;                /* Whether to monitor hidden files/directories */
+	int processing_delay;       /* Delay in milliseconds before processing events (0 = no delay) */
 } watch_entry_t;
 
 /* Global configuration structure */

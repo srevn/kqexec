@@ -21,8 +21,8 @@
 
 /* Global array of active command intents */
 #define MAX_COMMAND_INTENTS 10
-static command_intent_t command_intents[MAX_COMMAND_INTENTS];
 static int active_intent_count = 0;
+static command_intent_t command_intents[MAX_COMMAND_INTENTS];
 
 /* Debounce time in milliseconds */
 static int debounce_time_ms = DEFAULT_DEBOUNCE_TIME_MS;
