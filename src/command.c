@@ -14,7 +14,7 @@
 #include "command.h"
 #include "threads.h"
 #include "states.h"
-#include "log.h"
+#include "logger.h"
 
 /* Maximum length of command */
 #define MAX_CMD_LEN 4096

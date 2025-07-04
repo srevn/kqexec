@@ -6,7 +6,7 @@
 
 #include "threads.h"
 #include "command.h"
-#include "log.h"
+#include "logger.h"
 
 /* Global thread pool instance */
 static thread_pool_t *g_thread_pool = NULL;

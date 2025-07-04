@@ -3,7 +3,7 @@
 #include <syslog.h>
 #include <time.h>
 #include <pthread.h>
-#include "log.h"
+#include "logger.h"
 
 /* Global log level */
 static log_level_t current_log_level = LOG_LEVEL_NOTICE;

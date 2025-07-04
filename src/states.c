@@ -12,7 +12,7 @@
 
 #include "states.h"
 #include "command.h"
-#include "log.h"
+#include "logger.h"
 #include "monitor.h"
 
 /* Hash table size for storing entity states */

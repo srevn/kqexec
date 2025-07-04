@@ -5,7 +5,7 @@
 #include <errno.h>
 
 #include "config.h"
-#include "log.h"
+#include "logger.h"
 
 /* Maximum line length in config file */
 #define MAX_LINE_LEN 1024

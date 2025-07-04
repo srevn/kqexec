@@ -5,5 +5,5 @@
 /src/daemon.o
 /src/config.o
 /src/command.o
-/src/log.o
+/src/logger.o
 /kqexec

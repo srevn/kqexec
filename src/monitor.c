@@ -14,7 +14,7 @@
 #include "monitor.h"
 #include "command.h"
 #include "states.h"
-#include "log.h"
+#include "logger.h"
 
 /* Maximum number of events to process at once */
 #define MAX_EVENTS 64

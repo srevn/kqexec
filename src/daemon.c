@@ -9,7 +9,7 @@
 
 #include "monitor.h"
 #include "daemon.h"
-#include "log.h"
+#include "logger.h"
 
 /* Global monitor reference for signal handler */
 static monitor_t *g_monitor = NULL;

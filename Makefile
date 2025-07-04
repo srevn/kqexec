@@ -33,7 +33,7 @@ SRCS = src/main.c \
 	   src/threads.c \
 	   src/states.c \
 	   src/daemon.c \
-	   src/log.c
+	   src/logger.c
 
 # Object files
 OBJS = $(SRCS:.c=.o)

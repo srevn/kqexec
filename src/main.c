@@ -10,7 +10,7 @@
 #include "command.h"
 #include "states.h"
 #include "daemon.h"
-#include "log.h"
+#include "logger.h"
 
 /* Default configuration file */
 #define DEFAULT_CONFIG_FILE "/usr/local/etc/kqexec.conf"
