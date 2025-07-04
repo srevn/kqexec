@@ -1653,6 +1653,9 @@ bool monitor_process_events(monitor_t *monitor) {
 	
 	/* Process delayed events */
 	process_delayed_events(monitor);
+	
+	/* Clean up expired command intents */
+	command_intent_cleanup_expired();
 
 	return true; /* Continue monitoring */
 }

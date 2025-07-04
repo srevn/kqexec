@@ -48,6 +48,7 @@ void command_debounce_time(int milliseconds);
 
 /* Function prototypes for command intent tracking */
 void command_intent_cleanup(void);
+void command_intent_cleanup_expired(void);
 command_intent_t *command_intent_create(pid_t pid, const char *command, const char *base_path);
 bool command_intent_mark_complete(pid_t pid);
 bool is_path_affected_by_command(const char *path);

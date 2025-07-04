@@ -118,24 +118,24 @@ bool is_path_affected_by_command(const char *path) {
 		/* Check if the command has expired */
 		if (now > command_intents[i].expected_end_time) {
 			log_message(LOG_LEVEL_DEBUG, "Command intent %d expired", i);
+			
+			/* Mark as inactive but don't free memory here to prevent race conditions */
 			command_intents[i].active = false;
 			active_intent_count--;
-			
-			/* Free affected paths memory to prevent leak */
-			if (command_intents[i].affected_paths) {
-				for (int j = 0; j < command_intents[i].affected_path_count; j++) {
-					free(command_intents[i].affected_paths[j]);
-				}
-				free(command_intents[i].affected_paths);
-				command_intents[i].affected_paths = NULL;
-			}
-			command_intents[i].affected_path_count = 0;
 			continue;
 		}
 		
 		/* Check if the path matches any affected path */
+		if (!command_intents[i].affected_paths) {
+			continue;
+		}
+		
 		for (int j = 0; j < command_intents[i].affected_path_count; j++) {
 			const char *affected_path = command_intents[i].affected_paths[j];
+			
+			if (!affected_path) {
+				continue;
+			}
 			
 			/* Check for exact match */
 			if (strcmp(path, affected_path) == 0) {
@@ -165,6 +165,47 @@ bool is_path_affected_by_command(const char *path) {
 	}
 	
 	return false;
+}
+
+/* Clean up expired command intents - call this periodically and safely */
+void command_intent_cleanup_expired(void) {
+	sigset_t mask, oldmask;
+	time_t now;
+	time(&now);
+	
+	/* Block SIGCHLD to prevent race condition with signal handler */
+	sigemptyset(&mask);
+	sigaddset(&mask, SIGCHLD);
+	sigprocmask(SIG_BLOCK, &mask, &oldmask);
+	
+	for (int i = 0; i < MAX_COMMAND_INTENTS; i++) {
+		if (!command_intents[i].active) continue;
+		
+		/* Check if the command has expired */
+		if (now > command_intents[i].expected_end_time) {
+			/* Free affected paths memory */
+			if (command_intents[i].affected_paths) {
+				for (int j = 0; j < command_intents[i].affected_path_count; j++) {
+					if (command_intents[i].affected_paths[j]) {
+						free(command_intents[i].affected_paths[j]);
+						command_intents[i].affected_paths[j] = NULL;
+					}
+				}
+				free(command_intents[i].affected_paths);
+				command_intents[i].affected_paths = NULL;
+			}
+			command_intents[i].affected_path_count = 0;
+			
+			/* Mark as inactive if not already */
+			if (command_intents[i].active) {
+				command_intents[i].active = false;
+				active_intent_count--;
+			}
+		}
+	}
+	
+	/* Restore previous signal mask */
+	sigprocmask(SIG_SETMASK, &oldmask, NULL);
 }
 
 /* Analyze a command to determine what paths it will affect */
@@ -285,11 +326,17 @@ bool command_intent_mark_complete(pid_t pid) {
 			log_message(LOG_LEVEL_DEBUG, "Marked command intent for PID %d as complete", pid);
 			
 			/* Free affected paths */
-			for (int j = 0; j < command_intents[i].affected_path_count; j++) {
-				free(command_intents[i].affected_paths[j]);
+			if (command_intents[i].affected_paths) {
+				for (int j = 0; j < command_intents[i].affected_path_count; j++) {
+					if (command_intents[i].affected_paths[j]) {
+						free(command_intents[i].affected_paths[j]);
+						command_intents[i].affected_paths[j] = NULL;
+					}
+				}
+				free(command_intents[i].affected_paths);
+				command_intents[i].affected_paths = NULL;
 			}
-			free(command_intents[i].affected_paths);
-			command_intents[i].affected_paths = NULL;
+			command_intents[i].affected_path_count = 0;
 			
 			return true;
 		}

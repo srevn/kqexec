@@ -1180,27 +1180,78 @@ bool is_quiet_period_elapsed(entity_state_t *state, struct timespec *now) {
 /* Get or create an entity state for a given path and watch */
 entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_entry_t *watch) {
 	if (!path || !watch || !entity_states) {
-		log_message(LOG_LEVEL_ERR, "Invalid arguments (path=%s, watch=%s, states_initialized=%d)",
-				  path ? path : "NULL", watch ? watch->name : "NULL", entity_states != NULL);
+		log_message(LOG_LEVEL_ERR, "Invalid arguments (path=%s, watch=%p, states_initialized=%d)",
+				  path ? path : "NULL", watch, entity_states != NULL);
+		return NULL;
+	}
+	
+	/* Additional safety check for watch structure */
+	if (!watch->name) {
+		log_message(LOG_LEVEL_ERR, "Watch has NULL name (path=%s, watch=%p)", path, watch);
 		return NULL;
 	}
 
 	unsigned int hash = hash_path_watch(path, watch);
+	
+	if (hash >= ENTITY_HASH_SIZE) {
+		log_message(LOG_LEVEL_ERR, "Hash out of bounds: %u >= %d", hash, ENTITY_HASH_SIZE);
+		return NULL;
+	}
+	
 	entity_state_t *state = entity_states[hash];
 
 	/* Look for existing state matching both path AND watch */
+	int state_count = 0;
 	while (state) {
-		if (strcmp(state->path, path) == 0 && 
-		    state->watch && watch && state->watch->name && watch->name &&
-		    strcmp(state->watch->name, watch->name) == 0) {
-			if (state->type == ENTITY_UNKNOWN && type != ENTITY_UNKNOWN) {
-				state->type = type; /* Update type if it becomes known */
-			}
-			/* Update watch pointer to point to current configuration */
-			state->watch = watch;
-			return state;
+		if (!state->path) {
+			log_message(LOG_LEVEL_ERR, "Corrupted entity state: NULL path at index %d", state_count);
+			break;
 		}
+		
+		/* Check if state->watch is valid before dereferencing */
+		if (!state->watch) {
+			state = state->next;
+			state_count++;
+			continue;
+		}
+		
+		/* Handle stale watch pointers by detecting pointer mismatches */
+		const char *state_watch_name = NULL;
+		bool state_watch_valid = false;
+		
+		if (state->watch) {
+			/* Try to detect if this is a stale pointer by comparing with current watch */
+			if (state->watch == watch) {
+				state_watch_name = state->watch->name;
+				state_watch_valid = true;
+			} else {
+				/* For path match, we'll update the watch pointer and continue */
+				if (strcmp(state->path, path) == 0) {
+					state->watch = watch;
+					state_watch_name = watch->name;
+					state_watch_valid = true;
+				}
+			}
+		}
+		
+		if (strcmp(state->path, path) == 0) {
+			/* Check if we have valid watch name and it matches */
+			if (state_watch_valid && state_watch_name && watch->name && 
+				strcmp(state_watch_name, watch->name) == 0) {
+				if (state->type == ENTITY_UNKNOWN && type != ENTITY_UNKNOWN) {
+					state->type = type; /* Update type if it becomes known */
+				}
+				return state;
+			}
+		}
+		
 		state = state->next;
+		state_count++;
+		
+		if (state_count > 100) {
+			log_message(LOG_LEVEL_ERR, "Potential infinite loop detected in hash table traversal!");
+			break;
+		}
 	}
 
 	/* Create new state */
