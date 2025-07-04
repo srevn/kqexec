@@ -747,6 +747,12 @@ void synchronize_activity_states(const char *path, entity_state_t *trigger_state
 				continue;
 			}
 			
+			/* Additional safety check for corrupted path pointer */
+			if (!state->path || (uintptr_t)state->path < 0x1000) {
+				state = state->next;
+				continue;
+			}
+			
 			if (strcmp(state->path, path) == 0 && state != trigger_state) {
 				log_message(LOG_LEVEL_DEBUG, "Synchronizing state for path %s (watch: %s) with trigger (watch: %s)",
 					   path, (state->watch && state->watch->name) ? state->watch->name : "unknown", 
@@ -760,6 +766,7 @@ void synchronize_activity_states(const char *path, entity_state_t *trigger_state
 				if (!state->watch || !trigger_state->watch || 
 					!state->watch->name || !trigger_state->watch->name) {
 					log_message(LOG_LEVEL_DEBUG, "Skipping state with invalid watch pointers during sync");
+					state = state->next;
 					continue;
 				}
 				
@@ -1204,57 +1211,17 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 	entity_state_t *state = entity_states[hash];
 
 	/* Look for existing state matching both path AND watch */
-	int state_count = 0;
 	while (state) {
-		if (!state->path) {
-			log_message(LOG_LEVEL_ERR, "Corrupted entity state: NULL path at index %d", state_count);
-			break;
-		}
-		
-		/* Check if state->watch is valid before dereferencing */
-		if (!state->watch) {
-			state = state->next;
-			state_count++;
-			continue;
-		}
-		
-		/* Handle stale watch pointers by detecting pointer mismatches */
-		const char *state_watch_name = NULL;
-		bool state_watch_valid = false;
-		
-		if (state->watch) {
-			/* Try to detect if this is a stale pointer by comparing with current watch */
-			if (state->watch == watch) {
-				state_watch_name = state->watch->name;
-				state_watch_valid = true;
-			} else {
-				/* For path match, we'll update the watch pointer and continue */
-				if (strcmp(state->path, path) == 0) {
-					state->watch = watch;
-					state_watch_name = watch->name;
-					state_watch_valid = true;
-				}
+		if (state->path && state->watch && state->watch->name &&
+			strcmp(state->path, path) == 0 &&
+			strcmp(state->watch->name, watch->name) == 0) {
+			
+			if (state->type == ENTITY_UNKNOWN && type != ENTITY_UNKNOWN) {
+				state->type = type;
 			}
+			return state;
 		}
-		
-		if (strcmp(state->path, path) == 0) {
-			/* Check if we have valid watch name and it matches */
-			if (state_watch_valid && state_watch_name && watch->name && 
-				strcmp(state_watch_name, watch->name) == 0) {
-				if (state->type == ENTITY_UNKNOWN && type != ENTITY_UNKNOWN) {
-					state->type = type; /* Update type if it becomes known */
-				}
-				return state;
-			}
-		}
-		
 		state = state->next;
-		state_count++;
-		
-		if (state_count > 100) {
-			log_message(LOG_LEVEL_ERR, "Potential infinite loop detected in hash table traversal!");
-			break;
-		}
 	}
 
 	/* Create new state */
@@ -1435,6 +1402,11 @@ bool should_execute_command(entity_state_t *state, operation_type_t op, int defa
 			log_message(LOG_LEVEL_DEBUG, "Directory content change for %s, marked root %s as active - command deferred",
 					   state->path, root->path);
 			synchronize_activity_states(root->path, root);
+			
+			if (is_entity_state_corrupted(root)) {
+				return false;
+			}
+			
 			schedule_deferred_check(g_current_monitor, root);
 			log_message(LOG_LEVEL_DEBUG, "Added directory %s to deferred check queue", root->path);
 		}
