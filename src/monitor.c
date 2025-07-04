@@ -1814,6 +1814,23 @@ bool monitor_reload(monitor_t *monitor) {
 		}
 	}
 
+	/* Clear deferred processing queue to prevent access to freed entity states */
+	log_message(LOG_LEVEL_DEBUG, "Clearing deferred processing queue during config reload");
+	check_queue_cleanup(monitor);
+	check_queue_init(monitor, 16);
+	
+	/* Also clear delayed events queue that may reference old watches */
+	if (monitor->delayed_events) {
+		for (int i = 0; i < monitor->delayed_event_count; i++) {
+			if (monitor->delayed_events[i].event.path) {
+				free(monitor->delayed_events[i].event.path);
+				monitor->delayed_events[i].event.path = NULL;
+			}
+		}
+		monitor->delayed_event_count = 0;
+		log_message(LOG_LEVEL_DEBUG, "Cleared %d delayed events during config reload", monitor->delayed_event_count);
+	}
+	
 	/* Clean up orphaned entity states before destroying old watches */
 	cleanup_orphaned_entity_states(old_config);
 
