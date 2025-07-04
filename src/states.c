@@ -25,13 +25,15 @@ extern monitor_t *g_current_monitor;
 static entity_state_t **entity_states = NULL;
 
 /* Initialize the entity state system */
-void entity_state_init(void) {
+bool entity_state_init(void) {
 	entity_states = calloc(ENTITY_HASH_SIZE, sizeof(entity_state_t *));
 	if (entity_states == NULL) {
 		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for entity states");
-	} else {
-		log_message(LOG_LEVEL_DEBUG, "Entity state system initialized");
+		return false;
 	}
+	
+	log_message(LOG_LEVEL_DEBUG, "Entity state system initialized");
+	return true;
 }
 
 /* Free resources used by an entity state */

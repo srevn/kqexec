@@ -62,19 +62,30 @@ bool daemon_reload_requested(void) {
 }
 
 /* Set up signal handlers */
-void daemon_setup_signals(void) {
+bool daemon_setup_signals(void) {
 	struct sigaction sa;
 	
 	/* Set up signal handlers */
 	memset(&sa, 0, sizeof(sa));
 	sa.sa_handler = signal_handler;
 	
-	sigaction(SIGINT, &sa, NULL);
-	sigaction(SIGTERM, &sa, NULL);
-	sigaction(SIGHUP, &sa, NULL);
+	if (sigaction(SIGINT, &sa, NULL) == -1) {
+		log_message(LOG_LEVEL_ERR, "Failed to set up SIGINT handler: %s", strerror(errno));
+		return false;
+	}
+	if (sigaction(SIGTERM, &sa, NULL) == -1) {
+		log_message(LOG_LEVEL_ERR, "Failed to set up SIGTERM handler: %s", strerror(errno));
+		return false;
+	}
+	if (sigaction(SIGHUP, &sa, NULL) == -1) {
+		log_message(LOG_LEVEL_ERR, "Failed to set up SIGHUP handler: %s", strerror(errno));
+		return false;
+	}
 	
 	/* Ignore SIGPIPE */
 	signal(SIGPIPE, SIG_IGN);
+	
+	return true;
 }
 
 /* Set monitor reference for signal handler */

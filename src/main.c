@@ -51,7 +51,11 @@ int main(int argc, char *argv[]) {
 	}
 	
 	/* Set up signal handlers */
-	daemon_setup_signals();
+	if (!daemon_setup_signals()) {
+		log_message(LOG_LEVEL_ERR, "Failed to set up signal handlers");
+		log_close();
+		return EXIT_FAILURE;
+	}
 	
 	/* Parse command line options */
 	static struct option long_options[] = {
@@ -135,18 +139,28 @@ int main(int argc, char *argv[]) {
 	}
 	
 	/* Initialize command subsystem */
-	command_init();
-	
-	/* Initialize command intent tracking */
-	command_intent_init();
+	if (!command_init()) {
+		log_message(LOG_LEVEL_ERR, "Failed to initialize command subsystem");
+		config_destroy(config);
+		log_close();
+		return EXIT_FAILURE;
+	}
 	
 	/* Initialize entity states */
-	entity_state_init();
+	if (!entity_state_init()) {
+		log_message(LOG_LEVEL_ERR, "Failed to initialize entity states");
+		command_cleanup();
+		config_destroy(config);
+		log_close();
+		return EXIT_FAILURE;
+	}
 	
 	/* Create monitor */
 	monitor = monitor_create(config);
 	if (monitor == NULL) {
 		log_message(LOG_LEVEL_ERR, "Failed to create monitor");
+		entity_state_cleanup();
+		command_cleanup();
 		config_destroy(config);
 		log_close();
 		return EXIT_FAILURE;
@@ -156,6 +170,8 @@ int main(int argc, char *argv[]) {
 	if (!monitor_setup(monitor)) {
 		log_message(LOG_LEVEL_ERR, "Failed to set up monitor");
 		monitor_destroy(monitor);
+		entity_state_cleanup();
+		command_cleanup();
 		config_destroy(config);
 		log_close();
 		return EXIT_FAILURE;
@@ -171,6 +187,8 @@ int main(int argc, char *argv[]) {
 	if (!monitor_start(monitor)) {
 		log_message(LOG_LEVEL_ERR, "Failed to start monitor");
 		monitor_destroy(monitor);
+		entity_state_cleanup();
+		command_cleanup();
 		config_destroy(config);
 		log_close();
 		return EXIT_FAILURE;
@@ -181,6 +199,7 @@ int main(int argc, char *argv[]) {
 	monitor_destroy(monitor);
 	entity_state_cleanup();
 	command_cleanup();
+	config_destroy(config);
 	log_close();
 	
 	return EXIT_SUCCESS;

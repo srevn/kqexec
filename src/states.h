@@ -117,7 +117,7 @@ typedef struct entity_state {
 } entity_state_t;
 
 /* Function prototypes */
-void entity_state_init(void);
+bool entity_state_init(void);
 void entity_state_cleanup(void);
 entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_entry_t *watch);
 operation_type_t determine_operation(entity_state_t *state, event_type_t new_event_type);

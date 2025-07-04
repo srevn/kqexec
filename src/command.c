@@ -57,22 +57,28 @@ static void command_sigchld_handler(int sig) {
 }
 
 /* Initialize command subsystem */
-void command_init(void) {
+bool command_init(void) {
 	/* Set up SIGCHLD handler */
 	struct sigaction sa;
 	memset(&sa, 0, sizeof(sa));
 	sa.sa_handler = command_sigchld_handler;
 	sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
-	sigaction(SIGCHLD, &sa, NULL);
+	if (sigaction(SIGCHLD, &sa, NULL) == -1) {
+		log_message(LOG_LEVEL_ERR, "Failed to set up SIGCHLD handler: %s", strerror(errno));
+		return false;
+	}
 	
 	/* Initialize thread pool */
-	thread_pool_init();
-}
+	if (!thread_pool_init()) {
+		log_message(LOG_LEVEL_ERR, "Failed to initialize thread pool");
+		return false;
+	}
 
-/* Initialize command intent tracking */
-void command_intent_init(void) {
+	/* Initialize command intent tracking */
 	memset(command_intents, 0, sizeof(command_intents));
 	active_intent_count = 0;
+	
+	return true;
 }
 
 /* Clean up command intent tracking */
