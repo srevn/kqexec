@@ -282,8 +282,7 @@ bool command_intent_mark_complete(pid_t pid) {
 			command_intents[i].active = false;
 			active_intent_count--;
 			
-			log_message(LOG_LEVEL_DEBUG, "Marked command intent for PID %d as complete",
-					  pid);
+			log_message(LOG_LEVEL_DEBUG, "Marked command intent for PID %d as complete", pid);
 			
 			/* Free affected paths */
 			for (int j = 0; j < command_intents[i].affected_path_count; j++) {
