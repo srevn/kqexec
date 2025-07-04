@@ -8,7 +8,7 @@
 #include "monitor.h"
 
 /* Thread pool configuration */
-#define MAX_WORKER_THREADS 2
+#define MAX_WORKER_THREADS 3
 #define MAX_WORK_QUEUE_SIZE 8
 
 /* Work item for thread pool */

@@ -166,7 +166,7 @@ bool thread_pool_init(void) {
 		}
 	}
 	
-	thread_safe_log(LOG_LEVEL_INFO, "Thread pool initialized with %d worker threads", MAX_WORKER_THREADS);
+	thread_safe_log(LOG_LEVEL_DEBUG, "Thread pool initialized with %d worker threads", MAX_WORKER_THREADS);
 	return true;
 }
 
@@ -203,7 +203,7 @@ void thread_pool_destroy(void) {
 	free(g_thread_pool);
 	g_thread_pool = NULL;
 	
-	thread_safe_log(LOG_LEVEL_INFO, "Thread pool destroyed");
+	thread_safe_log(LOG_LEVEL_DEBUG, "Thread pool destroyed");
 }
 
 /* Submit work to thread pool */

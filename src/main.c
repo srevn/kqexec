@@ -3,7 +3,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <getopt.h>
-#include <signal.h>
 #include <syslog.h>
 
 #include "config.h"
@@ -33,32 +32,6 @@ static void print_usage(void) {
 	fprintf(stderr, "  -h, --help             Print this help message\n");
 }
 
-/* Signal handler */
-static void signal_handler(int sig) {
-	switch (sig) {
-		case SIGINT:
-		case SIGTERM:
-			log_message(LOG_LEVEL_INFO, "Received signal %d, shutting down", sig);
-			if (g_monitor != NULL) {
-				monitor_stop(g_monitor);
-			} else {
-				log_message(LOG_LEVEL_WARNING, "No monitor available, forcing exit");
-				exit(EXIT_FAILURE);
-			}
-			break;
-		case SIGHUP:
-			if (g_monitor != NULL) {
-				log_message(LOG_LEVEL_INFO, "Received SIGHUP, requesting configuration reload");
-				monitor_request_reload(g_monitor);
-			} else {
-				log_message(LOG_LEVEL_WARNING, "Received SIGHUP but no monitor available");
-			}
-			break;
-		default:
-			break;
-	}
-}
-
 /* Main function */
 int main(int argc, char *argv[]) {
 	config_t *config;
@@ -78,13 +51,7 @@ int main(int argc, char *argv[]) {
 	}
 	
 	/* Set up signal handlers */
-	struct sigaction sa;
-	memset(&sa, 0, sizeof(sa));
-	sa.sa_handler = signal_handler;
-	
-	sigaction(SIGINT, &sa, NULL);
-	sigaction(SIGTERM, &sa, NULL);
-	sigaction(SIGHUP, &sa, NULL);
+	daemon_setup_signals();
 	
 	/* Parse command line options */
 	static struct option long_options[] = {
@@ -96,7 +63,7 @@ int main(int argc, char *argv[]) {
 		{0, 0, 0, 0}
 	};
 	
-	while ((c = getopt_long(argc, argv, "c:dl:b:w:h", long_options, &option_index)) != -1) {
+	while ((c = getopt_long(argc, argv, "c:dl:b:h", long_options, &option_index)) != -1) {
 		switch (c) {
 			case 'c':
 				config_file = optarg;
@@ -197,6 +164,9 @@ int main(int argc, char *argv[]) {
 	/* Store global reference for signal handler */
 	g_monitor = monitor;
 	
+	/* Set monitor reference for daemon signal handler */
+	daemon_set_monitor(monitor);
+	
 	/* Start monitor */
 	if (!monitor_start(monitor)) {
 		log_message(LOG_LEVEL_ERR, "Failed to start monitor");
@@ -206,17 +176,8 @@ int main(int argc, char *argv[]) {
 		return EXIT_FAILURE;
 	}
 	
-	/* Daemon signal handler */
-	if (config->daemon_mode) {
-		daemon_set_monitor(monitor);
-		daemon_setup_signals();
-	}
-	
 	/* Clean up */
-	if (config->daemon_mode) {
-		daemon_set_monitor(NULL);
-	}
-	
+	daemon_set_monitor(NULL);
 	monitor_destroy(monitor);
 	entity_state_cleanup();
 	command_cleanup();
