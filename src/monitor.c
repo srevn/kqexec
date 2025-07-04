@@ -480,6 +480,9 @@ void monitor_destroy(monitor_t *monitor) {
 		free(monitor->delayed_events);
 	}
 	
+	/* Destroy the configuration */
+	config_destroy(monitor->config);
+	
 	/* Clear global monitor reference if it's this monitor */
 	if (g_current_monitor == monitor) {
 		g_current_monitor = NULL;
