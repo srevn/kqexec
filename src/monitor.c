@@ -487,6 +487,21 @@ void monitor_destroy(monitor_t *monitor) {
 	free(monitor);
 }
 
+/* Initialize inode and device information for a watch_info */
+static bool watch_info_init_stat(watch_info_t *info) {
+	struct stat st;
+	if (fstat(info->wd, &st) == -1) {
+		log_message(LOG_LEVEL_ERR, "Failed to fstat file descriptor %d for %s: %s", 
+				  info->wd, info->path, strerror(errno));
+		return false;
+	}
+	
+	info->inode = st.st_ino;
+	info->device = st.st_dev;
+	info->last_validation = time(NULL);
+	return true;
+}
+
 /* Add a watch info to the monitor's array */
 static bool monitor_add_watch_info(monitor_t *monitor, watch_info_t *info) {
 	watch_info_t **new_watches;
@@ -592,6 +607,12 @@ static bool monitor_add_dir_recursive(monitor_t *monitor, const char *dir_path, 
 			info->watch = watch;
 			info->is_shared_fd = true;
 			existing_info->is_shared_fd = true;
+			
+			if (!watch_info_init_stat(info)) {
+				watch_info_destroy(info);
+				return false;
+			}
+			
 			if (!monitor_add_watch_info(monitor, info)) {
 				watch_info_destroy(info);
 				return false;
@@ -617,6 +638,13 @@ static bool monitor_add_dir_recursive(monitor_t *monitor, const char *dir_path, 
 			info->path = strdup(dir_path);
 			info->watch = watch;
 			info->is_shared_fd = false;
+			
+			if (!watch_info_init_stat(info)) {
+				watch_info_destroy(info);
+				close(fd);
+				return false;
+			}
+			
 			if (!monitor_add_watch_info(monitor, info)) {
 				watch_info_destroy(info);
 				close(fd);
@@ -701,6 +729,11 @@ bool monitor_add_watch(monitor_t *monitor, watch_entry_t *watch) {
 		info->watch = watch;
 		info->is_shared_fd = true; /* Mark that this FD is shared */
 		
+		if (!watch_info_init_stat(info)) {
+			watch_info_destroy(info);
+			return false;
+		}
+		
 		if (!monitor_add_watch_info(monitor, info)) {
 			watch_info_destroy(info);
 			return false;
@@ -761,6 +794,12 @@ bool monitor_add_watch(monitor_t *monitor, watch_entry_t *watch) {
 		info->path = strdup(watch->path);
 		info->watch = watch;
 		info->is_shared_fd = false; /* Initially not shared */
+		
+		if (!watch_info_init_stat(info)) {
+			watch_info_destroy(info);
+			close(fd);
+			return false;
+		}
 		
 		if (!monitor_add_watch_info(monitor, info)) {
 			watch_info_destroy(info);
@@ -1558,6 +1597,8 @@ bool monitor_process_events(monitor_t *monitor) {
 	if (nev > 0) {
 		log_message(LOG_LEVEL_DEBUG, "Processing %d new kqueue events", nev);
 		for (int i = 0; i < nev; i++) {
+			event_loop_start:; /* Label to restart the loop if watches array is modified */
+			
 			/* Find all watches that use this file descriptor */
 			for (int j = 0; j < monitor->watch_count; j++) {
 				watch_info_t *info = monitor->watches[j];
@@ -1577,6 +1618,15 @@ bool monitor_process_events(monitor_t *monitor) {
 					log_message(LOG_LEVEL_DEBUG, "Event: path=%s, flags=0x%x -> type=%s (watch: %s)",
 							   info->path, events[i].fflags, event_type_to_string(event.type), info->watch->name);
 					
+					/* Proactive validation for directory events on NOTE_WRITE */
+					if (info->watch->type == WATCH_DIRECTORY && (events[i].fflags & NOTE_WRITE)) {
+						log_message(LOG_LEVEL_DEBUG, "Write event on dir %s, validating and re-scanning.", info->path);
+						if (monitor_validate_and_refresh_path(monitor, info->path)) {
+							/* The watches array was modified, restart the event processing to use the new array */
+							goto event_loop_start;
+						}
+					}
+					
 					/* Check if this watch has a processing delay configured */
 					if (info->watch->processing_delay > 0) {
 						/* Schedule the event for delayed processing */
@@ -1584,58 +1634,6 @@ bool monitor_process_events(monitor_t *monitor) {
 					} else {
 						/* Process the event immediately */
 						process_event(info->watch, &event, entity_type);
-					}
-				}
-			}
-			
-			/* Handle NOTE_DELETE / NOTE_REVOKE for watched descriptors */
-			/* We need to find the first watch info for this FD to handle reopening */
-			watch_info_t *primary_info = NULL;
-			for (int j = 0; j < monitor->watch_count; j++) {
-				if ((uintptr_t)monitor->watches[j]->wd == events[i].ident) {
-					primary_info = monitor->watches[j];
-					break;
-				}
-			}
-			
-			if (primary_info && (events[i].fflags & (NOTE_DELETE | NOTE_REVOKE))) {
-				log_message(LOG_LEVEL_DEBUG, "DELETE/REVOKE detected for %s, re-opening", primary_info->path);
-				close(primary_info->wd);
-				
-				int new_fd = open(primary_info->path, O_RDONLY);
-				if (new_fd != -1) {
-					/* Update all watch_info structures that share this FD */
-					for (int j = 0; j < monitor->watch_count; j++) {
-						if ((uintptr_t)monitor->watches[j]->wd == events[i].ident) {
-							monitor->watches[j]->wd = new_fd;
-						}
-					}
-					
-					log_message(LOG_LEVEL_DEBUG, "Re-opened %s after DELETE/REVOKE (new descriptor: %d)", 
-							 primary_info->path, new_fd);
-							 
-					if (!monitor_add_kqueue_watch(monitor, primary_info)) {
-						log_message(LOG_LEVEL_WARNING, "Failed to re-add kqueue watch for %s", primary_info->path);
-						/* Close and invalidate all related watch descriptors */
-						close(new_fd);
-						for (int j = 0; j < monitor->watch_count; j++) {
-							if ((uintptr_t)monitor->watches[j]->wd == events[i].ident) {
-								monitor->watches[j]->wd = -1;
-							}
-						}
-					}
-				} else {
-					if (errno == ENOENT) {
-						log_message(LOG_LEVEL_DEBUG, "Path %s no longer exists after DELETE/REVOKE", primary_info->path);
-					} else {
-						log_message(LOG_LEVEL_WARNING, "Failed to re-open %s: %s", 
-								   primary_info->path, strerror(errno));
-					}
-					/* Invalidate all watch descriptors for this path */
-					for (int j = 0; j < monitor->watch_count; j++) {
-						if ((uintptr_t)monitor->watches[j]->wd == events[i].ident) {
-							monitor->watches[j]->wd = -1;
-						}
 					}
 				}
 			}
@@ -1881,6 +1879,124 @@ bool monitor_reload(monitor_t *monitor) {
 
 	log_message(LOG_LEVEL_INFO, "Configuration reload complete: %d active watches", monitor->watch_count);
 	return true;
+}
+
+/* Remove all watches for subdirectories of a given parent path */
+bool monitor_remove_stale_subdirectory_watches(monitor_t *monitor, const char *parent_path) {
+	if (!monitor || !parent_path) {
+		return false;
+	}
+	
+	int parent_len = strlen(parent_path);
+	bool changed = false;
+	
+	for (int i = monitor->watch_count - 1; i >= 0; i--) {
+		watch_info_t *info = monitor->watches[i];
+		if (!info || !info->path) continue;
+		
+		/* Check if it's a subdirectory */
+		if ((int)strlen(info->path) > parent_len &&
+			strncmp(info->path, parent_path, parent_len) == 0 &&
+			info->path[parent_len] == '/') {
+			
+			log_message(LOG_LEVEL_DEBUG, "Removing stale subdirectory watch: %s", info->path);
+			
+			/* Destroy the watch info (closes FD if not shared) */
+			watch_info_destroy(info);
+			
+			/* Remove from array by shifting */
+			for (int j = i; j < monitor->watch_count - 1; j++) {
+				monitor->watches[j] = monitor->watches[j + 1];
+			}
+			monitor->watch_count--;
+			changed = true;
+		}
+	}
+	
+	return changed;
+}
+
+/* Validate a path and refresh it if it has been recreated */
+bool monitor_validate_and_refresh_path(monitor_t *monitor, const char *path) {
+	if (!monitor || !path) {
+		return false;
+	}
+	
+	struct stat st;
+	bool path_exists = (stat(path, &st) == 0);
+	bool list_modified = false;
+	
+	/* Find all watch_info entries for this exact path */
+	for (int i = 0; i < monitor->watch_count; i++) {
+		watch_info_t *info = monitor->watches[i];
+		if (info && info->path && strcmp(info->path, path) == 0) {
+			
+			if (!path_exists) {
+				/* Path does not exist - it was deleted */
+				log_message(LOG_LEVEL_INFO, "Path deleted: %s. Removing watch.", path);
+				
+				/* If it was a recursive directory, remove all subdirectory watches */
+				if (info->watch->type == WATCH_DIRECTORY && info->watch->recursive) {
+					monitor_remove_stale_subdirectory_watches(monitor, path);
+				}
+				
+				/* Remove this watch */
+				watch_info_destroy(info);
+				for (int j = i; j < monitor->watch_count - 1; j++) {
+					monitor->watches[j] = monitor->watches[j + 1];
+				}
+				monitor->watch_count--;
+				i--; /* Adjust index after removal */
+				list_modified = true;
+				
+			} else if (info->inode != st.st_ino || info->device != st.st_dev) {
+				/* Path exists but inode/device changed - it was recreated */
+				log_message(LOG_LEVEL_INFO, "Path recreated: %s. Refreshing watch.", path);
+				
+				/* Close old file descriptor if not shared */
+				if (!info->is_shared_fd && info->wd >= 0) {
+					close(info->wd);
+				}
+				
+				/* Open new file descriptor */
+				int new_fd = open(path, O_RDONLY);
+				if (new_fd == -1) {
+					log_message(LOG_LEVEL_ERR, "Failed to open recreated path %s: %s", path, strerror(errno));
+					/* Treat as deleted for now */
+					watch_info_destroy(info);
+					for (int j = i; j < monitor->watch_count - 1; j++) {
+						monitor->watches[j] = monitor->watches[j + 1];
+					}
+					monitor->watch_count--;
+					i--;
+					list_modified = true;
+					continue;
+				}
+				
+				info->wd = new_fd;
+				info->inode = st.st_ino;
+				info->device = st.st_dev;
+				info->is_shared_fd = false; /* It's a new FD */
+				
+				/* Re-register with kqueue */
+				monitor_add_kqueue_watch(monitor, info);
+				
+				/* If it was a recursive directory, rescan subdirectories */
+				if (info->watch->type == WATCH_DIRECTORY && info->watch->recursive) {
+					log_message(LOG_LEVEL_DEBUG, "Re-scanning subdirectories for recreated path: %s", path);
+					monitor_remove_stale_subdirectory_watches(monitor, path);
+					monitor_add_dir_recursive(monitor, path, info->watch);
+				}
+				list_modified = true;
+				
+			} else {
+				/* Path is valid and unchanged */
+				info->last_validation = time(NULL);
+			}
+		}
+	}
+	
+	return list_modified;
 }
 
 /* Schedule an event for delayed processing */

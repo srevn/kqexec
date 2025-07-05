@@ -15,8 +15,11 @@
 typedef struct {
 	int wd;                         /* Watch descriptor (file descriptor) */
 	char *path;                     /* Full path */
+	ino_t inode;                    /* Inode number for validation */
+	dev_t device;                   /* Device ID for validation */
 	watch_entry_t *watch;           /* Associated watch entry */
 	bool is_shared_fd;              /* Whether this FD is shared with other watches */
+	time_t last_validation;         /* Last time this path was validated */
 } watch_info_t;
 
 /* Deferred directory check queue entry */
@@ -80,5 +83,7 @@ bool monitor_process_events(monitor_t *monitor);
 void schedule_deferred_check(monitor_t *monitor, entity_state_t *state);
 void schedule_delayed_event(monitor_t *monitor, watch_entry_t *watch, file_event_t *event, entity_type_t entity_type);
 void process_delayed_events(monitor_t *monitor);
+bool monitor_validate_and_refresh_path(monitor_t *monitor, const char *path);
+bool monitor_remove_stale_subdirectory_watches(monitor_t *monitor, const char *parent_path);
 
 #endif /* MONITOR_H */
