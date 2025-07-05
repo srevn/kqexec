@@ -1251,12 +1251,14 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 		if (!is_stable) {
 			/* Directory is unstable - reset counter and reschedule */
 			root_state->stability_check_count = 0;
+			root_state->instability_count++; /* Increment instability counter */
 			
 			/* Update activity timestamp */
 			root_state->last_activity_in_tree = *current_time;
 			synchronize_activity_states(entry->path, root_state);
 			
-			log_message(LOG_LEVEL_DEBUG, "Directory %s is still unstable, rescheduling", entry->path);
+			log_message(LOG_LEVEL_DEBUG, "Directory %s is still unstable (instability count: %d), rescheduling",
+						entry->path, root_state->instability_count);
 			
 			/* Calculate adaptive quiet period for rescheduling */
 			long adaptive_period_ms = get_required_quiet_period(root_state);
@@ -1403,6 +1405,7 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 				watch_state->cumulative_dir_change = 0;
 				watch_state->cumulative_depth_change = 0;
 				watch_state->stability_lost = false;
+				watch_state->instability_count = 0;
 				
 				/* Reset state change flags */
 				watch_state->structure_changed = false;

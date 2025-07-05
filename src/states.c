@@ -707,6 +707,7 @@ void synchronize_activity_states(const char *path, entity_state_t *trigger_state
 	/* First pass: Find the most recent activity timestamp across all watches for this path */
 	struct timespec latest_activity_time = trigger_state->last_activity_in_tree;
 	bool any_watch_active = trigger_state->activity_in_progress;
+	int max_instability_count = trigger_state->instability_count;
 	
 	for (int i = 0; i < ENTITY_HASH_SIZE; i++) {
 		entity_state_t *state = entity_states[i];
@@ -731,10 +732,18 @@ void synchronize_activity_states(const char *path, entity_state_t *trigger_state
 				
 				/* Record if any watch has active status */
 				any_watch_active = any_watch_active || state->activity_in_progress;
+				
+				/* Find the maximum instability count */
+				if (state->instability_count > max_instability_count) {
+					max_instability_count = state->instability_count;
+				}
 			}
 			state = state->next;
 		}
 	}
+	
+	/* Also update the trigger state's instability count to the max value */
+	trigger_state->instability_count = max_instability_count;
 	
 	/* Second pass: Update states with consistent values */
 	for (int i = 0; i < ENTITY_HASH_SIZE; i++) {
@@ -846,6 +855,7 @@ void synchronize_activity_states(const char *path, entity_state_t *trigger_state
 						/* Stability checks */
 						state->stability_check_count = trigger_state->stability_check_count;
 						state->failed_checks = trigger_state->failed_checks;
+						state->instability_count = trigger_state->instability_count;
 						
 						/* For cumulative changes, take the values with the greatest magnitude */
 						if (abs(trigger_state->cumulative_file_change) > abs(state->cumulative_file_change)) {
@@ -1102,6 +1112,26 @@ long get_required_quiet_period(entity_state_t *state) {
 				required_ms += size_addition;
 			}
 			
+			/* Apply exponential backoff for consecutive instability */
+			if (state->instability_count > 0) {
+				/* Start with a base multiplier */
+				double backoff_factor = 1.0;
+				
+				/* Increase backoff factor for repeated instability */
+				for (int i = 1; i < state->instability_count; i++) {
+					backoff_factor *= 1.5;
+				}
+				
+				/* Apply a cap to the backoff factor to prevent excessive delays */
+				if (backoff_factor > 5.0) {
+					backoff_factor = 5.0;
+				}
+				
+				required_ms = (long)(required_ms * backoff_factor);
+				log_message(LOG_LEVEL_DEBUG, "Applying instability backoff factor of %.2f, new quiet period: %ld ms",
+							backoff_factor, required_ms);
+			}
+			
 			log_message(LOG_LEVEL_DEBUG, 
 					  "Using operation-centric quiet period for %s: %ld ms (cumulative changes: %+d files, %+d dirs, %+d depth, in dir with %d entries, depth %d)",
 					  state->path, required_ms, state->cumulative_file_change, 
@@ -1281,6 +1311,7 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 	init_activity_tracking(state, watch);
 	state->last_command_time = 0;
 	state->failed_checks = 0;
+	state->instability_count = 0;
 	
 	/* Initialize the new reference stats and change tracking fields */
 	state->reference_stats_initialized = false;

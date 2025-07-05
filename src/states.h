@@ -100,6 +100,7 @@ typedef struct entity_state {
     dir_stats_t dir_stats;               /* Current directory statistics */
     dir_stats_t prev_stats;              /* Previous stats for comparison */
     int stability_check_count;           /* Number of stability checks */
+    int instability_count;               /* Number of times found unstable in a row */
     
     /* Stable reference state tracking */
     dir_stats_t stable_reference_stats;  /* Last known stable state statistics */
