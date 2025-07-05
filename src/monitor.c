@@ -272,9 +272,9 @@ static void check_queue_add_or_update(monitor_t *monitor, const char *path,
 	
 	/* Ensure capacity */
 	if (monitor->check_queue_size >= monitor->check_queue_capacity) {
-		int new_capacity = monitor->check_queue_capacity * 2;
-		deferred_check_t *new_queue = realloc(monitor->check_queue, 
-											new_capacity * sizeof(deferred_check_t));
+		int old_capacity = monitor->check_queue_capacity;
+		int new_capacity = old_capacity == 0 ? 8 : old_capacity * 2;
+		deferred_check_t *new_queue = realloc(monitor->check_queue, new_capacity * sizeof(deferred_check_t));
 		if (!new_queue) {
 			log_message(LOG_LEVEL_ERR, "Failed to resize deferred check queue");
 			return;
@@ -283,10 +283,9 @@ static void check_queue_add_or_update(monitor_t *monitor, const char *path,
 		monitor->check_queue_capacity = new_capacity;
 		
 		/* Zero out new memory */
-		memset(&monitor->check_queue[monitor->check_queue_capacity], 0, 
-			  (new_capacity - monitor->check_queue_capacity) * sizeof(deferred_check_t));
-		
-		monitor->check_queue_capacity = new_capacity;
+		if (new_capacity > old_capacity) {
+			memset(&monitor->check_queue[old_capacity], 0, (new_capacity - old_capacity) * sizeof(deferred_check_t));
+		}
 	}
 	
 	/* Add new entry */
