@@ -21,6 +21,9 @@ typedef struct file_event file_event_t;
 #define DIR_QUIET_PERIOD_MS 1000       /* Longer quiet period for directory operations */
 #define MAX_ACTIVITY_SAMPLES 5         /* Number of recent events to track for activity analysis */
 
+/* Magic number for entity state corruption detection */
+#define ENTITY_STATE_MAGIC 0x4B514558  /* "KQEX" */
+
 /* Entity type for clarity in handling */
 typedef enum {
     ENTITY_UNKNOWN,                    /* Unknown type, to be determined */
@@ -68,10 +71,7 @@ typedef struct {
     size_t recursive_total_size;        /* Total size of all files in tree */
 } dir_stats_t;
 
-/* Magic number for entity state corruption detection */
-#define ENTITY_STATE_MAGIC 0x4B514558  /* "KQEX" */
-
-/* Entity state tracking */
+/* Entity state tracking structure */
 typedef struct entity_state {
     uint32_t magic;                      /* Magic number for corruption detection */
     char *path;                          /* Path to the entity */
