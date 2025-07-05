@@ -9,6 +9,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <dirent.h>
+#include <pthread.h>
 
 #include "states.h"
 #include "command.h"
@@ -24,6 +25,9 @@ extern monitor_t *g_current_monitor;
 /* Hash table of entity states */
 static entity_state_t **entity_states = NULL;
 
+/* Mutex for protecting access to the entity_states hash table */
+static pthread_mutex_t entity_states_mutex;
+
 /* Initialize the entity state system */
 bool entity_state_init(void) {
 	entity_states = calloc(ENTITY_HASH_SIZE, sizeof(entity_state_t *));
@@ -31,6 +35,18 @@ bool entity_state_init(void) {
 		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for entity states");
 		return false;
 	}
+
+	/* Initialize the recursive mutex */
+	pthread_mutexattr_t attr;
+	pthread_mutexattr_init(&attr);
+	pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+	if (pthread_mutex_init(&entity_states_mutex, &attr) != 0) {
+		log_message(LOG_LEVEL_ERR, "Failed to initialize entity states mutex");
+		free(entity_states);
+		entity_states = NULL;
+		return false;
+	}
+	pthread_mutexattr_destroy(&attr);
 	
 	log_message(LOG_LEVEL_DEBUG, "Entity state system initialized");
 	return true;
@@ -49,6 +65,9 @@ static void free_entity_state(entity_state_t *state) {
 void entity_state_cleanup(void) {
 	if (entity_states == NULL) return;
 	
+	/* Lock mutex during cleanup */
+	pthread_mutex_lock(&entity_states_mutex);
+	
 	/* Free all entity states */
 	for (int i = 0; i < ENTITY_HASH_SIZE; i++) {
 		entity_state_t *state = entity_states[i];
@@ -61,6 +80,11 @@ void entity_state_cleanup(void) {
 	}
 	free(entity_states);
 	entity_states = NULL;
+	
+	/* Unlock mutex after search */
+	pthread_mutex_unlock(&entity_states_mutex);
+	pthread_mutex_destroy(&entity_states_mutex);
+	
 	log_message(LOG_LEVEL_DEBUG, "Entity state system cleanup complete");
 }
 
@@ -429,7 +453,10 @@ bool verify_directory_stability(const char *dir_path, dir_stats_t *stats, int re
 	
 	/* Check if we should use an existing directory state's statistics as a baseline */
 	bool use_existing_stats = false;
-	entity_state_t *existing_state = NULL;
+	dir_stats_t existing_stats; /* Local copy to use outside the lock */
+	
+	/* Lock mutex during cleanup */
+	pthread_mutex_lock(&entity_states_mutex);
 	
 	/* Look through all hash buckets for an existing state for this path */
 	if (entity_states) {
@@ -438,10 +465,8 @@ bool verify_directory_stability(const char *dir_path, dir_stats_t *stats, int re
 			while (state) {
 				if (strcmp(state->path, dir_path) == 0) {
 					/* Found an existing state for this path */
-					existing_state = state;
 					
-					/* If the existing state has valid stats, consider using them 
-					 * Check if we have more than just default values */
+					/* If the existing state has valid stats, consider using them */
 					if (state->dir_stats.file_count > 0 || 
 						state->dir_stats.dir_count > 0 ||
 						state->dir_stats.depth > 0 ||
@@ -449,6 +474,7 @@ bool verify_directory_stability(const char *dir_path, dir_stats_t *stats, int re
 						state->dir_stats.recursive_dir_count > 0 ||
 						state->dir_stats.max_depth > 0) {
 						use_existing_stats = true;
+						existing_stats = state->dir_stats; /* Make a safe copy */
 						break;
 					}
 				}
@@ -458,18 +484,21 @@ bool verify_directory_stability(const char *dir_path, dir_stats_t *stats, int re
 		}
 	}
 	
+	/* Unlock mutex after search */
+	pthread_mutex_unlock(&entity_states_mutex);
+	
 	/* If we found an existing state with valid stats, use that for verification */
-	if (use_existing_stats && existing_state) {
+	if (use_existing_stats) {
 		log_message(LOG_LEVEL_DEBUG, 
 				  "Using existing stats for stability verification of %s: files=%d, dirs=%d, depth=%d, recursive_files=%d, recursive_dirs=%d, max_depth=%d",
-				  dir_path, existing_state->dir_stats.file_count, 
-				  existing_state->dir_stats.dir_count, existing_state->dir_stats.depth,
-				  existing_state->dir_stats.recursive_file_count,
-				  existing_state->dir_stats.recursive_dir_count,
-				  existing_state->dir_stats.max_depth);
+				  dir_path, existing_stats.file_count, 
+				  existing_stats.dir_count, existing_stats.depth,
+				  existing_stats.recursive_file_count,
+				  existing_stats.recursive_dir_count,
+				  existing_stats.max_depth);
 		
 		/* Make a copy of the existing stats */
-		*stats = existing_state->dir_stats;
+		*stats = existing_stats;
 		
 		/* Still scan the directory, but only to check for temporary files */
 		dir = opendir(dir_path);
@@ -702,6 +731,9 @@ void synchronize_activity_states(const char *path, entity_state_t *trigger_state
 		return;
 	}
 	
+	/* Lock mutex during cleanup */
+	pthread_mutex_lock(&entity_states_mutex);
+	
 	log_message(LOG_LEVEL_DEBUG, "Synchronizing activity states for path: %s", path);
 	
 	/* First pass: Find the most recent activity timestamp across all watches for this path */
@@ -888,6 +920,9 @@ void synchronize_activity_states(const char *path, entity_state_t *trigger_state
 			state = state->next;
 		}
 	}
+	
+	/* Unlock mutex after search */
+	pthread_mutex_unlock(&entity_states_mutex);
 }
 
 /* Record a new activity event in the entity's history */
@@ -1257,6 +1292,9 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 		return NULL;
 	}
 	
+	/* Lock mutex during cleanup */
+	pthread_mutex_lock(&entity_states_mutex);
+	
 	entity_state_t *state = entity_states[hash];
 
 	/* Look for existing state matching both path AND watch */
@@ -1268,6 +1306,8 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 			if (state->type == ENTITY_UNKNOWN && type != ENTITY_UNKNOWN) {
 				state->type = type;
 			}
+			/* Unlock mutex after search */
+			pthread_mutex_unlock(&entity_states_mutex);
 			return state;
 		}
 		state = state->next;
@@ -1277,6 +1317,8 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 	state = calloc(1, sizeof(entity_state_t));
 	if (!state) {
 		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for entity state: %s", path);
+		/* Unlock mutex after search */
+		pthread_mutex_unlock(&entity_states_mutex);
 		return NULL;
 	}
 
@@ -1287,6 +1329,8 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 	if (!state->path) {
 		log_message(LOG_LEVEL_ERR, "Failed to duplicate path string for entity state: %s", path);
 		free(state);
+		/* Unlock mutex after search */
+		pthread_mutex_unlock(&entity_states_mutex);
 		return NULL;
 	}
 
@@ -1348,6 +1392,8 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 	log_message(LOG_LEVEL_DEBUG, "Created new state for path=%s, watch=%s, type=%d",
 			  path, watch->name, state->type);
 
+	/* Unlock mutex after search */
+	pthread_mutex_unlock(&entity_states_mutex);
 	return state;
 }
 
@@ -1594,6 +1640,9 @@ void update_entity_states_after_reload(watch_entry_t *old_watch, watch_entry_t *
 		return;
 	}
 	
+	/* Lock mutex during cleanup */
+	pthread_mutex_lock(&entity_states_mutex);
+	
 	log_message(LOG_LEVEL_DEBUG, "Updating entity states for watch: %s", old_watch->name);
 	
 	/* Iterate through all entity states and update pointers by name comparison */
@@ -1618,6 +1667,9 @@ void update_entity_states_after_reload(watch_entry_t *old_watch, watch_entry_t *
 			state = next;
 		}
 	}
+	
+	/* Unlock mutex after search */
+	pthread_mutex_unlock(&entity_states_mutex);
 }
 
 /* Clean up entity states that reference deleted watches after config reload */
@@ -1625,6 +1677,9 @@ void cleanup_orphaned_entity_states(config_t *old_config) {
 	if (!old_config || !entity_states) {
 		return;
 	}
+	
+	/* Lock mutex during cleanup */
+	pthread_mutex_lock(&entity_states_mutex);
 	
 	log_message(LOG_LEVEL_DEBUG, "Cleaning up orphaned entity states after config reload");
 	
@@ -1650,4 +1705,7 @@ void cleanup_orphaned_entity_states(config_t *old_config) {
 		/* Clear the hash table entry */
 		entity_states[i] = NULL;
 	}
+	
+	/* Unlock mutex after search */
+	pthread_mutex_unlock(&entity_states_mutex);
 }
