@@ -923,10 +923,10 @@ void record_activity(entity_state_t *state, operation_type_t op) {
 					update_cumulative_changes(root);
 					
 					log_message(LOG_LEVEL_DEBUG, 
-							  "Updated directory stats for %s after change: files=%d, dirs=%d, depth=%d (was: files=%d, dirs=%d, depth=%d)",
+							  "Updated directory stats for %s after change: files=%d, dirs=%d, max_depth=%d (was: files=%d, dirs=%d, max_depth=%d)",
 							  root->path, 
-							  root->dir_stats.file_count, root->dir_stats.dir_count, root->dir_stats.depth,
-							  root->prev_stats.file_count, root->prev_stats.dir_count, root->prev_stats.depth);
+							  root->dir_stats.recursive_file_count, root->dir_stats.recursive_dir_count, root->dir_stats.max_depth,
+							  root->prev_stats.recursive_file_count, root->prev_stats.recursive_dir_count, root->prev_stats.max_depth);
 				}
 			}
 			
