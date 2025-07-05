@@ -49,11 +49,20 @@ static void command_sigchld_handler(int sig) {
 	(void)sig;
 	pid_t pid;
 	int status;
+	sigset_t mask, oldmask;
+	
+	/* Block SIGCHLD during handler execution to prevent reentrancy */
+	sigemptyset(&mask);
+	sigaddset(&mask, SIGCHLD);
+	pthread_sigmask(SIG_BLOCK, &mask, &oldmask);
 	
 	while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
 		/* Mark the command intent as complete */
 		command_intent_mark_complete(pid);
 	}
+	
+	/* Restore original signal mask */
+	pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
 }
 
 /* Initialize command subsystem */
@@ -110,6 +119,12 @@ void command_intent_cleanup(void) {
 bool is_path_affected_by_command(const char *path) {
 	time_t now;
 	time(&now);
+	sigset_t mask, oldmask;
+	
+	/* Block SIGCHLD while accessing command_intents array */
+	sigemptyset(&mask);
+	sigaddset(&mask, SIGCHLD);
+	pthread_sigmask(SIG_BLOCK, &mask, &oldmask);
 	
 	/* Iterate through all active command intents */
 	for (int i = 0; i < MAX_COMMAND_INTENTS; i++) {
@@ -141,6 +156,8 @@ bool is_path_affected_by_command(const char *path) {
 			if (strcmp(path, affected_path) == 0) {
 				log_message(LOG_LEVEL_DEBUG, "Path %s is directly affected by command %d", 
 						  path, i);
+				/* Restore signal mask before returning */
+				pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
 				return true;
 			}
 			
@@ -150,6 +167,8 @@ bool is_path_affected_by_command(const char *path) {
 				(path[affected_len] == '/' || path[affected_len] == '\0')) {
 				log_message(LOG_LEVEL_DEBUG, "Path %s is within affected path %s (command %d)", 
 						  path, affected_path, i);
+				/* Restore signal mask before returning */
+				pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
 				return true;
 			}
 			
@@ -159,11 +178,15 @@ bool is_path_affected_by_command(const char *path) {
 				(affected_path[path_len] == '/' || affected_path[path_len] == '\0')) {
 				log_message(LOG_LEVEL_DEBUG, "Path %s contains affected path %s (command %d)", 
 						  path, affected_path, i);
+				/* Restore signal mask before returning */
+				pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
 				return true;
 			}
 		}
 	}
 	
+	/* Restore signal mask before returning */
+	pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
 	return false;
 }
 
@@ -210,6 +233,13 @@ void command_intent_cleanup_expired(void) {
 
 /* Analyze a command to determine what paths it will affect */
 command_intent_t *command_intent_create(pid_t pid, const char *command, const char *base_path) {
+	sigset_t mask, oldmask;
+	
+	/* Block SIGCHLD while accessing command_intents array */
+	sigemptyset(&mask);
+	sigaddset(&mask, SIGCHLD);
+	pthread_sigmask(SIG_BLOCK, &mask, &oldmask);
+	
 	/* Find a free slot in the command_intents array */
 	int slot = -1;
 	for (int i = 0; i < MAX_COMMAND_INTENTS; i++) {
@@ -221,6 +251,8 @@ command_intent_t *command_intent_create(pid_t pid, const char *command, const ch
 	
 	if (slot == -1) {
 		log_message(LOG_LEVEL_WARNING, "No free slots for command intent tracking");
+		/* Restore signal mask before returning */
+		pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
 		return NULL;
 	}
 	
@@ -313,11 +345,20 @@ command_intent_t *command_intent_create(pid_t pid, const char *command, const ch
 	log_message(LOG_LEVEL_DEBUG, "Created command intent for PID %d with %d affected paths",
 			  pid, intent->affected_path_count);
 	
+	/* Restore signal mask before returning */
+	pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
 	return intent;
 }
 
 /* Mark a command intent as complete */
 bool command_intent_mark_complete(pid_t pid) {
+	sigset_t mask, oldmask;
+	
+	/* Block SIGCHLD while accessing command_intents array */
+	sigemptyset(&mask);
+	sigaddset(&mask, SIGCHLD);
+	pthread_sigmask(SIG_BLOCK, &mask, &oldmask);
+	
 	for (int i = 0; i < MAX_COMMAND_INTENTS; i++) {
 		if (command_intents[i].active && command_intents[i].command_pid == pid) {
 			command_intents[i].active = false;
@@ -338,10 +379,14 @@ bool command_intent_mark_complete(pid_t pid) {
 			}
 			command_intents[i].affected_path_count = 0;
 			
+			/* Restore signal mask before returning */
+			pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
 			return true;
 		}
 	}
 	
+	/* Restore signal mask before returning */
+	pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
 	return false;
 }
 
