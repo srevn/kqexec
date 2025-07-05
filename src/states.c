@@ -1168,19 +1168,30 @@ bool is_quiet_period_elapsed(entity_state_t *state, struct timespec *now) {
 		return true;
 	}
 
-	/* Handle potential time going backwards */
+	/* Calculate elapsed time */
+	long elapsed_ms;
 	if (now->tv_sec < last_activity_ts->tv_sec ||
 		(now->tv_sec == last_activity_ts->tv_sec && now->tv_nsec < last_activity_ts->tv_nsec)) {
-		log_message(LOG_LEVEL_WARNING, "Clock appears to have moved backwards for %s, assuming quiet period elapsed", state->path);
-		return true;
+		elapsed_ms = -1; /* Clock went backwards */
+	} else {
+		struct timespec diff;
+		diff.tv_sec = now->tv_sec - last_activity_ts->tv_sec;
+		if (now->tv_nsec >= last_activity_ts->tv_nsec) {
+			diff.tv_nsec = now->tv_nsec - last_activity_ts->tv_nsec;
+		} else {
+			diff.tv_sec--;
+			diff.tv_nsec = 1000000000 + now->tv_nsec - last_activity_ts->tv_nsec;
+		}
+		elapsed_ms = diff.tv_sec * 1000 + diff.tv_nsec / 1000000;
 	}
-
-	/* Calculate elapsed time */
-	long elapsed_ms = (now->tv_sec - last_activity_ts->tv_sec) * 1000 +
-					 (long)(now->tv_nsec - last_activity_ts->tv_nsec) / 1000000;
 
 	/* Get the required period */
 	long required_quiet_period_ms = get_required_quiet_period(state_for_period_calc);
+
+	if (elapsed_ms < 0) {
+		log_message(LOG_LEVEL_WARNING, "Clock appears to have moved backwards for %s, assuming quiet period elapsed", state->path);
+		return true;
+	}
 
 	bool elapsed = elapsed_ms >= required_quiet_period_ms;
 

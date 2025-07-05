@@ -1039,8 +1039,25 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 		}
 		
 		/* Verify if the quiet period has truly elapsed */
-		long elapsed_ms = (current_time->tv_sec - root_state->last_activity_in_tree.tv_sec) * 1000 +
-						 (current_time->tv_nsec - root_state->last_activity_in_tree.tv_nsec) / 1000000;
+		long elapsed_ms;
+		struct timespec last_activity = root_state->last_activity_in_tree;
+		
+		/* Robustly calculate elapsed time in milliseconds */
+		if (current_time->tv_sec < last_activity.tv_sec ||
+			(current_time->tv_sec == last_activity.tv_sec && current_time->tv_nsec < last_activity.tv_nsec)) {
+			elapsed_ms = 0; /* Clock went backwards, treat as no time elapsed for logging */
+		} else {
+			struct timespec diff;
+			diff.tv_sec = current_time->tv_sec - last_activity.tv_sec;
+			if (current_time->tv_nsec >= last_activity.tv_nsec) {
+				diff.tv_nsec = current_time->tv_nsec - last_activity.tv_nsec;
+			} else {
+				diff.tv_sec--;
+				diff.tv_nsec = 1000000000 + current_time->tv_nsec - last_activity.tv_nsec;
+			}
+			elapsed_ms = diff.tv_sec * 1000 + diff.tv_nsec / 1000000;
+		}
+		
 		long required_quiet_period_ms = get_required_quiet_period(root_state);
 		
 		/* Detailed log showing state of this directory check */
@@ -1431,8 +1448,20 @@ static int get_next_delayed_event_timeout(monitor_t *monitor, struct timespec *n
 	}
 	
 	/* Calculate timeout in milliseconds */
-	long timeout_ms = (earliest.tv_sec - now->tv_sec) * 1000 +
-					 (earliest.tv_nsec - now->tv_nsec) / 1000000;
+	long timeout_ms;
+	if (now->tv_sec > earliest.tv_sec || (now->tv_sec == earliest.tv_sec && now->tv_nsec > earliest.tv_nsec)) {
+		timeout_ms = 0; /* Already overdue */
+	} else {
+		struct timespec diff;
+		diff.tv_sec = earliest.tv_sec - now->tv_sec;
+		if (earliest.tv_nsec >= now->tv_nsec) {
+			diff.tv_nsec = earliest.tv_nsec - now->tv_nsec;
+		} else {
+			diff.tv_sec--;
+			diff.tv_nsec = 1000000000 + earliest.tv_nsec - now->tv_nsec;
+		}
+		timeout_ms = diff.tv_sec * 1000 + diff.tv_nsec / 1000000;
+	}
 	
 	return timeout_ms > 0 ? (int)timeout_ms : 0;
 }
