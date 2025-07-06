@@ -56,6 +56,7 @@ bool entity_state_init(void) {
 static void free_entity_state(entity_state_t *state) {
 	if (state) {
 		free(state->path);
+		free(state->last_activity_path);
 		/* watch_entry_t *watch is owned by config, do not free here */
 		free(state);
 	}
@@ -943,13 +944,19 @@ void record_activity(entity_state_t *state, operation_type_t op) {
 	/* Update activity timestamp for this state, which is the basis for tree activity time */
 	state->last_activity_in_tree = state->last_update;
 	
+	/* Update the last activity path */
+	free(state->last_activity_path);
+	state->last_activity_path = strdup(state->path);
+	
 	/* Update Root State's Tree Activity Time for recursive watches */
 	if (state->watch && state->watch->recursive) {
 		/* First, find the root state */
 		entity_state_t *root = find_root_state(state);
 		if (root && !is_entity_state_corrupted(root)) {
-			/* Update the root's tree activity time */
+			/* Update the root's tree activity time and path */
 			root->last_activity_in_tree = state->last_update;
+			free(root->last_activity_path);
+			root->last_activity_path = strdup(state->path);
 			root->activity_in_progress = true;
 			
 			/* Reset root's stability checks */
@@ -995,6 +1002,8 @@ void record_activity(entity_state_t *state, operation_type_t op) {
 					entity_state_t *parent_state = get_entity_state(path_copy, ENTITY_DIRECTORY, state->watch);
 					if (parent_state) {
 						parent_state->last_activity_in_tree = state->last_update;
+						free(parent_state->last_activity_path);
+						parent_state->last_activity_path = strdup(state->path);
 						parent_state->activity_in_progress = true;
 						parent_state->stability_check_count = 0;
 						
@@ -1021,6 +1030,8 @@ void record_activity(entity_state_t *state, operation_type_t op) {
 		} else if (strcmp(state->path, state->watch->path) == 0) {
 			/* This is the root itself */
 			state->last_activity_in_tree = state->last_update;
+			free(state->last_activity_path);
+			state->last_activity_path = strdup(state->path);
 			
 			/* Update directory stats immediately for content changes to root */
 			if (op == OP_DIR_CONTENT_CHANGED && state->type == ENTITY_DIRECTORY) {
@@ -1351,6 +1362,7 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 	clock_gettime(CLOCK_MONOTONIC, &state->last_update);
 	clock_gettime(CLOCK_REALTIME, &state->wall_time);
 	state->last_activity_in_tree = state->last_update;
+	state->last_activity_path = strdup(path);
 
 	init_activity_tracking(state, watch);
 	state->last_command_time = 0;

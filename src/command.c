@@ -8,6 +8,8 @@
 #include <errno.h>
 #include <stdarg.h>
 #include <pthread.h>
+#include <libgen.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <sys/select.h>
 
@@ -403,21 +405,59 @@ int command_get_debounce_time(void) {
 	return debounce_time_ms;
 }
 
+/* Helper function to substitute a placeholder in a string */
+static void substitute(char *result, const char *placeholder, const char *value) {
+	char *current_pos;
+	while ((current_pos = strstr(result, placeholder)) != NULL) {
+		char temp[MAX_CMD_LEN];
+		*current_pos = '\0';
+		strcpy(temp, result);
+		snprintf(temp + strlen(temp), MAX_CMD_LEN - strlen(temp), "%s%s", 
+				 value, current_pos + strlen(placeholder));
+		strcpy(result, temp);
+	}
+}
+
+/* Helper function to format size in a human-readable way */
+static const char *format_size_human_readable(size_t size, char *buf, size_t buf_size) {
+	const char *suffixes[] = {"B", "K", "M", "G", "T"};
+	int i = 0;
+	double d_size = (double)size;
+	
+	while (d_size >= 1024 && i < 4) {
+		d_size /= 1024;
+		i++;
+	}
+	
+	snprintf(buf, buf_size, "%.1f%s", d_size, suffixes[i]);
+	return buf;
+}
+
 /* Substitutes placeholders in the command string:
  * %p: Path where the event occurred
+ * %f: Filename of the path that triggered the event
+ * %d: Directory containing the path that triggered the event
+ * %b: Base path of the watch from the config
+ * %w: Name of the watch from the config
+ * %r: Event path relative to the watch path
+ * %s: Size of the file in bytes (recursive for directories)
+ * %S: Human-readable size (e.g., 1.2M, 512K)
  * %t: Time of the event
  * %u: User who triggered the event
  * %e: Event type
  */
-char *command_substitute_placeholders(const char *command, const file_event_t *event) {
-	char *result, *pos;
+char *command_substitute_placeholders(const watch_entry_t *watch, const char *command, const file_event_t *event) {
+	char *result;
 	char time_str[64];
 	char user_str[64];
+	char size_str[32];
+	char human_size_str[32];
 	char *event_str;
 	struct passwd *pwd;
 	struct tm tm;
+	struct stat st;
 	
-	if (command == NULL || event == NULL) {
+	if (command == NULL || event == NULL || watch == NULL) {
 		return NULL;
 	}
 	
@@ -433,37 +473,59 @@ char *command_substitute_placeholders(const char *command, const file_event_t *e
 	result[MAX_CMD_LEN - 1] = '\0';
 	
 	/* Substitute %p with the path */
-	while ((pos = strstr(result, "%p")) != NULL) {
-		char temp[MAX_CMD_LEN];
+	substitute(result, "%p", event->path);
+	
+	/* Substitute %f with the filename */
+	if (strstr(result, "%f")) {
+		char *path_copy = strdup(event->path);
+		substitute(result, "%f", basename(path_copy));
+		free(path_copy);
+	}
+	
+	/* Substitute %d with the directory */
+	if (strstr(result, "%d")) {
+		char *path_copy = strdup(event->path);
+		substitute(result, "%d", dirname(path_copy));
+		free(path_copy);
+	}
+	
+	/* Substitute %b with the base watch path */
+	substitute(result, "%b", watch->path);
+	
+	/* Substitute %w with the watch name */
+	substitute(result, "%w", watch->name);
+	
+	/* Substitute %r with the relative path */
+	if (strstr(result, "%r")) {
+		const char *relative_path = event->path + strlen(watch->path);
+		if (*relative_path == '/') {
+			relative_path++;
+		}
+		substitute(result, "%r", relative_path);
+	}
+	
+	/* Handle size placeholders %s and %S */
+	if (strstr(result, "%s") || strstr(result, "%S")) {
+		size_t size = 0;
+		entity_state_t *state = get_entity_state(event->path, ENTITY_UNKNOWN, (watch_entry_t *)watch);
 		
-		/* Copy everything before the placeholder */
-		*pos = '\0';
-		strcpy(temp, result);
+		if (state && state->type == ENTITY_DIRECTORY) {
+			size = state->dir_stats.recursive_total_size;
+		} else if (stat(event->path, &st) == 0) {
+			size = st.st_size;
+		}
 		
-		/* Append the path and the rest of the command */
-		snprintf(temp + strlen(temp), MAX_CMD_LEN - strlen(temp), "%s%s", 
-				event->path, pos + 2);
+		snprintf(size_str, sizeof(size_str), "%zu", size);
+		substitute(result, "%s", size_str);
 		
-		strcpy(result, temp);
+		format_size_human_readable(size, human_size_str, sizeof(human_size_str));
+		substitute(result, "%S", human_size_str);
 	}
 	
 	/* Substitute %t with the time */
 	localtime_r(&event->wall_time.tv_sec, &tm);
 	strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", &tm);
-	
-	while ((pos = strstr(result, "%t")) != NULL) {
-		char temp[MAX_CMD_LEN];
-		
-		/* Copy everything before the placeholder */
-		*pos = '\0';
-		strcpy(temp, result);
-		
-		/* Append the time and the rest of the command */
-		snprintf(temp + strlen(temp), MAX_CMD_LEN - strlen(temp), "%s%s", 
-				time_str, pos + 2);
-		
-		strcpy(result, temp);
-	}
+	substitute(result, "%t", time_str);
 	
 	/* Substitute %u with the user */
 	pwd = getpwuid(event->user_id);
@@ -472,37 +534,11 @@ char *command_substitute_placeholders(const char *command, const file_event_t *e
 	} else {
 		snprintf(user_str, sizeof(user_str), "%d", event->user_id);
 	}
-	
-	while ((pos = strstr(result, "%u")) != NULL) {
-		char temp[MAX_CMD_LEN];
-		
-		/* Copy everything before the placeholder */
-		*pos = '\0';
-		strcpy(temp, result);
-		
-		/* Append the user and the rest of the command */
-		snprintf(temp + strlen(temp), MAX_CMD_LEN - strlen(temp), "%s%s", 
-				user_str, pos + 2);
-		
-		strcpy(result, temp);
-	}
+	substitute(result, "%u", user_str);
 	
 	/* Substitute %e with the event type */
 	event_str = (char *)event_type_to_string(event->type);
-	
-	while ((pos = strstr(result, "%e")) != NULL) {
-		char temp[MAX_CMD_LEN];
-		
-		/* Copy everything before the placeholder */
-		*pos = '\0';
-		strcpy(temp, result);
-		
-		/* Append the event type and the rest of the command */
-		snprintf(temp + strlen(temp), MAX_CMD_LEN - strlen(temp), "%s%s", 
-				event_str, pos + 2);
-		
-		strcpy(result, temp);
-	}
+	substitute(result, "%e", event_str);
 	
 	return result;
 }
@@ -567,7 +603,7 @@ bool command_execute_sync(const watch_entry_t *watch, const file_event_t *event)
 	time(&start_time);
 	
 	/* Substitute placeholders in the command */
-	command = command_substitute_placeholders(watch->command, event);
+	command = command_substitute_placeholders(watch, watch->command, event);
 	if (command == NULL) {
 		return false;
 	}

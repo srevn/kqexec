@@ -1371,7 +1371,7 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 		
 		/* Create synthetic event */
 		file_event_t synthetic_event = {
-			.path = entry->path,
+			.path = root_state->last_activity_path ? root_state->last_activity_path : entry->path,
 			.type = EVENT_STRUCTURE,
 			.time = root_state->last_update,
 			.wall_time = root_state->wall_time,

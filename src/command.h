@@ -31,7 +31,7 @@ typedef struct {
 /* Function prototypes */
 bool command_execute(const watch_entry_t *watch, const file_event_t *event);
 bool command_execute_sync(const watch_entry_t *watch, const file_event_t *event);
-char *command_substitute_placeholders(const char *command, const file_event_t *event);
+char *command_substitute_placeholders(const watch_entry_t *watch, const char *command, const file_event_t *event);
 void thread_safe_log(int level, const char *format, ...);
 
 /* Initialize command subsystem */

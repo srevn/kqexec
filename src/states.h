@@ -112,6 +112,7 @@ typedef struct entity_state {
     bool checking_scheduled;             /* Flag indicating a deferred check is scheduled */
     
     struct timespec last_activity_in_tree;  /* Latest activity anywhere in the tree */
+    char *last_activity_path;            /* Path of the most recent activity */
     
     /* Hash table linkage */
     struct entity_state *next;            /* Next entity in hash bucket */
