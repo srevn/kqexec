@@ -57,6 +57,7 @@ static void free_entity_state(entity_state_t *state) {
 	if (state) {
 		free(state->path);
 		free(state->last_activity_path);
+		free(state->trigger_file_path);
 		/* watch_entry_t *watch is owned by config, do not free here */
 		free(state);
 	}
@@ -1363,6 +1364,7 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 	clock_gettime(CLOCK_REALTIME, &state->wall_time);
 	state->last_activity_in_tree = state->last_update;
 	state->last_activity_path = strdup(path);
+	state->trigger_file_path = NULL;
 
 	init_activity_tracking(state, watch);
 	state->last_command_time = 0;
@@ -1550,6 +1552,41 @@ bool should_execute_command(entity_state_t *state, operation_type_t op, int defa
 
 	log_message(LOG_LEVEL_DEBUG, "Command execution debounced for %s", state->path);
 	return false;
+}
+
+/* Find the most recently modified file in a directory */
+char *find_most_recent_file_in_dir(const char *dir_path) {
+	DIR *dir;
+	struct dirent *entry;
+	struct stat st;
+	char path[PATH_MAX];
+	char *newest_file_path = NULL;
+	time_t newest_time = 0;
+	
+	dir = opendir(dir_path);
+	if (!dir) {
+		return NULL;
+	}
+	
+	while ((entry = readdir(dir))) {
+		if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+			continue;
+		}
+		
+		snprintf(path, sizeof(path), "%s/%s", dir_path, entry->d_name);
+		if (stat(path, &st) == 0) {
+			/* Consider both modification time and change time */
+			time_t latest_time = (st.st_mtime > st.st_ctime) ? st.st_mtime : st.st_ctime;
+			if (latest_time > newest_time) {
+				newest_time = latest_time;
+				free(newest_file_path);
+				newest_file_path = strdup(path);
+			}
+		}
+	}
+	
+	closedir(dir);
+	return newest_file_path;
 }
 
 /* Process an event and potentially execute a command */

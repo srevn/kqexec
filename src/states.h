@@ -113,6 +113,7 @@ typedef struct entity_state {
     
     struct timespec last_activity_in_tree;  /* Latest activity anywhere in the tree */
     char *last_activity_path;            /* Path of the most recent activity */
+    char *trigger_file_path;             /* Path of the specific file that triggered a directory event */
     
     /* Hash table linkage */
     struct entity_state *next;            /* Next entity in hash bucket */
@@ -138,5 +139,6 @@ void update_cumulative_changes(entity_state_t *state);
 void init_change_tracking(entity_state_t *state);
 void update_entity_states_after_reload(watch_entry_t *old_watch, watch_entry_t *new_watch);
 void cleanup_orphaned_entity_states(config_t *old_config);
+char *find_most_recent_file_in_dir(const char *dir_path);
 
 #endif /* STATES_H */

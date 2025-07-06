@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <limits.h>
+#include <libgen.h>
 #include <sys/types.h>
 #include <sys/event.h>
 #include <sys/time.h>
@@ -1368,6 +1369,30 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 		
 		/* Propagate status to all related states */
 		synchronize_activity_states(root_state->path, root_state);
+		
+		/* Find the most recent file if any command needs it */
+		for (int i = 0; i < entry->watch_count; i++) {
+			if (strstr(entry->watches[i]->command, "%F")) {
+				free(root_state->trigger_file_path);
+				root_state->trigger_file_path = NULL; /* Clear previous path */
+				
+				char *scan_path = root_state->last_activity_path ? root_state->last_activity_path : entry->path;
+				struct stat st;
+				
+				if (stat(scan_path, &st) == 0 && S_ISDIR(st.st_mode)) {
+					/* It's a directory, scan it for the most recent file */
+					root_state->trigger_file_path = find_most_recent_file_in_dir(scan_path);
+				} else {
+					/* It's a file, or doesn't exist; use the path directly */
+					root_state->trigger_file_path = strdup(scan_path);
+				}
+				
+				if (root_state->trigger_file_path) {
+					log_message(LOG_LEVEL_DEBUG, "Found trigger file for %%F: %s", root_state->trigger_file_path);
+				}
+				break; /* Only need to find it once */
+			}
+		}
 		
 		/* Create synthetic event */
 		file_event_t synthetic_event = {

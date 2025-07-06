@@ -127,9 +127,17 @@ Kqexec supports the following event types that can be specified in the configura
 Commands can include the following placeholders that will be replaced at runtime:
 
 - `%p` : Path where the event occurred
+- `%f` : Filename (for files) or subdirectory name (for directories) which triggered the event
+- `%d` : Directory containing the path that triggered the event
+- `%b` : Base path of the watch from the config
+- `%w` : Name of the watch from the config
+- `%r` : Event path relative to the watch path
+- `%F` : The file that triggered a directory event (most recent)
+- `%s` : Size of the file in bytes (recursive for directories)
+- `%S` : Human-readable size (e.g., 1.2M, 512K)
 - `%t` : Time of the event (format: YYYY-MM-DD HH:MM:SS)
 - `%u` : User who triggered the event
-- `%e` : Event type
+- `%e` : Event type which occurred
 
 ## Examples
 

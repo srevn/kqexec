@@ -435,16 +435,17 @@ static const char *format_size_human_readable(size_t size, char *buf, size_t buf
 
 /* Substitutes placeholders in the command string:
  * %p: Path where the event occurred
- * %f: Filename of the path that triggered the event
+ * %f: Filename (for files) or subdirectory name (for directories) which triggered the event
  * %d: Directory containing the path that triggered the event
  * %b: Base path of the watch from the config
  * %w: Name of the watch from the config
  * %r: Event path relative to the watch path
+ * %F: The file that triggered a directory event (most recent)
  * %s: Size of the file in bytes (recursive for directories)
  * %S: Human-readable size (e.g., 1.2M, 512K)
- * %t: Time of the event
+ * %t: Time of the event (format: YYYY-MM-DD HH:MM:SS)
  * %u: User who triggered the event
- * %e: Event type
+ * %e: Event type which occurred
  */
 char *command_substitute_placeholders(const watch_entry_t *watch, const char *command, const file_event_t *event) {
 	char *result;
@@ -504,11 +505,24 @@ char *command_substitute_placeholders(const watch_entry_t *watch, const char *co
 		substitute(result, "%r", relative_path);
 	}
 	
+	/* Get entity state for size and trigger file placeholders */
+	entity_state_t *state = get_entity_state(event->path, ENTITY_UNKNOWN, (watch_entry_t *)watch);
+	
+	/* Substitute %F with the trigger file path */
+	if (state) {
+		entity_state_t *root_state = find_root_state(state);
+		if (root_state && root_state->trigger_file_path) {
+			substitute(result, "%F", root_state->trigger_file_path);
+		} else {
+			substitute(result, "%F", event->path); /* Fallback to event path */
+		}
+	} else {
+		substitute(result, "%F", event->path); /* Fallback if no state */
+	}
+	
 	/* Handle size placeholders %s and %S */
 	if (strstr(result, "%s") || strstr(result, "%S")) {
 		size_t size = 0;
-		entity_state_t *state = get_entity_state(event->path, ENTITY_UNKNOWN, (watch_entry_t *)watch);
-		
 		if (state && state->type == ENTITY_DIRECTORY) {
 			size = state->dir_stats.recursive_total_size;
 		} else if (stat(event->path, &st) == 0) {
