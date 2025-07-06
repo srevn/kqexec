@@ -37,11 +37,11 @@ void thread_safe_log(int level, const char *format, ...);
 /* Initialize command subsystem */
 bool command_init(void);
 
-/* Get debounce time */
-int command_get_debounce_time(void);
-
 /* Clean up command subsystem */
 void command_cleanup(void);
+
+/* Get debounce time */
+int command_get_debounce_time(void);
 
 /* Set debounce time */
 void command_debounce_time(int milliseconds);

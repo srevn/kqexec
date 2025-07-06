@@ -831,10 +831,15 @@ bool monitor_setup(monitor_t *monitor) {
 	/* Add watches for each entry in the configuration */
 	for (int i = 0; i < monitor->config->watch_count; i++) {
 		if (!monitor_add_watch(monitor, monitor->config->watches[i])) {
-			log_message(LOG_LEVEL_ERR, "Failed to add watch for %s", 
+			log_message(LOG_LEVEL_WARNING, "Failed to add watch for %s, skipping",
 					  monitor->config->watches[i]->path);
-			return false;
 		}
+	}
+
+	/* Check if we have at least one active watch */
+	if (monitor->watch_count == 0) {
+		log_message(LOG_LEVEL_ERR, "No valid watches could be set up, aborting");
+		return false;
 	}
 	
 	/* Add config file watch for hot reload by adding it to the config structure */
