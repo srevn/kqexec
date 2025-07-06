@@ -6,19 +6,19 @@ A lightweight file and directory monitoring utility for FreeBSD and macOS that u
 
 - **Efficient Monitoring**: Uses Kqueue mechanism for low-overhead file system monitoring
 - **Flexible Configuration**: Monitor specific files or entire directory trees
-- **Event Filtering**: Select which event types to monitor (content, modify, metadata, etc.)
+- **Event Filtering**: Select which event types to monitor (content, structure, metadata)
 - **Custom Commands**: Execute arbitrary commands when events occur
 - **Recursive Monitoring**: Automatically monitor new files and directories
 - **Dynamic Directory Scanning**: Automatically detects and monitors new files and directories as they are created
 - **Hidden File Support**: Optional monitoring of hidden files and directories (starting with a dot)
 - **State-Based Event Processing**: Tracks the state of files and directories to detect meaningful changes
 - **Command Debouncing**: Prevent command execution flooding when many events occur rapidly
-- **Daemon Mode**: Run as a background service
-- **Syslog Integration**: Comprehensive logging with configurable verbosity
 - **Placeholder Substitution**: Dynamic command generation based on event details
-- **Command Intent Tracking**: Filters out self-generated events by analyzing command operations.
-- **Directory Stability Verification**: Uses stat() to recursively verify directory stability before executing commands.
-- **Configuration Hot-Reload**: Monitors the configuration file and automatically reloads when it changes.
+- **Command Intent Tracking**: Filters out self-generated events by analyzing command operations
+- **Directory Stability Verification**: Uses `stat()` to recursively verify directory stability before executing commands
+- **Configuration Hot-Reload**: Monitors the configuration file and automatically reloads when it changes
+- **Syslog Integration**: Comprehensive logging with configurable verbosity
+- **Daemon Mode**: Run as a background service
 
 ## Requirements
 
@@ -28,8 +28,7 @@ A lightweight file and directory monitoring utility for FreeBSD and macOS that u
 
 ## Installation
 
-### Building from Source
-
+#### Building from Source
 1. Clone the repository or download the source code
 2. Build the application:
 
@@ -37,7 +36,7 @@ A lightweight file and directory monitoring utility for FreeBSD and macOS that u
 make
 ```
 
-### Installation Options
+#### Installation Options
 
 Install the application and its configuration file:
 
@@ -51,17 +50,7 @@ Generate a sample configuration:
 make config
 ```
 
-Note: Due to incompatibilities between macOS and FreeBSD Make utility, it's best to use gmake on FreeBSD.
-
-```sh
-pkg install gmake
-
-gmake
-
-gmake config
-
-gmake install
-```
+**Note:** Due to incompatibilities between macOS and FreeBSD Make utility, it's best to use gmake on FreeBSD.
 
 ## Usage
 
@@ -191,6 +180,7 @@ hidden = true
 directory = /var/db/backups
 events = ALL
 command = mail -s "New database backup created: %p" admin@example.com
+processing_delay = 10000
 log_output = false
 recursive = false
 ```
@@ -203,7 +193,34 @@ recursive = false
 4. **Backup verification**: Ensure backup jobs complete by monitoring the creation of expected files
 5. **Hidden file monitoring**: Track changes in user configuration directories like .config
 
-### Reloading Configuration
+## Running as a Service
+
+### launchd on macOS
+
+To load or unload the daemon:
+
+```sh
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.kqexec.daemon.plist # to load
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.kqexec.daemon.plist # to unload
+```
+
+### RC Script on FreeBSD
+
+To enable at boot add the following line to `/etc/rc.conf`:
+
+```sh
+kqexec_enable="YES"
+```
+
+Start the service:
+
+```sh
+service kqexec start
+```
+
+**Note:** `make install` automatically installs launchd agent or rc script based on your distribution.
+
+## Reloading Configuration
 
 kqexec accepts SIGHUP signal for reloading configuration without restarting the application.
 
@@ -219,100 +236,11 @@ Or, on macOS:
 launchctl kill SIGHUP gui/$(id -u)/com.kqexec.daemon
 ```
 
-Note: kqexec automatically monitors changes to its configuration file and reloads when modified.
-
-## Running as a Service
-
-### launchd on macOS
-
-To load the daemon:
-
-```sh
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.kqexec.daemon.plist
-```
-
-To unload the daemon:
-
-```sh
-launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.kqexec.daemon.plist
-```
-
-### RC Script on FreeBSD
-
-Create an RC script in `/usr/local/etc/rc.d/kqexec`:
-
-```sh
-#!/bin/sh
-#
-# PROVIDE: kqexec
-# REQUIRE: DAEMON
-# KEYWORD: shutdown
-
-. /etc/rc.subr
-
-name=kqexec
-rcvar=kqexec_enable
-
-load_rc_config $name
-
-: ${kqexec_enable:="NO"}
-: ${kqexec_config:="/usr/local/etc/kqexec.conf"}
-
-command="/usr/local/bin/kqexec"
-command_args="-d -c ${kqexec_config}"
-extra_commands="reload"
-
-run_rc_command "$1"
-```
-
-Make the script executable:
-
-```sh
-chmod +x /usr/local/etc/rc.d/kqexec
-```
-
-### Enabling at Boot
-
-Add the following line to `/etc/rc.conf`:
-
-```sh
-kqexec_enable="YES"
-```
-
-Start the service:
-
-```sh
-service kqexec start
-```
+**Note:** kqexec automatically monitors changes to its configuration file and reloads when modified.
 
 ## Advanced Features
 
-### State-Based Event Processing
-
-Kqexec uses a state tracking system to detect meaningful file system events. Rather than simply reacting to raw kqueue events, kqexec:
-
-1. Tracks the state of each monitored file and directory
-2. Compares new events against the known state
-3. Determines the actual operation that occurred (create, modify, delete, etc.)
-4. Filters events based on configured event types
-5. Executes commands only when meaningful changes occur
-
-This approach provides several advantages:
-- Eliminates redundant command executions
-- Properly identifies complex operations (like a file save that generates multiple raw events)
-- Maintains context across related events
-- Enables more precise filtering and control
-
-### Dynamic Directory Scanning
-
-When monitoring directories recursively, kqexec automatically detects changes in directory structure and updates its monitoring accordingly:
-
-- New files and subdirectories are automatically added to monitoring
-- Only previously unmonitored entries are added, preventing duplicate watches
-- Directory scanning is debounced to prevent excessive resource usage during rapid changes
-- Can optionally include hidden files and directories in monitoring
-
-### Command Debouncing
+#### Command Debouncing
 
 To prevent flooding when many events occur in rapid succession, kqexec implements command debouncing based on entity state. This ensures the same command won't be executed more frequently than the debounce period.
 
@@ -326,30 +254,25 @@ Different operations can have different debounce periods based on their importan
 - Critical operations like file creation/deletion use shorter debounce times
 - Less critical operations like attribute changes use the full debounce time
 
-### Hidden File Monitoring
+#### Multiline Command Support
 
-Kqexec can optionally monitor hidden files and directories (those starting with a dot). This is particularly useful for tracking user configuration files.
+Commands can span multiple lines using backslash continuation or proper quoting, allowing for complex command structures and shell scripts.
 
-Enable hidden file monitoring with the `hidden` or `include_hidden` option in the configuration:
+#### Complexity-Based Stability Control
 
-```ini
-[User Configs]
-directory = /home/user/.config
-events = STRUCTURE
-command = logger "Config changed: %p"
-recursive = true
-hidden = true
-```
-### Viewing Logs
+The `complexity` option allows fine-tuning of stability verification for heavy filesystem operations. Higher values increase wait times for stability checks, reducing I/O overhead during intensive operations.
+
+#### Delayed Event Processing
+
+The `processing_delay` option introduces an initial delay before processing events, useful for scenarios where immediate response isn't required or when batching operations.
+
+#### Buffered Command Output
 
 When running commands, you have two options for handling their output: streaming it directly to logs as it is generated or buffering and flushing it once the command completes. Using `buffer_output` can be particularly helpful with verbose commands that produce extensive output.
 
-```ini
-log_output = true           # Whether to capture and log command output (default: false)
-buffer_output = true        # Whether to buffer log output until command completes (default: false)
-```
+## Viewing Logs
 
-Check syslog for messages from kqexec:
+On FreeBSD check syslog for messages from kqexec:
 
 ```sh
 grep kqexec /var/log/messages
@@ -361,22 +284,10 @@ If you prefer separate log file, add this lines to `/etc/syslog.conf`
 !kqexec
 *.*              /var/log/kqexec.log
 ```
-
-or
-
-```ini
-!kqexec
-*.notice         /var/log/kqexec.log
-```
+**Note:** You can add a second-pass filter by changing to `*.notice` or `*.info` if log level set higher.
 
 On macOS:
 
 ```sh
 tail ~/Library/Logs/kqexec.log
-```
-
-Increase log verbosity for debugging:
-
-```sh
-kqexec -l 7  # Set log level to DEBUG
 ```
