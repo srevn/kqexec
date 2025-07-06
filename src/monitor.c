@@ -1671,7 +1671,7 @@ bool monitor_start(monitor_t *monitor) {
 void monitor_request_reload(monitor_t *monitor) {
 	if (monitor != NULL) {
 		monitor->reload_requested = true;
-		log_message(LOG_LEVEL_INFO, "Configuration reload requested");
+		log_message(LOG_LEVEL_DEBUG, "Configuration reload requested");
 	}
 }
 
@@ -1703,6 +1703,8 @@ bool monitor_reload(monitor_t *monitor) {
 	if (!config_parse_file(new_config, monitor->config_file)) {
 		log_message(LOG_LEVEL_ERR, "Failed to parse configuration file during reload: %s", monitor->config_file);
 		config_destroy(new_config);
+		/* Re-validate the watch on the config file to detect subsequent changes */
+		monitor_validate_and_refresh_path(monitor, monitor->config_file);
 		return false;
 	}
 	
@@ -1862,6 +1864,9 @@ bool monitor_reload(monitor_t *monitor) {
 	config_destroy(old_config);
 	monitor->config = new_config;
 
+	/* After reloading, explicitly validate the config file watch to handle editor atomic saves */
+	monitor_validate_and_refresh_path(monitor, monitor->config_file);
+
 	log_message(LOG_LEVEL_INFO, "Configuration reload complete: %d active watches", monitor->watch_count);
 	return true;
 }
@@ -1918,7 +1923,7 @@ bool monitor_validate_and_refresh_path(monitor_t *monitor, const char *path) {
 			
 			if (!path_exists) {
 				/* Path does not exist - it was deleted */
-				log_message(LOG_LEVEL_INFO, "Path deleted: %s. Removing watch.", path);
+				log_message(LOG_LEVEL_DEBUG, "Path deleted: %s. Removing watch.", path);
 				
 				/* If it was a recursive directory, remove all subdirectory watches */
 				if (info->watch->type == WATCH_DIRECTORY && info->watch->recursive) {
@@ -1936,7 +1941,7 @@ bool monitor_validate_and_refresh_path(monitor_t *monitor, const char *path) {
 				
 			} else if (info->inode != st.st_ino || info->device != st.st_dev) {
 				/* Path exists but inode/device changed - it was recreated */
-				log_message(LOG_LEVEL_INFO, "Path recreated: %s. Refreshing watch.", path);
+				log_message(LOG_LEVEL_DEBUG, "Path recreated: %s. Refreshing watch.", path);
 				
 				/* Close old file descriptor if not shared */
 				if (!info->is_shared_fd && info->wd >= 0) {

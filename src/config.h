@@ -47,7 +47,7 @@ typedef struct {
 config_t *config_create(void);
 void config_destroy(config_t *config);
 bool config_parse_file(config_t *config, const char *filename);
-event_type_t config_parse_events(const char *events_str);
+bool config_parse_events(const char *events_str, event_type_t *events);
 const char *event_type_to_string(event_type_t event);
 
 #endif /* CONFIG_H */

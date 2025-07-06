@@ -46,17 +46,17 @@ static char *trim(char *str) {
 }
 
 /* Parse event type string */
-event_type_t config_parse_events(const char *events_str) {
-	event_type_t events = EVENT_NONE;
+bool config_parse_events(const char *events_str, event_type_t *events) {
+	*events = EVENT_NONE;
 	char *events_copy, *token, *saveptr;
 	
 	if (events_str == NULL) {
-		return events;
+		return true;
 	}
 	
 	events_copy = strdup(events_str);
 	if (events_copy == NULL) {
-		return events;
+		return false;
 	}
 	
 	token = strtok_r(events_copy, ",", &saveptr);
@@ -64,22 +64,24 @@ event_type_t config_parse_events(const char *events_str) {
 		char *trimmed_token = trim(token);
 		
 		if (strcasecmp(trimmed_token, "STRUCTURE") == 0) {
-			events |= EVENT_STRUCTURE;
+			*events |= EVENT_STRUCTURE;
 		} else if (strcasecmp(trimmed_token, "METADATA") == 0) {
-			events |= EVENT_METADATA;
+			*events |= EVENT_METADATA;
 		} else if (strcasecmp(trimmed_token, "CONTENT") == 0) {
-			events |= EVENT_CONTENT;
+			*events |= EVENT_CONTENT;
 		} else if (strcasecmp(trimmed_token, "ALL") == 0) {
-			events |= EVENT_ALL;
+			*events |= EVENT_ALL;
 		} else {
-			log_message(LOG_LEVEL_WARNING, "Unknown event type: %s", trimmed_token);
+			log_message(LOG_LEVEL_ERR, "Unknown event type: %s", trimmed_token);
+			free(events_copy);
+			return false;
 		}
 		
 		token = strtok_r(NULL, ",", &saveptr);
 	}
 	
 	free(events_copy);
-	return events;
+	return true;
 }
 
 /* Convert event type to string representation */
@@ -360,7 +362,13 @@ bool config_parse_file(config_t *config, const char *filename) {
 				current_watch->type = WATCH_DIRECTORY;
 				current_watch->path = strdup(value);
 			} else if (strcasecmp(key, "events") == 0) {
-				current_watch->events = config_parse_events(value);
+				if (!config_parse_events(value, &current_watch->events)) {
+					log_message(LOG_LEVEL_ERR, "Invalid value for events at line %d: %s",
+							  line_number, value);
+					watch_entry_destroy(current_watch);
+					fclose(fp);
+					return false;
+				}
 			} else if (strcasecmp(key, "command") == 0) {
 				current_watch->command = strdup(value);
 			} else if (strcasecmp(key, "log_output") == 0) {
@@ -369,8 +377,11 @@ bool config_parse_file(config_t *config, const char *filename) {
 				} else if (strcasecmp(value, "false") == 0 || strcmp(value, "0") == 0) {
 					current_watch->log_output = false;
 				} else {
-					log_message(LOG_LEVEL_WARNING, "Invalid value for log_output at line %d: %s", 
+					log_message(LOG_LEVEL_ERR, "Invalid value for log_output at line %d: %s", 
 							  line_number, value);
+					watch_entry_destroy(current_watch);
+					fclose(fp);
+					return false;
 				}
 			} else if (strcasecmp(key, "buffer_output") == 0) {
 				if (strcasecmp(value, "true") == 0 || strcmp(value, "1") == 0) {
@@ -378,8 +389,11 @@ bool config_parse_file(config_t *config, const char *filename) {
 				} else if (strcasecmp(value, "false") == 0 || strcmp(value, "0") == 0) {
 					current_watch->buffer_output = false;
 				} else {
-					log_message(LOG_LEVEL_WARNING, "Invalid value for buffer_output at line %d: %s", 
+					log_message(LOG_LEVEL_ERR, "Invalid value for buffer_output at line %d: %s", 
 							  line_number, value);
+					watch_entry_destroy(current_watch);
+					fclose(fp);
+					return false;
 				}
 			} else if (strcasecmp(key, "recursive") == 0) {
 				if (strcasecmp(value, "true") == 0 || strcmp(value, "1") == 0) {
@@ -387,8 +401,11 @@ bool config_parse_file(config_t *config, const char *filename) {
 				} else if (strcasecmp(value, "false") == 0 || strcmp(value, "0") == 0) {
 					current_watch->recursive = false;
 				} else {
-					log_message(LOG_LEVEL_WARNING, "Invalid value for recursive at line %d: %s", 
+					log_message(LOG_LEVEL_ERR, "Invalid value for recursive at line %d: %s", 
 							  line_number, value);
+					watch_entry_destroy(current_watch);
+					fclose(fp);
+					return false;
 				}
 			} else if (strcasecmp(key, "hidden") == 0 || strcasecmp(key, "include_hidden") == 0) {
 				if (strcasecmp(value, "true") == 0 || strcmp(value, "1") == 0) {
@@ -396,24 +413,31 @@ bool config_parse_file(config_t *config, const char *filename) {
 				} else if (strcasecmp(value, "false") == 0 || strcmp(value, "0") == 0) {
 					current_watch->hidden = false;
 				} else {
-					log_message(LOG_LEVEL_WARNING, "Invalid value for hidden at line %d: %s", 
+					log_message(LOG_LEVEL_ERR, "Invalid value for hidden at line %d: %s", 
 							  line_number, value);
+					watch_entry_destroy(current_watch);
+					fclose(fp);
+					return false;
 				}
 			} else if (strcasecmp(key, "complexity") == 0) {
 				double complexity_value = atof(value);
 				if (complexity_value <= 0) {
-					log_message(LOG_LEVEL_WARNING, "Invalid complexity value at line %d: %s (must be > 0)",
+					log_message(LOG_LEVEL_ERR, "Invalid complexity value at line %d: %s (must be > 0)",
 							  line_number, value);
-					current_watch->complexity = 1.0;
+					watch_entry_destroy(current_watch);
+					fclose(fp);
+					return false;
 				} else {
 					current_watch->complexity = complexity_value;
 				}	
 			} else if (strcasecmp(key, "processing_delay") == 0) {
 				int delay_value = atoi(value);
 				if (delay_value < 0) {
-					log_message(LOG_LEVEL_WARNING, "Invalid processing_delay value at line %d: %s (must be >= 0)", 
+					log_message(LOG_LEVEL_ERR, "Invalid processing_delay value at line %d: %s (must be >= 0)", 
 							  line_number, value);
-					current_watch->processing_delay = 0;
+					watch_entry_destroy(current_watch);
+					fclose(fp);
+					return false;
 				} else {
 					current_watch->processing_delay = delay_value;
 				}
