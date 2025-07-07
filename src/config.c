@@ -430,7 +430,7 @@ bool config_parse_file(config_t *config, const char *filename) {
 				} else {
 					current_watch->complexity = complexity_value;
 				}	
-			} else if (strcasecmp(key, "processing_delay") == 0) {
+			} else if (strcasecmp(key, "delay") == 0 || strcasecmp(key, "processing_delay") == 0) {
 				int delay_value = atoi(value);
 				if (delay_value < 0) {
 					log_message(LOG_LEVEL_ERR, "Invalid processing_delay value at line %d: %s (must be >= 0)", 
