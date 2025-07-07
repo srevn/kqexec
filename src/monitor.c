@@ -1280,8 +1280,7 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 		
 		/* Consider previous stability for check reduction */
 		if (root_state->stability_lost && required_checks > 1) {
-			required_checks--;
-			log_message(LOG_LEVEL_DEBUG, "Adjusting required checks due to previous stability: %d", required_checks);
+			log_message(LOG_LEVEL_DEBUG, "Stability was lost, maintaining required checks at %d", required_checks);
 		}
 		
 		/* Ensure at least one check is required */

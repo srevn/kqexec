@@ -254,27 +254,14 @@ bool gather_basic_directory_stats(const char *dir_path, dir_stats_t *stats, int 
 				/* Incorporate subdirectory size */
 				stats->total_size += subdir_stats.total_size;
 				
-				/* Calculate and update recursive stats */
-				if (subdir_stats.recursive_file_count > 0 || subdir_stats.recursive_dir_count > 0) {
-					/* Subdirectory already has recursive stats, use them */
-					stats->recursive_file_count += subdir_stats.recursive_file_count;
-					stats->recursive_dir_count += subdir_stats.recursive_dir_count;
-					stats->recursive_total_size += subdir_stats.recursive_total_size;
-					
-					/* Update max_depth considering subdirectory's max depth */
-					if (subdir_stats.max_depth + 1 > stats->max_depth) {
-						stats->max_depth = subdir_stats.max_depth + 1;
-					}
-				} else {
-					/* Subdirectory doesn't have recursive stats, use direct stats */
-					stats->recursive_file_count += subdir_stats.file_count;
-					stats->recursive_dir_count += subdir_stats.dir_count;
-					stats->recursive_total_size += subdir_stats.total_size;
-					
-					/* Update max_depth considering subdirectory's depth */
-					if (subdir_stats.depth + 1 > stats->max_depth) {
-						stats->max_depth = subdir_stats.depth + 1;
-					}
+				/* Calculate and update recursive stats by summing up from subdirectories */
+				stats->recursive_file_count += subdir_stats.recursive_file_count;
+				stats->recursive_dir_count += subdir_stats.recursive_dir_count;
+				stats->recursive_total_size += subdir_stats.recursive_total_size;
+
+				/* Update max_depth considering subdirectory's max depth */
+				if (subdir_stats.max_depth + 1 > stats->max_depth) {
+					stats->max_depth = subdir_stats.max_depth + 1;
 				}
 				
 				if (subdir_stats.latest_mtime > stats->latest_mtime) {
@@ -467,8 +454,8 @@ bool verify_directory_stability(entity_state_t *context_state, const char *dir_p
 				stats->latest_mtime = st.st_mtime;
 			}
 			
-			/* Skip known system files */
-			if (is_system_file_to_ignore(entry->d_name)) {
+			if (is_system_file_to_ignore(entry->d_name) ||
+				(!context_state->watch->hidden && entry->d_name[0] == '.')) {
 				continue;
 			}
 			
@@ -496,6 +483,11 @@ bool verify_directory_stability(entity_state_t *context_state, const char *dir_p
 		} else if (S_ISDIR(st.st_mode)) {
 			stats->dir_count++;
 			
+			/* Skip hidden directories if configured */
+			if (!context_state->watch->hidden && entry->d_name[0] == '.') {
+				continue;
+			}
+			
 			dir_stats_t subdir_stats;
 			if (!verify_directory_stability(context_state, path, &subdir_stats, recursion_depth + 1)) {
 				closedir(dir);
@@ -513,27 +505,14 @@ bool verify_directory_stability(entity_state_t *context_state, const char *dir_p
 			/* Check for temp files */
 			stats->has_temp_files |= subdir_stats.has_temp_files;
 			
-			/* Calculate and update recursive stats */
-			if (subdir_stats.recursive_file_count > 0 || subdir_stats.recursive_dir_count > 0) {
-				/* Subdirectory already has recursive stats, use them */
-				stats->recursive_file_count += subdir_stats.recursive_file_count;
-				stats->recursive_dir_count += subdir_stats.recursive_dir_count;
-				stats->recursive_total_size += subdir_stats.recursive_total_size;
-				
-				/* Update max_depth considering subdirectory's max depth */
-				if (subdir_stats.max_depth + 1 > stats->max_depth) {
-					stats->max_depth = subdir_stats.max_depth + 1;
-				}
-			} else {
-				/* Subdirectory doesn't have recursive stats, use direct stats */
-				stats->recursive_file_count += subdir_stats.file_count;
-				stats->recursive_dir_count += subdir_stats.dir_count;
-				stats->recursive_total_size += subdir_stats.total_size;
-				
-				/* Update max_depth considering subdirectory's depth */
-				if (subdir_stats.depth + 1 > stats->max_depth) {
-					stats->max_depth = subdir_stats.depth + 1;
-				}
+			/* Update recursive stats by summing up from subdirectories */
+			stats->recursive_file_count += subdir_stats.recursive_file_count;
+			stats->recursive_dir_count += subdir_stats.recursive_dir_count;
+			stats->recursive_total_size += subdir_stats.recursive_total_size;
+
+			/* Update max_depth considering subdirectory's max depth */
+			if (subdir_stats.max_depth + 1 > stats->max_depth) {
+				stats->max_depth = subdir_stats.max_depth + 1;
 			}
 			
 			if (subdir_stats.latest_mtime > stats->latest_mtime) {
