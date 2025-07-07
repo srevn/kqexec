@@ -75,16 +75,16 @@ The configuration file uses an INI-like format with sections for each watch entr
 ```ini
 [Section Name]
 # Comments start with '#'
-file = /path/to/file         # For monitoring a single file
-directory = /path/to/dir     # For monitoring a directory
-events = EVENT1,EVENT2       # Comma-separated list of events
-command = command to execute # Command to run when events occur
-processing_delay = 5000      # Delay in milliseconds before processing events (default: 0)
-complexity = 2.5             # Higher values reduce I/O by waiting longer for stability checks. (default: 1.0)
-log_output = false           # Whether to capture and log command output (default: false)
-buffer_output = false        # Whether to buffer log output until command completes (default: false)
-recursive = true             # For recursive directory monitoring (default: true)
-hidden = false               # Whether to monitor hidden files/dirs (default: false)
+file = /path/to/file          # For monitoring a single file
+directory = /path/to/dir      # For monitoring a directory
+events = EVENT1,EVENT2        # Comma-separated list of events
+command = command to execute  # Command to run when events occur
+processing_delay = 5000       # Delay in milliseconds before processing events (default: 0)
+complexity = 2.5              # Higher values reduce I/O by waiting longer for stability checks. (default: 1.0)
+log_output = false            # Whether to capture and log command output (default: false)
+buffer_output = false         # Whether to buffer log output until command completes (default: false)
+recursive = true              # For recursive directory monitoring (default: true)
+hidden = false                # Whether to monitor hidden files/dirs (default: false)
 ```
 
 ### Event Types
@@ -192,6 +192,7 @@ recursive = false
 3. **Security monitoring**: Log all changes to sensitive directories
 4. **Backup verification**: Ensure backup jobs complete by monitoring the creation of expected files
 5. **Hidden file monitoring**: Track changes in user configuration directories like .config
+5. **Sync files or folders:**: Keep mirror of documents in multiple locations with rsync
 
 ## Running as a Service
 
@@ -254,6 +255,10 @@ Different operations can have different debounce periods based on their importan
 - Critical operations like file creation/deletion use shorter debounce times
 - Less critical operations like attribute changes use the full debounce time
 
+#### Hidden File Monitoring
+
+kqexec can optionally monitor hidden files and directories (those starting with a dot). This is particularly useful for tracking user configuration files. Enable hidden file monitoring with the `include_hidden`/`hidden` option in the configuration:
+
 #### Multiline Command Support
 
 Commands can span multiple lines using backslash continuation or proper quoting, allowing for complex command structures and shell scripts.
@@ -264,7 +269,7 @@ The `complexity` option allows fine-tuning of stability verification for heavy f
 
 #### Delayed Event Processing
 
-The `processing_delay` option introduces an initial delay before processing events, useful for scenarios where immediate response isn't required or when batching operations.
+The `processing_delay`/`delay` option introduces an initial delay before processing events, useful for scenarios where immediate response isn't required or when batching operations.
 
 #### Buffered Command Output
 
@@ -272,7 +277,7 @@ When running commands, you have two options for handling their output: streaming
 
 ## Viewing Logs
 
-On FreeBSD check syslog for messages from kqexec:
+On FreeBSD, check syslog for messages from kqexec:
 
 ```sh
 grep kqexec /var/log/messages
@@ -284,10 +289,11 @@ If you prefer separate log file, add this lines to `/etc/syslog.conf`
 !kqexec
 *.*              /var/log/kqexec.log
 ```
-**Note:** You can add a second-pass filter by changing to `*.notice` or `*.info` if log level set higher.
+
+**Note:** You can add a second-pass filter by changing to `*.notice` or `*.info` if log level is set higher.
 
 On macOS:
 
 ```sh
-tail ~/Library/Logs/kqexec.log
+tail -n 50 ~/Library/Logs/kqexec.log
 ```
