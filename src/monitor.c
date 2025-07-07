@@ -1319,11 +1319,18 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 					"Directory %s stability confirmed (%d/%d checks), proceeding to command execution",
 					root_state->path, root_state->stability_check_count, required_checks);
 		
-		/* Reset activity flag and stability counter */
+		/* Reset activity flag, stability counter, and all change tracking on the root state */
 		root_state->activity_in_progress = false;
 		root_state->stability_check_count = 0;
+		root_state->stable_reference_stats = root_state->dir_stats;
+		root_state->reference_stats_initialized = true;
+		root_state->cumulative_file_change = 0;
+		root_state->cumulative_dir_change = 0;
+		root_state->cumulative_depth_change = 0;
+		root_state->stability_lost = false;
+		root_state->instability_count = 0;
 		
-		/* Propagate status to all related states */
+		/* Propagate the reset state to all related states for this path */
 		synchronize_activity_states(root_state->path, root_state);
 		
 		/* Find the most recent file if any command needs it */
@@ -1371,10 +1378,6 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 				continue;
 			}
 			
-			/* Reset activity flag */
-			watch_state->activity_in_progress = false;
-			watch_state->stability_check_count = 0;
-			
 			/* Execute command */
 			log_message(LOG_LEVEL_INFO, "Executing deferred command for %s (watch: %s)",
 						entry->path, watch->name);
@@ -1382,27 +1385,11 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 			if (command_execute(watch, &synthetic_event)) {
 				commands_executed_total++;
 				
-				/* Update stable reference stats after successful execution */
-				watch_state->stable_reference_stats = watch_state->dir_stats;
-				watch_state->reference_stats_initialized = true;
-				
-				/* Reset all tracking after successful command */
-				watch_state->cumulative_file_change = 0;
-				watch_state->cumulative_dir_change = 0;
-				watch_state->cumulative_depth_change = 0;
-				watch_state->stability_lost = false;
-				watch_state->instability_count = 0;
-				
-				/* Reset state change flags */
-				watch_state->structure_changed = false;
-				watch_state->metadata_changed = false;
-				watch_state->content_changed = false;
-				
-				/* Update last command time */
+				/* Update last command time for this specific watch */
 				watch_state->last_command_time = current_time->tv_sec;
 				
 				log_message(LOG_LEVEL_DEBUG,
-							"Reset change tracking for %s (watch: %s) after successful command execution",
+							"Command execution successful for %s (watch: %s), updated last command time",
 							entry->path, watch->name);
 			} else {
 				log_message(LOG_LEVEL_WARNING, "Command execution failed for %s (watch: %s)",
@@ -1669,26 +1656,59 @@ bool monitor_reload(monitor_t *monitor) {
 		log_message(LOG_LEVEL_ERR, "Invalid monitor or missing configuration file for reload");
 		return false;
 	}
-	
+
 	log_message(LOG_LEVEL_INFO, "Reloading configuration from %s", monitor->config_file);
-	
+
 	config_t *old_config = monitor->config;
 	config_t *new_config = config_create();
 	if (!new_config) {
 		log_message(LOG_LEVEL_ERR, "Failed to create new configuration during reload");
 		return false;
 	}
-	
+
 	new_config->daemon_mode = old_config->daemon_mode;
 	new_config->syslog_level = old_config->syslog_level;
-	
+
 	if (!config_parse_file(new_config, monitor->config_file)) {
 		log_message(LOG_LEVEL_ERR, "Failed to parse new config, keeping old one");
 		config_destroy(new_config);
 		monitor_validate_and_refresh_path(monitor, monitor->config_file);
 		return false;
 	}
-	
+
+	/* Add config file watch to the new config so it gets re-added */
+	if (monitor->config_file != NULL) {
+		watch_entry_t *config_watch = calloc(1, sizeof(watch_entry_t));
+		if (config_watch == NULL) {
+			log_message(LOG_LEVEL_ERR, "Failed to allocate memory for config file watch during reload");
+		} else {
+			config_watch->name = strdup("__config_file__");
+			config_watch->path = strdup(monitor->config_file);
+			config_watch->type = WATCH_FILE;
+			config_watch->events = EVENT_CONTENT;
+			config_watch->command = strdup("__config_reload__");
+			config_watch->log_output = false;
+			config_watch->buffer_output = false;
+			config_watch->recursive = false;
+			config_watch->hidden = false;
+			config_watch->complexity = 1.0;
+			config_watch->processing_delay = 0;
+
+			watch_entry_t **new_watches_in_config = realloc(new_config->watches, (new_config->watch_count + 1) * sizeof(watch_entry_t *));
+			if (new_watches_in_config == NULL) {
+				log_message(LOG_LEVEL_WARNING, "Failed to add config watch to new config structure");
+				free(config_watch->name);
+				free(config_watch->path);
+				free(config_watch->command);
+				free(config_watch);
+			} else {
+				new_config->watches = new_watches_in_config;
+				new_config->watches[new_config->watch_count] = config_watch;
+				new_config->watch_count++;
+			}
+		}
+	}
+
 	/* Clear deferred and delayed queues to prevent access to old states */
 	check_queue_cleanup(monitor);
 	check_queue_init(monitor, 16);
@@ -1701,38 +1721,38 @@ bool monitor_reload(monitor_t *monitor) {
 		monitor->delayed_event_count = 0;
 		monitor->delayed_event_capacity = 0;
 	}
-	
+
 	/* Update entity states to point to new watch entries */
 	update_entity_states_after_reload(new_config);
-	
+
 	/* Clean up states that are no longer associated with any new watch */
 	cleanup_orphaned_entity_states(new_config);
-	
-	/* Create a fresh array for new watch_info structs */
-	watch_info_t **new_watches_list = calloc(new_config->watch_count, sizeof(watch_info_t *));
-	int new_watch_count = 0;
-	
-	/* Add watches from the new configuration */
+
+	/* Save old watches to be destroyed later */
+	watch_info_t **old_watches_list = monitor->watches;
+	int old_watch_count = monitor->watch_count;
+
+	/* Reset monitor's watch list to be populated with new watches */
+	monitor->watches = NULL;
+	monitor->watch_count = 0;
+
+	/* Add watches from the new configuration (including the config file watch) */
 	for (int i = 0; i < new_config->watch_count; i++) {
 		if (!monitor_add_watch(monitor, new_config->watches[i])) {
 			log_message(LOG_LEVEL_WARNING, "Failed to add watch for %s", new_config->watches[i]->path);
 		}
 	}
-	
-	/* Replace old monitor components with new ones */
-	for (int i = 0; i < monitor->watch_count; i++) {
-		watch_info_destroy(monitor->watches[i]);
+
+	/* Destroy the old watches */
+	for (int i = 0; i < old_watch_count; i++) {
+		watch_info_destroy(old_watches_list[i]);
 	}
-	free(monitor->watches);
-	
-	monitor->watches = new_watches_list;
-	monitor->watch_count = new_watch_count;
-	
+	free(old_watches_list);
+
+	/* Replace old config with new one */
 	config_destroy(old_config);
 	monitor->config = new_config;
-	
-	monitor_validate_and_refresh_path(monitor, monitor->config_file);
-	
+
 	log_message(LOG_LEVEL_INFO, "Configuration reload complete: %d active watches", monitor->watch_count);
 	return true;
 }

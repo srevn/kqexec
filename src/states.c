@@ -1077,7 +1077,6 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 		return NULL;
 	}
 	
-	/* Lock mutex during cleanup */
 	pthread_mutex_lock(&entity_states_mutex);
 	
 	entity_state_t *state = entity_states[hash];
@@ -1091,18 +1090,27 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 			if (state->type == ENTITY_UNKNOWN && type != ENTITY_UNKNOWN) {
 				state->type = type;
 			}
-			/* Unlock mutex after search */
 			pthread_mutex_unlock(&entity_states_mutex);
 			return state;
 		}
 		state = state->next;
 	}
 
+	/* Before creating a new state, check if another state for the same path exists to copy stats */
+	entity_state_t *existing_state_for_path = NULL;
+	entity_state_t *search_state = entity_states[hash];
+	while (search_state) {
+		if (search_state->path && strcmp(search_state->path, path) == 0) {
+			existing_state_for_path = search_state;
+			break;
+		}
+		search_state = search_state->next;
+	}
+
 	/* Create new state */
 	state = calloc(1, sizeof(entity_state_t));
 	if (!state) {
 		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for entity state: %s", path);
-		/* Unlock mutex after search */
 		pthread_mutex_unlock(&entity_states_mutex);
 		return NULL;
 	}
@@ -1114,7 +1122,6 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 	if (!state->path) {
 		log_message(LOG_LEVEL_ERR, "Failed to duplicate path string for entity state: %s", path);
 		free(state);
-		/* Unlock mutex after search */
 		pthread_mutex_unlock(&entity_states_mutex);
 		return NULL;
 	}
@@ -1142,33 +1149,43 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 	init_activity_tracking(state, watch);
 	state->last_command_time = 0;
 	state->failed_checks = 0;
-	state->instability_count = 0;
 	
-	/* Initialize the new reference stats and change tracking fields */
-	state->reference_stats_initialized = false;
-	state->cumulative_file_change = 0;
-	state->cumulative_dir_change = 0;
-	state->cumulative_depth_change = 0;
-	state->stability_lost = false;
-	state->checking_scheduled = false;
-	
-	/* If this is a directory, gather initial statistics */
-	if (state->type == ENTITY_DIRECTORY && state->exists) {
-		if (gather_basic_directory_stats(state->path, &state->dir_stats, 0)) {
-			/* Copy initial stats to prev_stats for future comparison */
-			state->prev_stats = state->dir_stats;
-			
-			/* Initialize stable reference stats with current stats */
-			state->stable_reference_stats = state->dir_stats;
-			state->reference_stats_initialized = true;
-			
-			log_message(LOG_LEVEL_DEBUG, 
-					  "Initialized directory stats for %s: files=%d, dirs=%d, depth=%d, size=%.2f MB",
-					  state->path, state->dir_stats.file_count, state->dir_stats.dir_count, 
-					  state->dir_stats.depth, state->dir_stats.total_size / (1024.0 * 1024.0));
-		} else {
-			log_message(LOG_LEVEL_WARNING, 
-					  "Failed to gather initial stats for directory: %s", state->path);
+	/* If an existing state for this path was found, copy its stats */
+	if (existing_state_for_path) {
+		log_message(LOG_LEVEL_DEBUG, "Copying stats from existing state for path %s (watch: %s)",
+				   path, existing_state_for_path->watch->name);
+		state->dir_stats = existing_state_for_path->dir_stats;
+		state->prev_stats = existing_state_for_path->prev_stats;
+		state->stable_reference_stats = existing_state_for_path->stable_reference_stats;
+		state->reference_stats_initialized = existing_state_for_path->reference_stats_initialized;
+		state->cumulative_file_change = existing_state_for_path->cumulative_file_change;
+		state->cumulative_dir_change = existing_state_for_path->cumulative_dir_change;
+		state->cumulative_depth_change = existing_state_for_path->cumulative_depth_change;
+		state->stability_lost = existing_state_for_path->stability_lost;
+		state->instability_count = existing_state_for_path->instability_count;
+	} else {
+		/* This is the first state for this path, initialize stats from scratch */
+		state->instability_count = 0;
+		state->reference_stats_initialized = false;
+		state->cumulative_file_change = 0;
+		state->cumulative_dir_change = 0;
+		state->cumulative_depth_change = 0;
+		state->stability_lost = false;
+		state->checking_scheduled = false;
+		
+		if (state->type == ENTITY_DIRECTORY && state->exists) {
+			if (gather_basic_directory_stats(state->path, &state->dir_stats, 0)) {
+				state->prev_stats = state->dir_stats;
+				state->stable_reference_stats = state->dir_stats;
+				state->reference_stats_initialized = true;
+				log_message(LOG_LEVEL_DEBUG, 
+						  "Initialized directory stats for %s: files=%d, dirs=%d, depth=%d, size=%.2f MB",
+						  state->path, state->dir_stats.file_count, state->dir_stats.dir_count, 
+						  state->dir_stats.depth, state->dir_stats.total_size / (1024.0 * 1024.0));
+			} else {
+				log_message(LOG_LEVEL_WARNING, 
+						  "Failed to gather initial stats for directory: %s", state->path);
+			}
 		}
 	}
 
@@ -1179,7 +1196,6 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 	log_message(LOG_LEVEL_DEBUG, "Created new state for path=%s, watch=%s, type=%d",
 			  path, watch->name, state->type);
 
-	/* Unlock mutex after search */
 	pthread_mutex_unlock(&entity_states_mutex);
 	return state;
 }
