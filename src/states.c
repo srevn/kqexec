@@ -90,43 +90,20 @@ void entity_state_cleanup(void) {
 	log_message(LOG_LEVEL_DEBUG, "Entity state system cleanup complete");
 }
 
-/* Calculate a hash value for a path and watch combination */
-static unsigned int hash_path_watch(const char *path, watch_entry_t *watch) {
+/* Calculate a hash value for a path */
+static unsigned int hash_path(const char *path) {
 	unsigned int hash = 5381; /* djb2 hash initial value */
-	if (!path || !watch || !watch->name) return 0;
+	if (!path) return 0;
 	
-	/* djb2 hash algorithm for better distribution */
+	/* djb2 hash algorithm */
 	for (const char *p = path; *p; p++) {
-		hash = ((hash << 5) + hash) + (unsigned char)*p;
-	}
-	
-	/* Add separator to distinguish path from watch name */
-	hash = ((hash << 5) + hash) + '|';
-	
-	for (const char *p = watch->name; *p; p++) {
 		hash = ((hash << 5) + hash) + (unsigned char)*p;
 	}
 	
 	return hash % ENTITY_HASH_SIZE;
 }
 
-/* Check if an entity state is corrupted */
-static bool is_entity_state_corrupted(entity_state_t *state) {
-	if (!state) return true;
-	
-	/* Basic sanity check - try to detect completely invalid pointers */
-	if ((uintptr_t)state < 0x1000 || ((uintptr_t)state & 0x7) != 0) {
-		log_message(LOG_LEVEL_WARNING, "Entity state appears to be invalid pointer: %p", state);
-		return true;
-	}
-	
-	if (state->magic != ENTITY_STATE_MAGIC) {
-		log_message(LOG_LEVEL_WARNING, "Entity state corruption detected: magic=0x%x, expected=0x%x", 
-				   state->magic, ENTITY_STATE_MAGIC);
-		return true;
-	}
-	return false;
-}
+
 
 /* Initialize activity tracking for a new entity state */
 static void init_activity_tracking(entity_state_t *state, watch_entry_t *watch) {
@@ -597,206 +574,129 @@ entity_state_t *find_root_state(entity_state_t *state) {
 	return get_entity_state(state->watch->path, ENTITY_DIRECTORY, state->watch);
 }
 
-/* Find all entity states for a path (regardless of watch) */
-void synchronize_activity_states(const char *path, entity_state_t *trigger_state) {
-	if (!path || !trigger_state || !entity_states || is_entity_state_corrupted(trigger_state)) {
-		if (trigger_state && is_entity_state_corrupted(trigger_state)) {
-			log_message(LOG_LEVEL_WARNING, "Skipping synchronization due to corrupted trigger state");
+/* Find all entity states for a given path (must be called with mutex locked) */
+static void find_states_by_path_locked(const char *path, entity_state_t ***found_states, int *count) {
+	*found_states = NULL;
+	*count = 0;
+	if (!path || !entity_states) return;
+	
+	unsigned int hash = hash_path(path);
+	entity_state_t *state = entity_states[hash];
+	
+	/* First pass: count matching states */
+	int match_count = 0;
+	entity_state_t *current = state;
+	while (current) {
+		if (current->path && strcmp(current->path, path) == 0) {
+			match_count++;
 		}
+		current = current->next;
+	}
+	
+	if (match_count == 0) return;
+	
+	/* Allocate memory for the found states */
+	*found_states = malloc(match_count * sizeof(entity_state_t *));
+	if (!*found_states) {
+		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for found states");
 		return;
 	}
 	
-	/* Lock mutex during cleanup */
+	/* Second pass: populate the array */
+	current = state;
+	int i = 0;
+	while (current) {
+		if (current->path && strcmp(current->path, path) == 0) {
+			(*found_states)[i++] = current;
+		}
+		current = current->next;
+	}
+	*count = match_count;
+}
+
+/* Find all entity states for a path (regardless of watch) */
+void synchronize_activity_states(const char *path, entity_state_t *trigger_state) {
+	if (!path || !trigger_state || !entity_states) {
+		return;
+	}
+	
 	pthread_mutex_lock(&entity_states_mutex);
 	
 	log_message(LOG_LEVEL_DEBUG, "Synchronizing activity states for path: %s", path);
 	
-	/* First pass: Find the most recent activity timestamp across all watches for this path */
+	entity_state_t **states_for_path = NULL;
+	int state_count = 0;
+	find_states_by_path_locked(path, &states_for_path, &state_count);
+	
+	if (state_count == 0) {
+		pthread_mutex_unlock(&entity_states_mutex);
+		free(states_for_path);
+		return;
+	}
+	
+	/* First pass: Find the most recent activity timestamp and other max values */
 	struct timespec latest_activity_time = trigger_state->last_activity_in_tree;
 	bool any_watch_active = trigger_state->activity_in_progress;
 	int max_instability_count = trigger_state->instability_count;
 	
-	for (int i = 0; i < ENTITY_HASH_SIZE; i++) {
-		entity_state_t *state = entity_states[i];
-		while (state) {
-			/* Skip corrupted or invalid states */
-			if (is_entity_state_corrupted(state) || !state->path || !state->watch) {
-				log_message(LOG_LEVEL_DEBUG, "Skipping corrupted or invalid state during sync");
-				state = state->next;
-				continue;
+	for (int i = 0; i < state_count; i++) {
+		entity_state_t *state = states_for_path[i];
+		if (!state->path || !state->watch) {
+			continue;
+		}
+		
+		if (state != trigger_state) {
+			if (state->last_activity_in_tree.tv_sec > latest_activity_time.tv_sec ||
+				(state->last_activity_in_tree.tv_sec == latest_activity_time.tv_sec &&
+				 state->last_activity_in_tree.tv_nsec > latest_activity_time.tv_nsec)) {
+				latest_activity_time = state->last_activity_in_tree;
 			}
-			
-			if (strcmp(state->path, path) == 0 && state != trigger_state) {
-				/* Take the most recent time between this state and our current latest */
-				if (state->last_activity_in_tree.tv_sec > latest_activity_time.tv_sec ||
-					(state->last_activity_in_tree.tv_sec == latest_activity_time.tv_sec && 
-					 state->last_activity_in_tree.tv_nsec > latest_activity_time.tv_nsec)) {
-					latest_activity_time = state->last_activity_in_tree;
-				}
-				
-				/* Synchronize scheduling state */
-				state->checking_scheduled = trigger_state->checking_scheduled;
-				
-				/* Record if any watch has active status */
-				any_watch_active = any_watch_active || state->activity_in_progress;
-				
-				/* Find the maximum instability count */
-				if (state->instability_count > max_instability_count) {
-					max_instability_count = state->instability_count;
-				}
+			any_watch_active = any_watch_active || state->activity_in_progress;
+			if (state->instability_count > max_instability_count) {
+				max_instability_count = state->instability_count;
 			}
-			state = state->next;
 		}
 	}
 	
-	/* Also update the trigger state's instability count to the max value */
 	trigger_state->instability_count = max_instability_count;
 	
-	/* Second pass: Update states with consistent values */
-	for (int i = 0; i < ENTITY_HASH_SIZE; i++) {
-		entity_state_t *state = entity_states[i];
-		while (state) {
-			/* Skip corrupted or invalid states */
-			if (is_entity_state_corrupted(state) || !state->path || !state->watch) {
-				log_message(LOG_LEVEL_DEBUG, "Skipping corrupted or invalid state during sync");
-				state = state->next;
-				continue;
-			}
-			
-			/* Additional safety check for corrupted path pointer */
-			if (!state->path || (uintptr_t)state->path < 0x1000) {
-				state = state->next;
-				continue;
-			}
-			
-			if (strcmp(state->path, path) == 0 && state != trigger_state) {
-				log_message(LOG_LEVEL_DEBUG, "Synchronizing state for path %s (watch: %s) with trigger (watch: %s)",
-					   path, (state->watch && state->watch->name) ? state->watch->name : "unknown", 
+	/* Second pass: Update all states for the path with consistent values */
+	for (int i = 0; i < state_count; i++) {
+		entity_state_t *state = states_for_path[i];
+		if (!state->path || !state->watch) {
+			continue;
+		}
+		
+		if (state != trigger_state) {
+			log_message(LOG_LEVEL_DEBUG, "Synchronizing state for path %s (watch: %s) with trigger (watch: %s)",
+					   path, (state->watch && state->watch->name) ? state->watch->name : "unknown",
 					   (trigger_state->watch && trigger_state->watch->name) ? trigger_state->watch->name : "unknown");
-				
-				/* Determine watch configuration compatibility */
-				bool fully_compatible = false;
-				bool partially_compatible = false;
-				
-				/* Skip invalid states */
-				if (!state->watch || !trigger_state->watch || 
-					!state->watch->name || !trigger_state->watch->name) {
-					log_message(LOG_LEVEL_DEBUG, "Skipping state with invalid watch pointers during sync");
-					state = state->next;
-					continue;
-				}
-				
-				/* Check for full compatibility (same recursive setting, events, and hidden files setting) */
-				if (state->watch->recursive == trigger_state->watch->recursive &&
-					state->watch->events == trigger_state->watch->events &&
-					state->watch->hidden == trigger_state->watch->hidden) {
-					fully_compatible = true;
-					log_message(LOG_LEVEL_DEBUG, "Fully compatible watches - syncing all stability data");
-				}
-				/* Check for partial compatibility (overlapping events) */
-				else if (state->watch->events & trigger_state->watch->events) {
-					partially_compatible = true;
-					log_message(LOG_LEVEL_DEBUG, "Partially compatible watches - syncing basic stats only");
-				}
-				else {
-					log_message(LOG_LEVEL_DEBUG, 
-							  "Incompatible watches - minimal sync for %s and %s",
-							  state->watch->name, trigger_state->watch->name);
-				}
-				
-				/* Always sync these basic factual properties */
-				state->exists = trigger_state->exists;
-				state->last_update = trigger_state->last_update;
-				state->wall_time = trigger_state->wall_time;
-				
-				/* Always sync the latest activity time to ensure coherent scheduling */
-				state->last_activity_in_tree = latest_activity_time;
-				
-				/* Copy the most recent activity sample for basic timing consistency */
-				if (trigger_state->activity_sample_count > 0) {
-					int latest_idx = (trigger_state->activity_index + MAX_ACTIVITY_SAMPLES - 1) % MAX_ACTIVITY_SAMPLES;
-					int target_idx = (state->activity_index + MAX_ACTIVITY_SAMPLES - 1) % MAX_ACTIVITY_SAMPLES;
-					
-					state->recent_activity[target_idx] = trigger_state->recent_activity[latest_idx];
-					if (state->activity_sample_count == 0) {
-						state->activity_sample_count = 1;
-					}
-				}
-				
-				/* Make activity_in_progress consistent across all states for the same path */
-				state->activity_in_progress = any_watch_active;
-				
-				/* Sync change detection flags based on overlapping event types */
-				if (state->watch->events & EVENT_STRUCTURE && trigger_state->watch->events & EVENT_STRUCTURE) {
-					state->structure_changed = state->structure_changed || trigger_state->structure_changed;
-				}
-				if (state->watch->events & EVENT_METADATA && trigger_state->watch->events & EVENT_METADATA) {
-					state->metadata_changed = state->metadata_changed || trigger_state->metadata_changed;
-				}
-				if (state->watch->events & EVENT_CONTENT && trigger_state->watch->events & EVENT_CONTENT) {
-					state->content_changed = state->content_changed || trigger_state->content_changed;
-				}
-				
-				/* Only sync directory statistics for fully or partially compatible watches */
-				if ((fully_compatible || partially_compatible) && 
-					state->type == ENTITY_DIRECTORY && trigger_state->type == ENTITY_DIRECTORY) {
-					
-					/* Always sync basic directory stats */
-					state->dir_stats = trigger_state->dir_stats;
-					
-					/* For fully compatible watches, sync all stats and stability assessment */
-					if (fully_compatible) {
-						/* Initialize reference stats if needed */
-						if (trigger_state->reference_stats_initialized && !state->reference_stats_initialized) {
-							state->stable_reference_stats = trigger_state->stable_reference_stats;
-							state->reference_stats_initialized = true;
-							log_message(LOG_LEVEL_DEBUG, 
-									  "Initialized reference stats for %s from trigger state", state->path);
-						}
-						
-						/* Only update previous stats if they're valid in the trigger */
-						if (trigger_state->prev_stats.file_count > 0 || trigger_state->prev_stats.dir_count > 0) {
-							state->prev_stats = trigger_state->prev_stats;
-						}
-						
-						/* Stability checks */
-						state->stability_check_count = trigger_state->stability_check_count;
-						state->failed_checks = trigger_state->failed_checks;
-						state->instability_count = trigger_state->instability_count;
-						
-						/* For cumulative changes, take the values with the greatest magnitude */
-						if (abs(trigger_state->cumulative_file_change) > abs(state->cumulative_file_change)) {
-							state->cumulative_file_change = trigger_state->cumulative_file_change;
-						}
-						
-						if (abs(trigger_state->cumulative_dir_change) > abs(state->cumulative_dir_change)) {
-							state->cumulative_dir_change = trigger_state->cumulative_dir_change;
-						}
-						
-						if (abs(trigger_state->cumulative_depth_change) > abs(state->cumulative_depth_change)) {
-							state->cumulative_depth_change = trigger_state->cumulative_depth_change;
-						}
-						
-						/* Stability lost flag - make this consistent across watches */
-						state->stability_lost = state->stability_lost || trigger_state->stability_lost;
-					}
-					/* For partially compatible watches, sync directory stats but not stability assessment */
-					else if (partially_compatible) {
-						/* Initialize reference stats if needed but don't sync stability assessment */
-						if (!state->reference_stats_initialized) {
-							state->stable_reference_stats = state->dir_stats;
-							state->reference_stats_initialized = true;
-							log_message(LOG_LEVEL_DEBUG, 
-									  "Initialized reference stats for %s from its own dir_stats", state->path);
-						}
-					}
-				}
+			
+			bool fully_compatible = (state->watch->recursive == trigger_state->watch->recursive &&
+									 state->watch->events == trigger_state->watch->events &&
+									 state->watch->hidden == trigger_state->watch->hidden);
+			
+			state->exists = trigger_state->exists;
+			state->last_update = trigger_state->last_update;
+			state->wall_time = trigger_state->wall_time;
+			state->last_activity_in_tree = latest_activity_time;
+			state->activity_in_progress = any_watch_active;
+			
+			if (fully_compatible) {
+				state->dir_stats = trigger_state->dir_stats;
+				state->prev_stats = trigger_state->prev_stats;
+				state->stability_check_count = trigger_state->stability_check_count;
+				state->failed_checks = trigger_state->failed_checks;
+				state->instability_count = max_instability_count;
+				state->cumulative_file_change = trigger_state->cumulative_file_change;
+				state->cumulative_dir_change = trigger_state->cumulative_dir_change;
+				state->cumulative_depth_change = trigger_state->cumulative_depth_change;
+				state->stability_lost = trigger_state->stability_lost;
 			}
-			state = state->next;
 		}
 	}
 	
-	/* Unlock mutex after search */
+	free(states_for_path);
 	pthread_mutex_unlock(&entity_states_mutex);
 }
 
@@ -826,7 +726,7 @@ void record_activity(entity_state_t *state, operation_type_t op) {
 	if (state->watch && state->watch->recursive) {
 		/* First, find the root state */
 		entity_state_t *root = find_root_state(state);
-		if (root && !is_entity_state_corrupted(root)) {
+		if (root) {
 			/* Update the root's tree activity time and path */
 			root->last_activity_in_tree = state->last_update;
 			free(root->last_activity_path);
@@ -1170,7 +1070,7 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 		return NULL;
 	}
 
-	unsigned int hash = hash_path_watch(path, watch);
+	unsigned int hash = hash_path(path);
 	
 	if (hash >= ENTITY_HASH_SIZE) {
 		log_message(LOG_LEVEL_ERR, "Hash out of bounds: %u >= %d", hash, ENTITY_HASH_SIZE);
@@ -1379,14 +1279,14 @@ bool should_execute_command(entity_state_t *state, operation_type_t op, int defa
 	/* Directory content changes always defer execution to process_deferred_dir_scans */
 	if (op == OP_DIR_CONTENT_CHANGED) {
 		entity_state_t *root = find_root_state(state);
-		if (root && g_current_monitor && !is_entity_state_corrupted(root)) {
+		if (root && g_current_monitor) {
 			/* Always trigger a deferred check; queue deduplicates */
 			root->activity_in_progress = true;
 			log_message(LOG_LEVEL_DEBUG, "Directory content change for %s, marked root %s as active - command deferred",
 					   state->path, root->path);
 			synchronize_activity_states(root->path, root);
 			
-			if (is_entity_state_corrupted(root)) {
+			if (!root) {
 				return false;
 			}
 			
@@ -1571,77 +1471,79 @@ bool process_event(watch_entry_t *watch, file_event_t *event, entity_type_t enti
 }
 
 /* Update entity states with new watch pointers after config reload */
-void update_entity_states_after_reload(watch_entry_t *old_watch, watch_entry_t *new_watch) {
-	if (!old_watch || !new_watch || !old_watch->name || !new_watch->name || !entity_states) {
+void update_entity_states_after_reload(config_t *new_config) {
+	if (!new_config || !entity_states) {
 		return;
 	}
 	
-	/* Lock mutex during cleanup */
 	pthread_mutex_lock(&entity_states_mutex);
 	
-	log_message(LOG_LEVEL_DEBUG, "Updating entity states for watch: %s", old_watch->name);
+	log_message(LOG_LEVEL_DEBUG, "Updating all entity states after reload");
 	
-	/* Iterate through all entity states and update pointers by name comparison */
 	for (int i = 0; i < ENTITY_HASH_SIZE; i++) {
 		entity_state_t *state = entity_states[i];
 		while (state) {
-			entity_state_t *next = state->next; /* Save next pointer early */
-			
-			/* Skip corrupted or invalid states */
-			if (is_entity_state_corrupted(state) || !state->path || !state->watch) {
-				log_message(LOG_LEVEL_DEBUG, "Skipping corrupted state during watch update");
-				state = next;
-				continue;
+			bool found_new_watch = false;
+			for (int j = 0; j < new_config->watch_count; j++) {
+				if (state->watch && state->watch->name && new_config->watches[j] &&
+					new_config->watches[j]->name &&
+					strcmp(state->watch->name, new_config->watches[j]->name) == 0) {
+					state->watch = new_config->watches[j];
+					found_new_watch = true;
+					break;
+				}
 			}
-			
-			/* Update both exact pointer matches and name matches */
-			if ((state->watch == old_watch) || 
-			    (state->watch->name && strcmp(state->watch->name, old_watch->name) == 0)) {
-				log_message(LOG_LEVEL_DEBUG, "Updated watch pointer for state: %s", state->path);
-				state->watch = new_watch;
+			if (!found_new_watch) {
+				log_message(LOG_LEVEL_DEBUG, "Could not find new watch for state: %s", state->path);
 			}
-			state = next;
+			state = state->next;
 		}
 	}
 	
-	/* Unlock mutex after search */
 	pthread_mutex_unlock(&entity_states_mutex);
 }
 
 /* Clean up entity states that reference deleted watches after config reload */
-void cleanup_orphaned_entity_states(config_t *old_config) {
-	if (!old_config || !entity_states) {
+void cleanup_orphaned_entity_states(config_t *new_config) {
+	if (!new_config || !entity_states) {
 		return;
 	}
 	
-	/* Lock mutex during cleanup */
 	pthread_mutex_lock(&entity_states_mutex);
 	
-	log_message(LOG_LEVEL_DEBUG, "Cleaning up orphaned entity states after config reload");
+	log_message(LOG_LEVEL_DEBUG, "Cleaning up orphaned entity states");
 	
-	/* Remove all entity states - they will be recreated as needed with new watch pointers */
 	for (int i = 0; i < ENTITY_HASH_SIZE; i++) {
 		entity_state_t *state = entity_states[i];
+		entity_state_t *prev = NULL;
 		
 		while (state) {
-			entity_state_t *next = state->next;
-			
-			log_message(LOG_LEVEL_DEBUG, "Removing entity state for path %s during cleanup", 
-					   state->path ? state->path : "<unknown>");
-			
-			/* Free the state */
-			if (state->path) {
-				free(state->path);
+			bool is_orphaned = true;
+			for (int j = 0; j < new_config->watch_count; j++) {
+				if (state->watch == new_config->watches[j]) {
+					is_orphaned = false;
+					break;
+				}
 			}
-			free(state);
 			
-			state = next;
+			if (is_orphaned) {
+				log_message(LOG_LEVEL_DEBUG, "Removing orphaned state for path %s (watch %s)",
+						   state->path, state->watch ? state->watch->name : "<unknown>");
+				
+				entity_state_t *to_free = state;
+				if (prev) {
+					prev->next = state->next;
+				} else {
+					entity_states[i] = state->next;
+				}
+				state = state->next;
+				free_entity_state(to_free);
+			} else {
+				prev = state;
+				state = state->next;
+			}
 		}
-		
-		/* Clear the hash table entry */
-		entity_states[i] = NULL;
 	}
 	
-	/* Unlock mutex after search */
 	pthread_mutex_unlock(&entity_states_mutex);
 }

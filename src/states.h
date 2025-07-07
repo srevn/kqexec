@@ -137,8 +137,8 @@ bool verify_directory_stability(entity_state_t *context_state, const char *dir_p
 bool compare_dir_stats(dir_stats_t *prev, dir_stats_t *current);
 void update_cumulative_changes(entity_state_t *state);
 void init_change_tracking(entity_state_t *state);
-void update_entity_states_after_reload(watch_entry_t *old_watch, watch_entry_t *new_watch);
-void cleanup_orphaned_entity_states(config_t *old_config);
+void update_entity_states_after_reload(config_t *new_config);
+void cleanup_orphaned_entity_states(config_t *new_config);
 char *find_most_recent_file_in_dir(const char *dir_path);
 
 #endif /* STATES_H */
