@@ -1138,7 +1138,7 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 		
 		/* Perform recursive stability verification */
 		dir_stats_t current_stats;
-		bool scan_completed = verify_directory_stability(entry->path, &current_stats, 0);
+		bool scan_completed = verify_directory_stability(root_state, entry->path, &current_stats, 0);
 		
 		/* Update root state with latest stats, even if not stable */
 		if (scan_completed || current_stats.recursive_file_count > 0 || current_stats.recursive_dir_count > 0) {

@@ -367,54 +367,54 @@ bool compare_dir_stats(dir_stats_t *prev, dir_stats_t *current) {
 		max_allowed_percent = 1.0;
 	}
 	
+	/* Check for instability due to various factors */
+	bool is_stable = true;
+	
 	/* Always consider unstable if tree depth changes significantly */
 	if (abs(depth_change) > 1) {
 		log_message(LOG_LEVEL_DEBUG, "Directory unstable: significant tree depth change (%+d levels)",
 						  depth_change);
-		return false;
+		is_stable = false;
 	}
 	
-	/* Consider stable if changes are within allowances and depth stable or minimal change */
-	if ((total_change <= max_allowed_change || change_percentage <= max_allowed_percent) &&
-		(depth_change == 0 || (abs(depth_change) == 1 && prev->depth > 2))) {
-		/* Changes within threshold - considered stable */
-		if (total_change > 0 || depth_change != 0) {
-			log_message(LOG_LEVEL_DEBUG, 
-					  "Directory considered stable despite small changes: %+d files, %+d dirs, %+d depth (%.1f%% change)",
-						  file_change, dir_change, depth_change, change_percentage);
-		}
-		return true;
+	/* Check if changes are within allowances */
+	if (!((total_change <= max_allowed_change || change_percentage <= max_allowed_percent) &&
+		(depth_change == 0 || (abs(depth_change) == 1 && prev->depth > 2)))) {
+		log_message(LOG_LEVEL_DEBUG,
+				  "Directory unstable: %d/%d to %d/%d, depth %d to %d (%+d files, %+d dirs, %+d depth, %.1f%% change)",
+							prev->file_count, prev->dir_count,
+							current->file_count, current->dir_count,
+							prev->depth, current->depth,
+							file_change, dir_change, depth_change, change_percentage);
+		is_stable = false;
 	}
 	
-	/* Too many changes - unstable */
-	log_message(LOG_LEVEL_DEBUG, 
-			  "Directory unstable: %d/%d to %d/%d, depth %d to %d (%+d files, %+d dirs, %+d depth, %.1f%% change)",
-						prev->file_count, prev->dir_count, 
-						current->file_count, current->dir_count,
-						prev->depth, current->depth,
-						file_change, dir_change, depth_change, change_percentage);
-	return false;
-	
-	/* Keep existing size and temp file checks */
 	/* Check if total size is stable (allowing for small changes) */
 	long size_diff = labs((long)prev->total_size - (long)current->total_size);
-	long threshold = prev->total_size > 1000000 ? 
+	long threshold = prev->total_size > 1000000 ?
 					 prev->total_size / 10000 : /* 0.01% for large dirs */
 					 1024;                      /* 1KB for small dirs */
 	
 	if (size_diff > threshold) {
 		log_message(LOG_LEVEL_DEBUG, "Directory unstable: size changed by %ld bytes (threshold: %ld)",
 				   size_diff, threshold);
-		return false;
+		is_stable = false;
 	}
 	
 	/* Check for temporary files */
 	if (current->has_temp_files) {
 		log_message(LOG_LEVEL_DEBUG, "Directory unstable: temporary files detected");
-		return false;
+		is_stable = false;
 	}
 	
-	return true;
+	/* Log if stable despite minor changes */
+	if (is_stable && (total_change > 0 || depth_change != 0)) {
+		log_message(LOG_LEVEL_DEBUG,
+				  "Directory considered stable despite small changes: %+d files, %+d dirs, %+d depth (%.1f%% change)",
+					  file_change, dir_change, depth_change, change_percentage);
+	}
+	
+	return is_stable;
 }
 
 /* Function to check if a file should be ignored in stability checks */
@@ -443,64 +443,51 @@ bool is_system_file_to_ignore(const char *filename) {
 }
 
 /* Collect statistics about a directory and its contents */
-bool verify_directory_stability(const char *dir_path, dir_stats_t *stats, int recursion_depth) {
+bool verify_directory_stability(entity_state_t *context_state, const char *dir_path, dir_stats_t *stats, int recursion_depth) {
 	DIR *dir;
 	struct dirent *entry;
 	struct stat st;
 	char path[PATH_MAX];
 	
-	if (!dir_path || !stats) {
+	if (!dir_path || !stats || !context_state) {
 		return false;
 	}
 	
 	/* Check if we should use an existing directory state's statistics as a baseline */
 	bool use_existing_stats = false;
-	dir_stats_t existing_stats; /* Local copy to use outside the lock */
+	entity_state_t *current_state = NULL;
 	
-	/* Lock mutex during cleanup */
-	pthread_mutex_lock(&entity_states_mutex);
+	/* For the initial call, use the provided context state. For recursion, find the state. */
+	if (recursion_depth == 0) {
+		current_state = context_state;
+	} else {
+		current_state = get_entity_state(dir_path, ENTITY_DIRECTORY, context_state->watch);
+	}
 	
-	/* Look through all hash buckets for an existing state for this path */
-	if (entity_states) {
-		for (int i = 0; i < ENTITY_HASH_SIZE; i++) {
-			entity_state_t *state = entity_states[i];
-			while (state) {
-				if (strcmp(state->path, dir_path) == 0) {
-					/* Found an existing state for this path */
-					
-					/* If the existing state has valid stats, consider using them */
-					if (state->dir_stats.file_count > 0 || 
-						state->dir_stats.dir_count > 0 ||
-						state->dir_stats.depth > 0 ||
-						state->dir_stats.recursive_file_count > 0 ||
-						state->dir_stats.recursive_dir_count > 0 ||
-						state->dir_stats.max_depth > 0) {
-						use_existing_stats = true;
-						existing_stats = state->dir_stats; /* Make a safe copy */
-						break;
-					}
-				}
-				state = state->next;
-			}
-			if (use_existing_stats) break;
+	if (current_state && !is_entity_state_corrupted(current_state)) {
+		/* If the existing state has valid stats, consider using them */
+		if (current_state->dir_stats.file_count > 0 ||
+			current_state->dir_stats.dir_count > 0 ||
+			current_state->dir_stats.depth > 0 ||
+			current_state->dir_stats.recursive_file_count > 0 ||
+			current_state->dir_stats.recursive_dir_count > 0 ||
+			current_state->dir_stats.max_depth > 0) {
+			use_existing_stats = true;
 		}
 	}
 	
-	/* Unlock mutex after search */
-	pthread_mutex_unlock(&entity_states_mutex);
-	
 	/* If we found an existing state with valid stats, use that for verification */
 	if (use_existing_stats) {
-		log_message(LOG_LEVEL_DEBUG, 
+		log_message(LOG_LEVEL_DEBUG,
 				  "Using existing stats for stability verification of %s: files=%d, dirs=%d, depth=%d, recursive_files=%d, recursive_dirs=%d, max_depth=%d",
-				  dir_path, existing_stats.file_count, 
-				  existing_stats.dir_count, existing_stats.depth,
-				  existing_stats.recursive_file_count,
-				  existing_stats.recursive_dir_count,
-				  existing_stats.max_depth);
+				  dir_path, current_state->dir_stats.file_count,
+				  current_state->dir_stats.dir_count, current_state->dir_stats.depth,
+				  current_state->dir_stats.recursive_file_count,
+				  current_state->dir_stats.recursive_dir_count,
+				  current_state->dir_stats.max_depth);
 		
 		/* Make a copy of the existing stats */
-		*stats = existing_stats;
+		*stats = current_state->dir_stats;
 		
 		/* Still scan the directory, but only to check for temporary files */
 		dir = opendir(dir_path);
@@ -539,7 +526,7 @@ bool verify_directory_stability(const char *dir_path, dir_stats_t *stats, int re
 				
 				/* Check for very recent file modifications (< 1 second) */
 				if (difftime(now, st.st_mtime) < 1.0) {
-					log_message(LOG_LEVEL_DEBUG, "Directory %s unstable: recent file modification (%s, %.1f seconds ago)", 
+					log_message(LOG_LEVEL_DEBUG, "Directory %s unstable: recent file modification (%s, %.1f seconds ago)",
 							  dir_path, entry->d_name, difftime(now, st.st_mtime));
 					stats->has_temp_files = true;
 					closedir(dir);
@@ -547,9 +534,9 @@ bool verify_directory_stability(const char *dir_path, dir_stats_t *stats, int re
 				}
 				
 				/* Check for temporary files */
-				if ((st.st_size == 0 && difftime(now, st.st_mtime) < 5.0) || 
-					strstr(entry->d_name, ".tmp") != NULL || 
-					strstr(entry->d_name, ".part") != NULL || 
+				if ((st.st_size == 0 && difftime(now, st.st_mtime) < 5.0) ||
+					strstr(entry->d_name, ".tmp") != NULL ||
+					strstr(entry->d_name, ".part") != NULL ||
 					strstr(entry->d_name, ".~") != NULL ||
 					strstr(entry->d_name, ".crdownload") != NULL ||
 					strstr(entry->d_name, ".download") != NULL) {
@@ -563,7 +550,7 @@ bool verify_directory_stability(const char *dir_path, dir_stats_t *stats, int re
 				dir_stats_t subdir_stats;
 				memset(&subdir_stats, 0, sizeof(dir_stats_t));
 				
-				if (!verify_directory_stability(path, &subdir_stats, recursion_depth + 1)) {
+				if (!verify_directory_stability(context_state, path, &subdir_stats, recursion_depth + 1)) {
 					closedir(dir);
 					return false;
 				}
@@ -624,7 +611,7 @@ bool verify_directory_stability(const char *dir_path, dir_stats_t *stats, int re
 			
 			/* Check for very recent file modifications (< 1 seconds) */
 			if (difftime(now, st.st_mtime) < 1.0) {
-				log_message(LOG_LEVEL_DEBUG, "Directory %s unstable: recent file modification (%s, %.1f seconds ago)", 
+				log_message(LOG_LEVEL_DEBUG, "Directory %s unstable: recent file modification (%s, %.1f seconds ago)",
 						  dir_path, entry->d_name, difftime(now, st.st_mtime));
 				stats->has_temp_files = true;
 				closedir(dir);
@@ -632,9 +619,9 @@ bool verify_directory_stability(const char *dir_path, dir_stats_t *stats, int re
 			}
 			
 			/* Check for temporary files */
-			if ((st.st_size == 0 && difftime(now, st.st_mtime) < 5.0) || 
-				strstr(entry->d_name, ".tmp") != NULL || 
-				strstr(entry->d_name, ".part") != NULL || 
+			if ((st.st_size == 0 && difftime(now, st.st_mtime) < 5.0) ||
+				strstr(entry->d_name, ".tmp") != NULL ||
+				strstr(entry->d_name, ".part") != NULL ||
 				strstr(entry->d_name, ".~") != NULL ||
 				strstr(entry->d_name, ".crdownload") != NULL ||
 				strstr(entry->d_name, ".download") != NULL) {
@@ -647,7 +634,7 @@ bool verify_directory_stability(const char *dir_path, dir_stats_t *stats, int re
 			stats->dir_count++;
 			
 			dir_stats_t subdir_stats;
-			if (!verify_directory_stability(path, &subdir_stats, recursion_depth + 1)) {
+			if (!verify_directory_stability(context_state, path, &subdir_stats, recursion_depth + 1)) {
 				closedir(dir);
 				return false;
 			}
