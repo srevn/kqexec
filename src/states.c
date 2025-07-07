@@ -103,8 +103,6 @@ static unsigned int hash_path(const char *path) {
 	return hash % ENTITY_HASH_SIZE;
 }
 
-
-
 /* Initialize activity tracking for a new entity state */
 static void init_activity_tracking(entity_state_t *state, watch_entry_t *watch) {
 	if (!state) return;
@@ -637,6 +635,7 @@ void synchronize_activity_states(const char *path, entity_state_t *trigger_state
 		}
 	}
 	
+	/* Also update the trigger state's instability count to the max value */
 	trigger_state->instability_count = max_instability_count;
 	
 	/* Second pass: Update all states for the path with consistent values */
@@ -676,6 +675,7 @@ void synchronize_activity_states(const char *path, entity_state_t *trigger_state
 	}
 	
 	free(states_for_path);
+	/* Lock mutex during cleanup */
 	pthread_mutex_unlock(&entity_states_mutex);
 }
 
@@ -1035,6 +1035,21 @@ bool is_quiet_period_elapsed(entity_state_t *state, struct timespec *now) {
 	return elapsed;
 }
 
+/* Copies all directory-related statistics and tracking fields from a source to a destination state. */
+static void _copy_directory_tracking_state(entity_state_t *dest, const entity_state_t *src) {
+    if (!dest || !src) return;
+
+    dest->dir_stats = src->dir_stats;
+    dest->prev_stats = src->prev_stats;
+    dest->stable_reference_stats = src->stable_reference_stats;
+    dest->reference_stats_initialized = src->reference_stats_initialized;
+    dest->cumulative_file_change = src->cumulative_file_change;
+    dest->cumulative_dir_change = src->cumulative_dir_change;
+    dest->cumulative_depth_change = src->cumulative_depth_change;
+    dest->stability_lost = src->stability_lost;
+    dest->instability_count = src->instability_count;
+}
+
 /* Get or create an entity state for a given path and watch */
 entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_entry_t *watch) {
 	if (!path || !watch || !entity_states) {
@@ -1133,15 +1148,7 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 	if (existing_state_for_path) {
 		log_message(LOG_LEVEL_DEBUG, "Copying stats from existing state for path %s (watch: %s)",
 				   path, existing_state_for_path->watch->name);
-		state->dir_stats = existing_state_for_path->dir_stats;
-		state->prev_stats = existing_state_for_path->prev_stats;
-		state->stable_reference_stats = existing_state_for_path->stable_reference_stats;
-		state->reference_stats_initialized = existing_state_for_path->reference_stats_initialized;
-		state->cumulative_file_change = existing_state_for_path->cumulative_file_change;
-		state->cumulative_dir_change = existing_state_for_path->cumulative_dir_change;
-		state->cumulative_depth_change = existing_state_for_path->cumulative_depth_change;
-		state->stability_lost = existing_state_for_path->stability_lost;
-		state->instability_count = existing_state_for_path->instability_count;
+        _copy_directory_tracking_state(state, existing_state_for_path);
 	} else {
 		/* This is the first state for this path, initialize stats from scratch */
 		state->instability_count = 0;
@@ -1174,7 +1181,7 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 
 	log_message(LOG_LEVEL_DEBUG, "Created new state for path=%s, watch=%s, type=%d",
 			  path, watch->name, state->type);
-
+	
 	pthread_mutex_unlock(&entity_states_mutex);
 	return state;
 }
@@ -1475,6 +1482,7 @@ void update_entity_states_after_reload(config_t *new_config) {
 	
 	log_message(LOG_LEVEL_DEBUG, "Updating all entity states after reload");
 	
+	/* Iterate through all entity states and update pointers by name comparison */
 	for (int i = 0; i < ENTITY_HASH_SIZE; i++) {
 		entity_state_t *state = entity_states[i];
 		while (state) {
@@ -1495,6 +1503,7 @@ void update_entity_states_after_reload(config_t *new_config) {
 		}
 	}
 	
+	/* Unlock mutex */
 	pthread_mutex_unlock(&entity_states_mutex);
 }
 
@@ -1540,5 +1549,6 @@ void cleanup_orphaned_entity_states(config_t *new_config) {
 		}
 	}
 	
+	/* Unlock mutex */
 	pthread_mutex_unlock(&entity_states_mutex);
 }

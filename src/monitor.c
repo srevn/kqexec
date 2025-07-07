@@ -815,6 +815,41 @@ bool monitor_add_watch(monitor_t *monitor, watch_entry_t *watch) {
 	}
 }
 
+/* Create a watch entry for the configuration file */
+static watch_entry_t* _create_config_watch(const char* config_file_path) {
+    if (!config_file_path) return NULL;
+
+    watch_entry_t *config_watch = calloc(1, sizeof(watch_entry_t));
+    if (config_watch == NULL) {
+        log_message(LOG_LEVEL_ERR, "Failed to allocate memory for config file watch");
+        return NULL;
+    }
+
+    config_watch->name = strdup("__config_file__");
+    config_watch->path = strdup(config_file_path);
+    config_watch->type = WATCH_FILE;
+    config_watch->events = EVENT_CONTENT;
+    config_watch->command = strdup("__config_reload__");
+    config_watch->log_output = false;
+    config_watch->buffer_output = false;
+    config_watch->recursive = false;
+    config_watch->hidden = false;
+    config_watch->complexity = 1.0;
+    config_watch->processing_delay = 0;
+
+    /* Check for strdup failures, which can return NULL on error */
+    if (!config_watch->name || !config_watch->path || !config_watch->command) {
+        log_message(LOG_LEVEL_ERR, "Failed to allocate strings for config watch");
+        free(config_watch->name);
+        free(config_watch->path);
+        free(config_watch->command);
+        free(config_watch);
+        return NULL;
+    }
+
+    return config_watch;
+}
+
 /* Set up the monitor by creating kqueue and adding watches */
 bool monitor_setup(monitor_t *monitor) {
 	if (monitor == NULL) {
@@ -845,43 +880,28 @@ bool monitor_setup(monitor_t *monitor) {
 	
 	/* Add config file watch for hot reload by adding it to the config structure */
 	if (monitor->config_file != NULL) {
-		watch_entry_t *config_watch = calloc(1, sizeof(watch_entry_t));
-		if (config_watch == NULL) {
-			log_message(LOG_LEVEL_ERR, "Failed to allocate memory for config file watch");
-			return false;
-		}
-		
-		config_watch->name = strdup("__config_file__");
-		config_watch->path = strdup(monitor->config_file);
-		config_watch->type = WATCH_FILE;
-		config_watch->events = EVENT_CONTENT;
-		config_watch->command = strdup("__config_reload__");
-		config_watch->log_output = false;
-		config_watch->buffer_output = false;
-		config_watch->recursive = false;
-		config_watch->hidden = false;
-		config_watch->complexity = 1.0;
-		config_watch->processing_delay = 0;
-		
-		/* Add to config structure so it gets managed properly */
-		watch_entry_t **new_watches = realloc(monitor->config->watches, (monitor->config->watch_count + 1) * sizeof(watch_entry_t *));
-		if (new_watches == NULL) {
-			log_message(LOG_LEVEL_WARNING, "Failed to add config watch to config structure");
-			free(config_watch->name);
-			free(config_watch->path);
-			free(config_watch->command);
-			free(config_watch);
-		} else {
-			monitor->config->watches = new_watches;
-			monitor->config->watches[monitor->config->watch_count] = config_watch;
-			monitor->config->watch_count++;
-			
-			if (!monitor_add_watch(monitor, config_watch)) {
-				log_message(LOG_LEVEL_WARNING, "Failed to add config file watch for %s", monitor->config_file);
-				/* Remove from config since it wasn't added to monitor */
-				monitor->config->watch_count--;
+		watch_entry_t *config_watch = _create_config_watch(monitor->config_file);
+		if (config_watch) {
+			/* Add to config structure so it gets managed properly */
+			watch_entry_t **new_watches = realloc(monitor->config->watches, (monitor->config->watch_count + 1) * sizeof(watch_entry_t *));
+			if (new_watches == NULL) {
+				log_message(LOG_LEVEL_WARNING, "Failed to add config watch to config structure");
+				free(config_watch->name);
+				free(config_watch->path);
+				free(config_watch->command);
+				free(config_watch);
 			} else {
-				log_message(LOG_LEVEL_DEBUG, "Added config file watch for %s", monitor->config_file);
+				monitor->config->watches = new_watches;
+				monitor->config->watches[monitor->config->watch_count] = config_watch;
+				monitor->config->watch_count++;
+				
+				if (!monitor_add_watch(monitor, config_watch)) {
+					log_message(LOG_LEVEL_WARNING, "Failed to add config file watch for %s", monitor->config_file);
+					/* Remove from config since it wasn't added to monitor */
+					monitor->config->watch_count--;
+				} else {
+					log_message(LOG_LEVEL_DEBUG, "Added config file watch for %s", monitor->config_file);
+				}
 			}
 		}
 	}
@@ -1158,32 +1178,41 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 		
 		/* Handle scan failure (directory doesn't exist, etc.) */
 		if (!scan_completed) {
+			/* Check if the directory still exists */
 			struct stat st;
+			/* Increment failed checks counter */
 			if (stat(entry->path, &st) != 0 || !S_ISDIR(st.st_mode)) {
 				root_state->failed_checks++;
 				log_message(LOG_LEVEL_DEBUG, "Directory %s not found (attempt %d/%d)",
 							entry->path, root_state->failed_checks, MAX_FAILED_CHECKS);
 				
+				/* After multiple consecutive failures, consider it permanently deleted */
 				if (root_state->failed_checks >= MAX_FAILED_CHECKS) {
 					log_message(LOG_LEVEL_INFO, "Directory %s confirmed deleted after %d failed checks, cleaning up",
 								entry->path, root_state->failed_checks);
+					
+					/* Mark as not active for all watches */
 					root_state->activity_in_progress = false;
 					root_state->exists = false;
 					synchronize_activity_states(entry->path, root_state);
+					
+					/* Remove from queue */
 					check_queue_remove(monitor, entry->path);
 					continue;
 				}
 				
 				/* Reschedule for another check */
 				struct timespec next_check;
-				next_check.tv_sec = current_time->tv_sec + 2;
+				next_check.tv_sec = current_time->tv_sec + 2; /* 2 seconds */
 				next_check.tv_nsec = current_time->tv_nsec;
+				
+				/* Update entry */
 				entry->next_check = next_check;
 				check_queue_heapify_down(monitor->check_queue, monitor->check_queue_size, 0);
 				continue;
 			} else {
-				/* Scan failed for other reasons (e.g., temp files), reset counter */
-				root_state->failed_checks = 0;
+				/* Scan failed for other reasons (e.g., temp files) */
+				root_state->failed_checks = 0; /* Reset counter */
 			}
 		}
 		
@@ -1647,8 +1676,6 @@ void monitor_request_reload(monitor_t *monitor) {
 	}
 }
 
-
-
 /* Process a reload request */
 bool monitor_reload(monitor_t *monitor) {
 	if (monitor == NULL || monitor->config_file == NULL) {
@@ -1657,42 +1684,35 @@ bool monitor_reload(monitor_t *monitor) {
 	}
 
 	log_message(LOG_LEVEL_INFO, "Reloading configuration from %s", monitor->config_file);
-
+	log_message(LOG_LEVEL_DEBUG, "Current configuration has %d watches", monitor->watch_count);
+	
+	/* Save existing config to compare later */
 	config_t *old_config = monitor->config;
+	
+	/* Create new configuration */
 	config_t *new_config = config_create();
 	if (!new_config) {
 		log_message(LOG_LEVEL_ERR, "Failed to create new configuration during reload");
 		return false;
 	}
-
+	
+	/* Copy daemon mode and log level from existing config */
 	new_config->daemon_mode = old_config->daemon_mode;
 	new_config->syslog_level = old_config->syslog_level;
-
+	
+	/* Parse configuration file */
 	if (!config_parse_file(new_config, monitor->config_file)) {
-		log_message(LOG_LEVEL_ERR, "Failed to parse new config, keeping old one");
+		log_message(LOG_LEVEL_ERR, "Failed to parse new config, keeping old one: %s", monitor->config_file);
 		config_destroy(new_config);
+		/* Re-validate the watch on the config file to detect subsequent changes */
 		monitor_validate_and_refresh_path(monitor, monitor->config_file);
 		return false;
 	}
 
 	/* Add config file watch to the new config so it gets re-added */
 	if (monitor->config_file != NULL) {
-		watch_entry_t *config_watch = calloc(1, sizeof(watch_entry_t));
-		if (config_watch == NULL) {
-			log_message(LOG_LEVEL_ERR, "Failed to allocate memory for config file watch during reload");
-		} else {
-			config_watch->name = strdup("__config_file__");
-			config_watch->path = strdup(monitor->config_file);
-			config_watch->type = WATCH_FILE;
-			config_watch->events = EVENT_CONTENT;
-			config_watch->command = strdup("__config_reload__");
-			config_watch->log_output = false;
-			config_watch->buffer_output = false;
-			config_watch->recursive = false;
-			config_watch->hidden = false;
-			config_watch->complexity = 1.0;
-			config_watch->processing_delay = 0;
-
+		watch_entry_t *config_watch = _create_config_watch(monitor->config_file);
+		if (config_watch) {
 			watch_entry_t **new_watches_in_config = realloc(new_config->watches, (new_config->watch_count + 1) * sizeof(watch_entry_t *));
 			if (new_watches_in_config == NULL) {
 				log_message(LOG_LEVEL_WARNING, "Failed to add config watch to new config structure");
@@ -1711,6 +1731,8 @@ bool monitor_reload(monitor_t *monitor) {
 	/* Clear deferred and delayed queues to prevent access to old states */
 	check_queue_cleanup(monitor);
 	check_queue_init(monitor, 16);
+	
+	/* Also clear delayed events queue that may reference old watches */
 	if (monitor->delayed_events) {
 		for (int i = 0; i < monitor->delayed_event_count; i++) {
 			free(monitor->delayed_events[i].event.path);
@@ -1718,12 +1740,13 @@ bool monitor_reload(monitor_t *monitor) {
 		free(monitor->delayed_events);
 		monitor->delayed_events = NULL;
 		monitor->delayed_event_count = 0;
+		log_message(LOG_LEVEL_DEBUG, "Cleared %d delayed events during config reload", monitor->delayed_event_count);
 		monitor->delayed_event_capacity = 0;
 	}
 
 	/* Update entity states to point to new watch entries */
 	update_entity_states_after_reload(new_config);
-
+	
 	/* Clean up states that are no longer associated with any new watch */
 	cleanup_orphaned_entity_states(new_config);
 
@@ -1751,7 +1774,10 @@ bool monitor_reload(monitor_t *monitor) {
 	/* Replace old config with new one */
 	config_destroy(old_config);
 	monitor->config = new_config;
-
+	
+	/* After reloading, explicitly validate the config file watch to handle editor atomic saves */
+	monitor_validate_and_refresh_path(monitor, monitor->config_file);
+	
 	log_message(LOG_LEVEL_INFO, "Configuration reload complete: %d active watches", monitor->watch_count);
 	return true;
 }
