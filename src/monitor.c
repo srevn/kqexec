@@ -1372,7 +1372,7 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 		
 		/* Find the most recent file if any command needs it */
 		for (int i = 0; i < entry->watch_count; i++) {
-			if (strstr(entry->watches[i]->command, "%F")) {
+			if (strstr(entry->watches[i]->command, "%f")) {
 				free(root_state->trigger_file_path);
 				root_state->trigger_file_path = NULL; /* Clear previous path */
 				
@@ -1388,7 +1388,7 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 				}
 				
 				if (root_state->trigger_file_path) {
-					log_message(LOG_LEVEL_DEBUG, "Found trigger file for %%F: %s", root_state->trigger_file_path);
+					log_message(LOG_LEVEL_DEBUG, "Found trigger file for %%f: %s", root_state->trigger_file_path);
 				}
 				break; /* Only need to find it once */
 			}
