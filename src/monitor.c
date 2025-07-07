@@ -1140,118 +1140,74 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 		dir_stats_t current_stats;
 		bool scan_completed = verify_directory_stability(root_state, entry->path, &current_stats, 0);
 		
-		/* Update root state with latest stats, even if not stable */
-		if (scan_completed || current_stats.recursive_file_count > 0 || current_stats.recursive_dir_count > 0) {
-			/* Check if current scan has more complete recursive stats */
-			if (current_stats.recursive_file_count > root_state->dir_stats.recursive_file_count ||
-				current_stats.recursive_dir_count > root_state->dir_stats.recursive_dir_count ||
-				current_stats.max_depth > root_state->dir_stats.max_depth) {
-				
-				log_message(LOG_LEVEL_DEBUG,
-							"Updating %s with more comprehensive recursive stats: files=%d, dirs=%d, max_depth=%d",
-							root_state->path, current_stats.recursive_file_count,
-							current_stats.recursive_dir_count, current_stats.max_depth);
-				
-				/* Store comprehensive recursive stats */
-				root_state->dir_stats.recursive_file_count = current_stats.recursive_file_count;
-				root_state->dir_stats.recursive_dir_count = current_stats.recursive_dir_count;
-				root_state->dir_stats.max_depth = current_stats.max_depth;
-				root_state->dir_stats.recursive_total_size = current_stats.recursive_total_size;
-			}
+		/* Only update directory stats if the scan was fully completed */
+		if (scan_completed) {
+			root_state->failed_checks = 0; /* Reset failed checks on success */
+			
+			/* Save previous stats for comparison before overwriting */
+			dir_stats_t temp_prev_stats = root_state->dir_stats;
+			root_state->dir_stats = current_stats;
+			
+			/* Update cumulative changes based on the difference */
+			root_state->prev_stats = temp_prev_stats;
+			update_cumulative_changes(root_state);
+			
+			/* Set previous stats to current for the next cycle's comparison */
+			root_state->prev_stats = current_stats;
 		}
 		
-		/* Handle scan failure */
+		/* Handle scan failure (directory doesn't exist, etc.) */
 		if (!scan_completed) {
-			/* Check if the directory still exists */
 			struct stat st;
-			bool exists = (stat(entry->path, &st) == 0 && S_ISDIR(st.st_mode));
-			
-			if (!exists) {
-				/* Increment failed checks counter */
+			if (stat(entry->path, &st) != 0 || !S_ISDIR(st.st_mode)) {
 				root_state->failed_checks++;
-				
 				log_message(LOG_LEVEL_DEBUG, "Directory %s not found (attempt %d/%d)",
 							entry->path, root_state->failed_checks, MAX_FAILED_CHECKS);
 				
-				/* After multiple consecutive failures, consider it permanently deleted */
 				if (root_state->failed_checks >= MAX_FAILED_CHECKS) {
 					log_message(LOG_LEVEL_INFO, "Directory %s confirmed deleted after %d failed checks, cleaning up",
 								entry->path, root_state->failed_checks);
-					
-					/* Mark as not active for all watches */
 					root_state->activity_in_progress = false;
 					root_state->exists = false;
 					synchronize_activity_states(entry->path, root_state);
-					
-					/* Remove from queue */
 					check_queue_remove(monitor, entry->path);
 					continue;
 				}
 				
-				/* Reschedule with a longer timeout for the next check */
+				/* Reschedule for another check */
 				struct timespec next_check;
-				next_check.tv_sec = current_time->tv_sec + 2; /* 2 seconds */
+				next_check.tv_sec = current_time->tv_sec + 2;
 				next_check.tv_nsec = current_time->tv_nsec;
-				
-				/* Update entry */
 				entry->next_check = next_check;
 				check_queue_heapify_down(monitor->check_queue, monitor->check_queue_size, 0);
 				continue;
 			} else {
-				/* Directory exists but scan failed for some other reason */
-				root_state->failed_checks = 0;  /* Reset counter */
+				/* Scan failed for other reasons (e.g., temp files), reset counter */
+				root_state->failed_checks = 0;
 			}
-		} else {
-			/* Reset failed check counter on successful scan */
-			root_state->failed_checks = 0;
 		}
 		
-		/* Store direct stats from scan (even if unstable) */
-		root_state->dir_stats.file_count = current_stats.file_count;
-		root_state->dir_stats.dir_count = current_stats.dir_count;
-		root_state->dir_stats.depth = current_stats.depth;
-		root_state->dir_stats.total_size = current_stats.total_size;
-		
-		/* Track if previous stats exist for comparison */
-		bool has_prev_stats = (root_state->prev_stats.file_count > 0 ||
-							 root_state->prev_stats.dir_count > 0);
-		
-		/* Log scan results with detailed stats */
+		/* Log scan results with detailed stats from the state */
 		log_message(LOG_LEVEL_DEBUG,
 					"Stability check #%d for %s: files=%d, dirs=%d, size=%.2f MB, recursive_files=%d, recursive_dirs=%d, max_depth=%d, stable=%s",
 					root_state->stability_check_count + 1, entry->path,
-					current_stats.file_count, current_stats.dir_count, current_stats.total_size / (1024.0 * 1024.0),
-					current_stats.recursive_file_count, current_stats.recursive_dir_count,
-					current_stats.max_depth, scan_completed ? "yes" : "no");
+					root_state->dir_stats.file_count, root_state->dir_stats.dir_count, root_state->dir_stats.total_size / (1024.0 * 1024.0),
+					root_state->dir_stats.recursive_file_count, root_state->dir_stats.recursive_dir_count,
+					root_state->dir_stats.max_depth, scan_completed ? "yes" : "no");
 		
-		/* Determine stability based on scan result and comparison */
-		bool is_stable = scan_completed;  /* Initially use scan result */
-		
-		/* Only compare with previous stats if we have a previous scan */
-		if (scan_completed && has_prev_stats) {
-			bool counts_stable = compare_dir_stats(&root_state->prev_stats, &current_stats);
-			if (!counts_stable) {
-				log_message(LOG_LEVEL_DEBUG, "Directory unstable: file/dir count changed from %d/%d to %d/%d",
+		/* Determine stability based on scan result and comparison with previous stats */
+		bool is_stable = scan_completed;
+		if (scan_completed) {
+			bool has_prev_stats = (root_state->prev_stats.file_count > 0 || root_state->prev_stats.dir_count > 0);
+			if (has_prev_stats && !compare_dir_stats(&root_state->prev_stats, &root_state->dir_stats)) {
+				log_message(LOG_LEVEL_DEBUG, "Directory unstable: content changed from %d/%d to %d/%d",
 							root_state->prev_stats.file_count, root_state->prev_stats.dir_count,
-							current_stats.file_count, current_stats.dir_count);
+							root_state->dir_stats.file_count, root_state->dir_stats.dir_count);
 				is_stable = false;
 			}
 		}
 		
-		/* Save previous stats temporarily to calculate change */
-		dir_stats_t temp_prev_stats = root_state->prev_stats;
-		
-		/* Update current stats in state */
-		root_state->dir_stats = current_stats;
-		
-		/* Calculate cumulative changes using previous stats */
-		root_state->prev_stats = temp_prev_stats;
-		update_cumulative_changes(root_state);
-		
-		/* After calculation, set previous stats to current for next cycle */
-		root_state->prev_stats = current_stats;
-		
-		/* Synchronize updated stats with other watches */
+		/* Synchronize updated stats with other watches for the same path */
 		synchronize_activity_states(entry->path, root_state);
 		
 		if (!is_stable) {
