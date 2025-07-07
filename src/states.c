@@ -628,9 +628,14 @@ void synchronize_activity_states(const char *path, entity_state_t *trigger_state
 				 state->last_activity_in_tree.tv_nsec > latest_activity_time.tv_nsec)) {
 				latest_activity_time = state->last_activity_in_tree;
 			}
-			any_watch_active = any_watch_active || state->activity_in_progress;
-			if (state->instability_count > max_instability_count) {
-				max_instability_count = state->instability_count;
+			
+			/* If trigger state is active, merge values from other states.
+			 * Otherwise, we are resetting, so we don't merge. */
+			if (trigger_state->activity_in_progress) {
+				any_watch_active = any_watch_active || state->activity_in_progress;
+				if (state->instability_count > max_instability_count) {
+					max_instability_count = state->instability_count;
+				}
 			}
 		}
 	}

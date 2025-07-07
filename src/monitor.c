@@ -575,7 +575,10 @@ static bool is_hidden_path(const char *path) {
 static bool monitor_add_dir_recursive(monitor_t *monitor, const char *dir_path, watch_entry_t *watch) {
 	DIR *dir;
 	struct dirent *entry;
-
+	
+	/* Proactively validate the path to handle re-creations before adding watches */
+	monitor_validate_and_refresh_path(monitor, dir_path);
+	
 	/* Skip hidden directories unless hidden is true */
 	if (!watch->hidden && is_hidden_path(dir_path)) {
 		log_message(LOG_LEVEL_DEBUG, "Skipping hidden directory: %s", dir_path);
