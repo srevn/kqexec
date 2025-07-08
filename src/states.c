@@ -284,20 +284,20 @@ bool gather_basic_directory_stats(const char *dir_path, dir_stats_t *stats, int 
 bool compare_dir_stats(dir_stats_t *prev, dir_stats_t *current) {
 	if (!prev || !current) return false;
 	
-	/* Calculate content changes */
-	int file_change = current->file_count - prev->file_count;
-	int dir_change = current->dir_count - prev->dir_count;
-	int depth_change = current->depth - prev->depth;
+	/* Calculate content changes using recursive stats for a complete view of the tree */
+	int file_change = current->recursive_file_count - prev->recursive_file_count;
+	int dir_change = current->recursive_dir_count - prev->recursive_dir_count;
+	int depth_change = current->max_depth - prev->max_depth;
 	int total_change = abs(file_change) + abs(dir_change);
 	
 	/* Log depth changes */
 	if (depth_change != 0) {
 		log_message(LOG_LEVEL_DEBUG, "Directory tree depth changed: %d -> %d (%+d levels)",
-						  prev->depth, current->depth, depth_change);
+						  prev->max_depth, current->max_depth, depth_change);
 	}
 	
 	/* Allow small changes for larger directories */
-	int prev_total = prev->file_count + prev->dir_count;
+	int prev_total = prev->recursive_file_count + prev->recursive_dir_count;
 	float change_percentage = (prev_total > 0) ? ((float)total_change / prev_total) * 100.0 : 0;
 	
 	/* Use a threshold that scales with directory size */
@@ -338,20 +338,20 @@ bool compare_dir_stats(dir_stats_t *prev, dir_stats_t *current) {
 	
 	/* Check if changes are within allowances */
 	if (!((total_change <= max_allowed_change || change_percentage <= max_allowed_percent) &&
-		(depth_change == 0 || (abs(depth_change) == 1 && prev->depth > 2)))) {
+		(depth_change == 0 || (abs(depth_change) == 1 && prev->max_depth > 2)))) {
 		log_message(LOG_LEVEL_DEBUG,
 				  "Directory unstable: %d/%d to %d/%d, depth %d to %d (%+d files, %+d dirs, %+d depth, %.1f%% change)",
-							prev->file_count, prev->dir_count,
-							current->file_count, current->dir_count,
-							prev->depth, current->depth,
+							prev->recursive_file_count, prev->recursive_dir_count,
+							current->recursive_file_count, current->recursive_dir_count,
+							prev->max_depth, current->max_depth,
 							file_change, dir_change, depth_change, change_percentage);
 		is_stable = false;
 	}
 	
 	/* Check if total size is stable (allowing for small changes) */
-	long size_diff = labs((long)prev->total_size - (long)current->total_size);
-	long threshold = prev->total_size > 1000000 ?
-					 prev->total_size / 10000 : /* 0.01% for large dirs */
+	long size_diff = labs((long)prev->recursive_total_size - (long)current->recursive_total_size);
+	long threshold = prev->recursive_total_size > 1000000 ?
+					 prev->recursive_total_size / 10000 : /* 0.01% for large dirs */
 					 1024;                      /* 1KB for small dirs */
 	
 	if (size_diff > threshold) {

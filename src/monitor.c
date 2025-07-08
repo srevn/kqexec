@@ -1222,8 +1222,8 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 			bool has_prev_stats = (root_state->prev_stats.file_count > 0 || root_state->prev_stats.dir_count > 0);
 			if (has_prev_stats && !compare_dir_stats(&root_state->prev_stats, &root_state->dir_stats)) {
 				log_message(LOG_LEVEL_DEBUG, "Directory unstable: content changed from %d/%d to %d/%d",
-							root_state->prev_stats.file_count, root_state->prev_stats.dir_count,
-							root_state->dir_stats.file_count, root_state->dir_stats.dir_count);
+							root_state->prev_stats.recursive_file_count, root_state->prev_stats.recursive_dir_count,
+							root_state->dir_stats.recursive_file_count, root_state->dir_stats.recursive_dir_count);
 				is_stable = false;
 			}
 		}
