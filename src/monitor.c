@@ -1700,7 +1700,7 @@ bool monitor_reload(monitor_t *monitor) {
 		monitor_validate_and_refresh_path(monitor, monitor->config_file);
 		return false;
 	}
-
+	
 	/* Add config file watch to the new config so it gets re-added */
 	if (monitor->config_file != NULL) {
 		watch_entry_t *config_watch = _create_config_watch(monitor->config_file);
@@ -1719,7 +1719,7 @@ bool monitor_reload(monitor_t *monitor) {
 			}
 		}
 	}
-
+	
 	/* Clear deferred and delayed queues to prevent access to old states */
 	check_queue_cleanup(monitor);
 	check_queue_init(monitor, 16);
@@ -1735,7 +1735,7 @@ bool monitor_reload(monitor_t *monitor) {
 		log_message(LOG_LEVEL_DEBUG, "Cleared %d delayed events during config reload", monitor->delayed_event_count);
 		monitor->delayed_event_capacity = 0;
 	}
-
+	
 	/* Update entity states to point to new watch entries */
 	update_entity_states_after_reload(new_config);
 	
@@ -1756,13 +1756,13 @@ bool monitor_reload(monitor_t *monitor) {
 			log_message(LOG_LEVEL_WARNING, "Failed to add watch for %s", new_config->watches[i]->path);
 		}
 	}
-
+	
 	/* Destroy the old watches */
 	for (int i = 0; i < old_watch_count; i++) {
 		watch_info_destroy(old_watches_list[i]);
 	}
 	free(old_watches_list);
-
+	
 	/* Replace old config with new one */
 	config_destroy(old_config);
 	monitor->config = new_config;

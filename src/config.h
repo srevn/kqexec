@@ -15,8 +15,8 @@ typedef enum {
 
 /* Type of the watch entry */
 typedef enum {
-	WATCH_FILE,
-	WATCH_DIRECTORY
+	WATCH_FILE,                 /* Watch a specific file */
+	WATCH_DIRECTORY             /* Watch a directory */
 } watch_type_t;
 
 /* Structure for a watch entry in the configuration */

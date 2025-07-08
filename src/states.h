@@ -17,58 +17,58 @@ struct file_event;
 typedef struct file_event file_event_t;
 
 /* Activity window size for detecting quiet periods (in milliseconds) */
-#define QUIET_PERIOD_MS 500            /* Default quiet period */
-#define DIR_QUIET_PERIOD_MS 1000       /* Longer quiet period for directory operations */
-#define MAX_ACTIVITY_SAMPLES 5         /* Number of recent events to track for activity analysis */
+#define QUIET_PERIOD_MS 500              /* Default quiet period */
+#define DIR_QUIET_PERIOD_MS 1000         /* Longer quiet period for directory operations */
+#define MAX_ACTIVITY_SAMPLES 5           /* Number of recent events to track for activity analysis */
 
 /* Magic number for entity state corruption detection */
-#define ENTITY_STATE_MAGIC 0x4B514558  /* "KQEX" */
+#define ENTITY_STATE_MAGIC 0x4B514558    /* "KQEX" */
 
 /* Entity type for clarity in handling */
 typedef enum {
-    ENTITY_UNKNOWN,                    /* Unknown type, to be determined */
-    ENTITY_FILE,                       /* Regular file */
-    ENTITY_DIRECTORY,                  /* Directory */
+    ENTITY_UNKNOWN,                      /* Unknown type, to be determined */
+    ENTITY_FILE,                         /* Regular file */
+    ENTITY_DIRECTORY,                    /* Directory */
 } entity_type_t;
 
 /* Logical operation types */
 typedef enum {
-    OP_NONE = 0,                       /* No operation */
+    OP_NONE = 0,                         /* No operation */
     
     /* File operations */
-    OP_FILE_CONTENT_CHANGED,           /* File content was modified */
-    OP_FILE_CREATED,                   /* File was created */
-    OP_FILE_DELETED,                   /* File was deleted */
-    OP_FILE_RENAMED,                   /* File was renamed/moved */
-    OP_FILE_METADATA_CHANGED,          /* File attributes changed */
+    OP_FILE_CONTENT_CHANGED,             /* File content was modified */
+    OP_FILE_CREATED,                     /* File was created */
+    OP_FILE_DELETED,                     /* File was deleted */
+    OP_FILE_RENAMED,                     /* File was renamed/moved */
+    OP_FILE_METADATA_CHANGED,            /* File attributes changed */
     
     /* Directory operations */
-    OP_DIR_CONTENT_CHANGED,            /* Directory content changed */
-    OP_DIR_CREATED,                    /* Directory was created */
-    OP_DIR_DELETED,                    /* Directory was deleted */
-    OP_DIR_METADATA_CHANGED            /* Directory attributes changed */
+    OP_DIR_CONTENT_CHANGED,              /* Directory content changed */
+    OP_DIR_CREATED,                      /* Directory was created */
+    OP_DIR_DELETED,                      /* Directory was deleted */
+    OP_DIR_METADATA_CHANGED              /* Directory attributes changed */
 } operation_type_t;
 
 /* Activity sample for analyzing bursts of events */
 typedef struct {
-    struct timespec timestamp;          /* When the event occurred */
-    operation_type_t operation;         /* Type of operation */
+    struct timespec timestamp;           /* When the event occurred */
+    operation_type_t operation;          /* Type of operation */
 } activity_sample_t;
 
 /* Directory statistics for stability verification */
 typedef struct {
-    int depth;                          /* Directory tree depth */
-    int file_count;                     /* Number of files in the directory */
-    int dir_count;                      /* Number of subdirectories */
-    size_t total_size;                  /* Total size of files in the directory */
-    time_t latest_mtime;                /* Latest modification time */
-    bool has_temp_files;                /* Flag for temporary files */
+    int depth;                           /* Directory tree depth */
+    int file_count;                      /* Number of files in the directory */
+    int dir_count;                       /* Number of subdirectories */
+    size_t total_size;                   /* Total size of files in the directory */
+    time_t latest_mtime;                 /* Latest modification time */
+    bool has_temp_files;                 /* Flag for temporary files */
     
     /* Recursive stats */
-    int max_depth;                      /* Maximum depth reached from this dir */
-    int recursive_file_count;           /* Total number of files in this dir and all subdirs */
-    int recursive_dir_count;            /* Total number of dirs in this dir and all subdirs */
-    size_t recursive_total_size;        /* Total size of all files in tree */
+    int max_depth;                       /* Maximum depth reached from this dir */
+    int recursive_file_count;            /* Total number of files in this dir and all subdirs */
+    int recursive_dir_count;             /* Total number of dirs in this dir and all subdirs */
+    size_t recursive_total_size;         /* Total size of all files in tree */
 } dir_stats_t;
 
 /* Entity state tracking structure */
@@ -116,7 +116,7 @@ typedef struct entity_state {
     char *trigger_file_path;             /* Path of the specific file that triggered a directory event */
     
     /* Hash table linkage */
-    struct entity_state *next;            /* Next entity in hash bucket */
+    struct entity_state *next;           /* Next entity in hash bucket */
 } entity_state_t;
 
 /* Function prototypes */

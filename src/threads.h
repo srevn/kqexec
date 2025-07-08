@@ -7,9 +7,9 @@
 #include "config.h"
 #include "monitor.h"
 
-/* Thread pool configuration */
-#define MAX_WORKER_THREADS 3
-#define MAX_WORK_QUEUE_SIZE 8
+/* Thread pool configuration constants */
+#define MAX_WORKER_THREADS 3         /* Maximum number of worker threads */
+#define MAX_WORK_QUEUE_SIZE 8        /* Maximum number of queued work items */
 
 /* Work item for thread pool */
 typedef struct work_item {
@@ -20,15 +20,15 @@ typedef struct work_item {
 
 /* Thread pool structure */
 typedef struct {
-	pthread_t threads[MAX_WORKER_THREADS];
-	work_item_t *queue_head;
-	work_item_t *queue_tail;
-	int queue_size;
-	int thread_count;
-	bool shutdown;
-	pthread_mutex_t queue_mutex;
-	pthread_cond_t work_available;
-	pthread_cond_t work_done;
+	pthread_t threads[MAX_WORKER_THREADS]; /* Worker thread handles */
+	work_item_t *queue_head;		 /* Head of work queue */
+	work_item_t *queue_tail;		 /* Tail of work queue */
+	int queue_size;	                 /* Current queue size */
+	int thread_count;                /* Number of active threads */
+	bool shutdown;                   /* Shutdown flag */
+	pthread_mutex_t queue_mutex;     /* Queue access mutex */
+	pthread_cond_t work_available;   /* Work available condition */
+	pthread_cond_t work_done;        /* Work completion condition */
 } thread_pool_t;
 
 /* Thread pool function prototypes */

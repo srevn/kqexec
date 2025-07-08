@@ -449,6 +449,7 @@ bool verify_directory_stability(entity_state_t *context_state, const char *dir_p
 				stats->latest_mtime = st.st_mtime;
 			}
 			
+			/* Skip known system files */
 			if (is_system_file_to_ignore(entry->d_name) ||
 				(!context_state->watch->hidden && entry->d_name[0] == '.')) {
 				continue;
