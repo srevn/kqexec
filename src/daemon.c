@@ -47,20 +47,6 @@ static void signal_handler(int sig) {
 	}
 }
 
-/* Check if the daemon is still running */
-bool daemon_is_running(void) {
-	return running != 0;
-}
-
-/* Check if reload is requested */
-bool daemon_reload_requested(void) {
-	if (reload_requested) {
-		reload_requested = 0;
-		return true;
-	}
-	return false;
-}
-
 /* Set up signal handlers */
 bool daemon_setup_signals(void) {
 	struct sigaction sa;

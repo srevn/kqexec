@@ -815,37 +815,6 @@ void record_activity(entity_state_t *state, operation_type_t op) {
 	synchronize_activity_states(state->path, state);
 }
 
-/* Calculate time between the last two recorded activities */
-static long get_activity_interval_ms(entity_state_t *state) {
-	if (!state || state->activity_sample_count < 2) return LONG_MAX;
-
-	int latest_idx = (state->activity_index + MAX_ACTIVITY_SAMPLES - 1) % MAX_ACTIVITY_SAMPLES;
-	int prev_idx = (latest_idx + MAX_ACTIVITY_SAMPLES - 1) % MAX_ACTIVITY_SAMPLES;
-
-	struct timespec *newer = &state->recent_activity[latest_idx].timestamp;
-	struct timespec *older = &state->recent_activity[prev_idx].timestamp;
-
-	/* Handle potential timestamp wrapping or errors */
-	if (newer->tv_sec < older->tv_sec || (newer->tv_sec == older->tv_sec && newer->tv_nsec < older->tv_nsec)) {
-		log_message(LOG_LEVEL_WARNING, "Detected non-monotonic timestamps for %s", state->path);
-		return LONG_MAX;
-	}
-
-	return (newer->tv_sec - older->tv_sec) * 1000 +
-		   (long)(newer->tv_nsec - older->tv_nsec) / 1000000;
-}
-
-/* Analyze activity to detect if recent events form a burst pattern */
-bool is_activity_burst(entity_state_t *state) {
-	if (!state || state->activity_sample_count < 2) return false;
-	
-	long interval_ms = get_activity_interval_ms(state);
-	long threshold = DIR_QUIET_PERIOD_MS / 2;
-	if (threshold <= 0) threshold = 100; /* Reasonable minimum */
-	
-	return interval_ms < threshold;
-}
-
 /* Determine the required quiet period based on state type and activity */
 long get_required_quiet_period(entity_state_t *state) {
 	if (!state) return QUIET_PERIOD_MS;

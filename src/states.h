@@ -131,7 +131,6 @@ void synchronize_activity_states(const char *path, entity_state_t *trigger_state
 bool gather_basic_directory_stats(const char *dir_path, dir_stats_t *stats, int recursion_depth);
 bool is_quiet_period_elapsed(entity_state_t *state, struct timespec *now);
 long get_required_quiet_period(entity_state_t *state);
-bool is_activity_burst(entity_state_t *state);
 entity_state_t *find_root_state(entity_state_t *state);
 bool verify_directory_stability(entity_state_t *context_state, const char *dir_path, dir_stats_t *stats, int recursion_depth);
 bool compare_dir_stats(dir_stats_t *prev, dir_stats_t *current);
