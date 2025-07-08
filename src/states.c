@@ -19,9 +19,6 @@
 /* Hash table size for storing entity states */
 #define ENTITY_HASH_SIZE 1024
 
-/* External reference to the current monitor instance */
-extern monitor_t *g_current_monitor;
-
 /* Hash table of entity states */
 static entity_state_t **entity_states = NULL;
 
@@ -1274,7 +1271,7 @@ event_type_t operation_to_event_type(operation_type_t op) {
 }
 
 /* Check if a command should be executed for a given operation */
-bool should_execute_command(entity_state_t *state, operation_type_t op, int default_debounce_ms) {
+bool should_execute_command(monitor_t *monitor, entity_state_t *state, operation_type_t op, int default_debounce_ms) {
 	if (!state) return false;
 
 	struct timespec now;
@@ -1286,7 +1283,7 @@ bool should_execute_command(entity_state_t *state, operation_type_t op, int defa
 	/* Directory content changes always defer execution to process_deferred_dir_scans */
 	if (op == OP_DIR_CONTENT_CHANGED) {
 		entity_state_t *root = find_root_state(state);
-		if (root && g_current_monitor) {
+		if (root && monitor) {
 			/* Always trigger a deferred check; queue deduplicates */
 			root->activity_in_progress = true;
 			log_message(LOG_LEVEL_DEBUG, "Directory content change for %s, marked root %s as active - command deferred",
@@ -1297,7 +1294,7 @@ bool should_execute_command(entity_state_t *state, operation_type_t op, int defa
 				return false;
 			}
 			
-			schedule_deferred_check(g_current_monitor, root);
+			schedule_deferred_check(monitor, root);
 			log_message(LOG_LEVEL_DEBUG, "Added directory %s to deferred check queue", root->path);
 		}
 		return false; /* Decision happens later in process_deferred_dir_scans */
@@ -1370,7 +1367,7 @@ char *find_most_recent_file_in_dir(const char *dir_path) {
 }
 
 /* Process an event and potentially execute a command */
-bool process_event(watch_entry_t *watch, file_event_t *event, entity_type_t entity_type) {
+bool process_event(monitor_t *monitor, watch_entry_t *watch, file_event_t *event, entity_type_t entity_type) {
 	if (watch == NULL || event == NULL || event->path == NULL) {
 		log_message(LOG_LEVEL_ERR, "process_event: Received NULL watch, event, or event path");
 		return false;
@@ -1402,8 +1399,8 @@ bool process_event(watch_entry_t *watch, file_event_t *event, entity_type_t enti
 		last_reload_time = now;
 		
 		log_message(LOG_LEVEL_NOTICE, "Configuraion changed: %s", event->path);
-		if (g_current_monitor != NULL) {
-			monitor_request_reload(g_current_monitor);
+		if (monitor != NULL) {
+			monitor_request_reload(monitor);
 		} else {
 			log_message(LOG_LEVEL_WARNING, "Config file changed but no monitor available for reload");
 		}
@@ -1444,7 +1441,7 @@ bool process_event(watch_entry_t *watch, file_event_t *event, entity_type_t enti
 	}
 
 	/* Check debounce/deferral logic */
-	if (should_execute_command(state, op, command_get_debounce_time())) {
+	if (should_execute_command(monitor, state, op, command_get_debounce_time())) {
 		/* Execute command immediately (only for non-directory-content changes) */
 		file_event_t synthetic_event = {
 			.path = state->path,

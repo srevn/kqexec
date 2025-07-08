@@ -26,9 +26,6 @@
 /* Define max allowed failures before giving up */
 #define MAX_FAILED_CHECKS 3
 
-/* Global monitor instance for integration with states.c */
-monitor_t *g_current_monitor = NULL;
-
 /* Add a watch to a queue entry */
 static bool check_queue_add_watch(deferred_check_t *entry, watch_entry_t *watch) {
 	if (!entry || !watch) {
@@ -424,9 +421,6 @@ monitor_t *monitor_create(config_t *config) {
 	monitor->delayed_events = NULL;
 	monitor->delayed_event_count = 0;
 	monitor->delayed_event_capacity = 0;
-	
-	/* Set global monitor instance */
-	g_current_monitor = monitor;
 
 	return monitor;
 }
@@ -478,11 +472,6 @@ void monitor_destroy(monitor_t *monitor) {
 	
 	/* Destroy the configuration */
 	config_destroy(monitor->config);
-	
-	/* Clear global monitor reference if it's this monitor */
-	if (g_current_monitor == monitor) {
-		g_current_monitor = NULL;
-	}
 	
 	free(monitor);
 }
@@ -1622,7 +1611,7 @@ bool monitor_process_events(monitor_t *monitor) {
 						schedule_delayed_event(monitor, info->watch, &event, entity_type);
 					} else {
 						/* Process the event immediately */
-						process_event(info->watch, &event, entity_type);
+						process_event(monitor, info->watch, &event, entity_type);
 					}
 				}
 			}
@@ -1969,7 +1958,7 @@ void process_delayed_events(monitor_t *monitor) {
 					  delayed->event.path, delayed->watch->name);
 			
 			/* Process the event */
-			process_event(delayed->watch, &delayed->event, delayed->entity_type);
+			process_event(monitor, delayed->watch, &delayed->event, delayed->entity_type);
 			
 			/* Free the path string */
 			free(delayed->event.path);
