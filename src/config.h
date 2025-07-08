@@ -2,7 +2,6 @@
 #define CONFIG_H
 
 #include <stdbool.h>
-#include <stdint.h>
 
 /* Event types that can be monitored */
 typedef enum {

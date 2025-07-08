@@ -2,7 +2,7 @@
 #define STATES_H
 
 #include <stdbool.h>
-#include <stddef.h> 
+#include <stdint.h>
 #include <time.h>
 #include <sys/types.h>
 

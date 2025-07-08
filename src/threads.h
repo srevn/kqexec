@@ -2,7 +2,6 @@
 #define THREAD_POOL_H
 
 #include <stdbool.h>
-#include <pthread.h>
 
 #include "config.h"
 #include "monitor.h"

@@ -2,8 +2,7 @@
 #define MONITOR_H
 
 #include <stdbool.h>
-#include <sys/types.h>
-#include <time.h>
+#include <stdint.h>
 
 #include "states.h"
 #include "config.h"

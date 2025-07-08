@@ -2,12 +2,9 @@
 #define COMMAND_H
 
 #include <stdbool.h>
-#include <time.h>
-#include <pthread.h>
 
 #include "config.h"
 #include "monitor.h"
-#include "threads.h"
 
 /* Command execution configuration */
 #define DEFAULT_DEBOUNCE_TIME_MS 500    /* Default debounce time in milliseconds */

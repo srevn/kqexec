@@ -21,27 +21,28 @@ static char *trim(char *str) {
 	if (str == NULL) {
 		return NULL;
 	}
-	
+
 	char *end;
-	
+
 	/* Trim leading space */
-	while (isspace((unsigned char)*str)) {
+	while (isspace((unsigned char) *str)) {
 		str++;
 	}
-	
-	if (*str == 0) { /* All spaces */
+
+	if (*str == 0) {
+		/* All spaces */
 		return str;
 	}
-	
+
 	/* Trim trailing space */
 	end = str + strlen(str) - 1;
-	while (end > str && isspace((unsigned char)*end)) {
+	while (end > str && isspace((unsigned char) *end)) {
 		end--;
 	}
-	
+
 	/* Write new null terminator */
 	*(end + 1) = 0;
-	
+
 	return str;
 }
 
@@ -49,20 +50,20 @@ static char *trim(char *str) {
 bool config_parse_events(const char *events_str, event_type_t *events) {
 	*events = EVENT_NONE;
 	char *events_copy, *token, *saveptr;
-	
+
 	if (events_str == NULL) {
 		return true;
 	}
-	
+
 	events_copy = strdup(events_str);
 	if (events_copy == NULL) {
 		return false;
 	}
-	
+
 	token = strtok_r(events_copy, ",", &saveptr);
 	while (token != NULL) {
 		char *trimmed_token = trim(token);
-		
+
 		if (strcasecmp(trimmed_token, "STRUCTURE") == 0) {
 			*events |= EVENT_STRUCTURE;
 		} else if (strcasecmp(trimmed_token, "METADATA") == 0) {
@@ -76,10 +77,10 @@ bool config_parse_events(const char *events_str, event_type_t *events) {
 			free(events_copy);
 			return false;
 		}
-		
+
 		token = strtok_r(NULL, ",", &saveptr);
 	}
-	
+
 	free(events_copy);
 	return true;
 }
@@ -87,11 +88,11 @@ bool config_parse_events(const char *events_str, event_type_t *events) {
 /* Convert event type to string representation */
 const char *event_type_to_string(event_type_t event) {
 	if (event == EVENT_NONE) return "NONE";
-	
+
 	/* Handle composite event types by listing all that apply */
 	static char buffer[64];
 	buffer[0] = '\0';
-	
+
 	if (event & EVENT_STRUCTURE) {
 		strcat(buffer, "STRUCTURE ");
 	}
@@ -101,12 +102,12 @@ const char *event_type_to_string(event_type_t event) {
 	if (event & EVENT_CONTENT) {
 		strcat(buffer, "CONTENT ");
 	}
-	
+
 	/* Remove trailing space if any */
 	if (buffer[0] != '\0') {
 		buffer[strlen(buffer) - 1] = '\0';
 	}
-	
+
 	return buffer;
 }
 
@@ -117,13 +118,13 @@ config_t *config_create(void) {
 		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for configuration");
 		return NULL;
 	}
-	
+
 	/* Set default values */
 	config->daemon_mode = false;
 	config->syslog_level = LOG_LEVEL_NOTICE;
 	config->watches = NULL;
 	config->watch_count = 0;
-	
+
 	return config;
 }
 
@@ -132,7 +133,7 @@ static void watch_entry_destroy(watch_entry_t *watch) {
 	if (watch == NULL) {
 		return;
 	}
-	
+
 	free(watch->name);
 	free(watch->path);
 	free(watch->command);
@@ -144,13 +145,13 @@ void config_destroy(config_t *config) {
 	if (config == NULL) {
 		return;
 	}
-	
+
 	free(config->config_file);
-	
+
 	for (int i = 0; i < config->watch_count; i++) {
 		watch_entry_destroy(config->watches[i]);
 	}
-	
+
 	free(config->watches);
 	free(config);
 }
@@ -158,7 +159,7 @@ void config_destroy(config_t *config) {
 /* Add a watch entry to the configuration */
 static bool config_add_watch(config_t *config, watch_entry_t *watch) {
 	watch_entry_t **new_watches;
-	
+
 	/* Check for duplicate watch names */
 	for (int i = 0; i < config->watch_count; i++) {
 		if (config->watches[i] && config->watches[i]->name && watch->name &&
@@ -167,17 +168,17 @@ static bool config_add_watch(config_t *config, watch_entry_t *watch) {
 			return false;
 		}
 	}
-	
+
 	new_watches = realloc(config->watches, (config->watch_count + 1) * sizeof(watch_entry_t *));
 	if (new_watches == NULL) {
 		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for watch entry");
 		return false;
 	}
-	
+
 	config->watches = new_watches;
 	config->watches[config->watch_count] = watch;
 	config->watch_count++;
-	
+
 	return true;
 }
 
@@ -188,73 +189,73 @@ bool config_parse_file(config_t *config, const char *filename) {
 	section_state_t state = SECTION_NONE;
 	watch_entry_t *current_watch = NULL;
 	int line_number = 0;
-	
+
 	if (config == NULL || filename == NULL) {
 		log_message(LOG_LEVEL_ERR, "Invalid arguments to config_parse_file");
 		return false;
 	}
-	
+
 	fp = fopen(filename, "r");
 	if (fp == NULL) {
-		log_message(LOG_LEVEL_ERR, "Failed to open config file %s: %s", 
-				  filename, strerror(errno));
+		log_message(LOG_LEVEL_ERR, "Failed to open config file %s: %s",
+		            filename, strerror(errno));
 		return false;
 	}
-	
+
 	config->config_file = strdup(filename);
-	
+
 	while (fgets(line, sizeof(line), fp) != NULL) {
 		char *str;
-		char continued_line[MAX_LINE_LEN * 10] = {0};  /* Buffer for continued lines */
-		
+		char continued_line[MAX_LINE_LEN * 10] = {0}; /* Buffer for continued lines */
+
 		line_number++;
-		
+
 		/* Remove comments */
 		str = strchr(line, '#');
 		if (str != NULL) {
 			*str = '\0';
 		}
-		
+
 		/* Trim whitespace */
 		str = trim(line);
-		
+
 		/* Skip empty lines */
 		if (*str == '\0') {
 			continue;
 		}
-		
+
 		/* Handle line continuation */
 		strcpy(continued_line, str);
-		
+
 		/* Check if line ends with backslash for continuation */
 		while (strlen(continued_line) > 0 && continued_line[strlen(continued_line) - 1] == '\\') {
 			char next_line[MAX_LINE_LEN];
 			char *next_str;
-			
+
 			/* Remove the trailing backslash */
 			continued_line[strlen(continued_line) - 1] = '\0';
-			
+
 			/* Read next line */
 			if (fgets(next_line, sizeof(next_line), fp) == NULL) {
-				break;  /* End of file */
+				break; /* End of file */
 			}
-			
+
 			line_number++;
-			
+
 			/* Remove comments from next line */
 			next_str = strchr(next_line, '#');
 			if (next_str != NULL) {
 				*next_str = '\0';
 			}
-			
+
 			/* Trim whitespace from next line */
 			next_str = trim(next_line);
-			
+
 			/* Skip empty continuation lines */
 			if (*next_str == '\0') {
 				continue;
 			}
-			
+
 			/* Append next line with a space separator */
 			if (strlen(continued_line) + strlen(next_str) + 1 < sizeof(continued_line)) {
 				strcat(continued_line, " ");
@@ -265,10 +266,10 @@ bool config_parse_file(config_t *config, const char *filename) {
 				return false;
 			}
 		}
-		
+
 		/* Use the continued line for further processing */
 		str = continued_line;
-		
+
 		/* Parse section header */
 		if (*str == '[') {
 			char *end = strchr(str, ']');
@@ -277,9 +278,9 @@ bool config_parse_file(config_t *config, const char *filename) {
 				fclose(fp);
 				return false;
 			}
-			
+
 			*end = '\0';
-			
+
 			/* Create a new watch entry */
 			if (current_watch != NULL) {
 				/* Validate the previous watch entry */
@@ -289,21 +290,21 @@ bool config_parse_file(config_t *config, const char *filename) {
 					fclose(fp);
 					return false;
 				}
-				
+
 				if (current_watch->events == EVENT_NONE) {
 					log_message(LOG_LEVEL_ERR, "Missing or invalid events in section [%s]", current_watch->name);
 					watch_entry_destroy(current_watch);
 					fclose(fp);
 					return false;
 				}
-				
+
 				if (current_watch->command == NULL) {
 					log_message(LOG_LEVEL_ERR, "Missing command in section [%s]", current_watch->name);
 					watch_entry_destroy(current_watch);
 					fclose(fp);
 					return false;
 				}
-				
+
 				/* Add the watch entry to the configuration */
 				if (!config_add_watch(config, current_watch)) {
 					watch_entry_destroy(current_watch);
@@ -311,7 +312,7 @@ bool config_parse_file(config_t *config, const char *filename) {
 					return false;
 				}
 			}
-			
+
 			/* Start a new section */
 			current_watch = calloc(1, sizeof(watch_entry_t));
 			if (current_watch == NULL) {
@@ -319,23 +320,23 @@ bool config_parse_file(config_t *config, const char *filename) {
 				fclose(fp);
 				return false;
 			}
-			
+
 			current_watch->name = strdup(str + 1);
-			current_watch->log_output = false;     /* Default to not logging command output */
-			current_watch->buffer_output = false;  /* Default to not buffering output */
-			current_watch->recursive = true;       /* Default to recursive for directories */
-			current_watch->hidden = false;         /* Default to not including hidden files */
-			current_watch->processing_delay = 0;   /* Default to no delay */
-			current_watch->complexity = 1.0;       /* Default complexity multiplier */
+			current_watch->log_output = false; /* Default to not logging command output */
+			current_watch->buffer_output = false; /* Default to not buffering output */
+			current_watch->recursive = true; /* Default to recursive for directories */
+			current_watch->hidden = false; /* Default to not including hidden files */
+			current_watch->processing_delay = 0; /* Default to no delay */
+			current_watch->complexity = 1.0; /* Default complexity multiplier */
 			state = SECTION_ENTRY;
-			
+
 			continue;
 		}
-		
+
 		/* Parse key-value pairs */
 		if (state == SECTION_ENTRY) {
 			char *key, *value;
-			
+
 			key = strtok(str, "=");
 			if (key == NULL) {
 				log_message(LOG_LEVEL_ERR, "Malformed key-value pair at line %d", line_number);
@@ -343,7 +344,7 @@ bool config_parse_file(config_t *config, const char *filename) {
 				fclose(fp);
 				return false;
 			}
-			
+
 			value = strtok(NULL, "");
 			if (value == NULL) {
 				log_message(LOG_LEVEL_ERR, "Missing value at line %d", line_number);
@@ -351,10 +352,10 @@ bool config_parse_file(config_t *config, const char *filename) {
 				fclose(fp);
 				return false;
 			}
-			
+
 			key = trim(key);
 			value = trim(value);
-			
+
 			if (strcasecmp(key, "file") == 0) {
 				current_watch->type = WATCH_FILE;
 				current_watch->path = strdup(value);
@@ -364,7 +365,7 @@ bool config_parse_file(config_t *config, const char *filename) {
 			} else if (strcasecmp(key, "events") == 0) {
 				if (!config_parse_events(value, &current_watch->events)) {
 					log_message(LOG_LEVEL_ERR, "Invalid value for events at line %d: %s",
-							  line_number, value);
+					            line_number, value);
 					watch_entry_destroy(current_watch);
 					fclose(fp);
 					return false;
@@ -377,8 +378,8 @@ bool config_parse_file(config_t *config, const char *filename) {
 				} else if (strcasecmp(value, "false") == 0 || strcmp(value, "0") == 0) {
 					current_watch->log_output = false;
 				} else {
-					log_message(LOG_LEVEL_ERR, "Invalid value for log_output at line %d: %s", 
-							  line_number, value);
+					log_message(LOG_LEVEL_ERR, "Invalid value for log_output at line %d: %s",
+					            line_number, value);
 					watch_entry_destroy(current_watch);
 					fclose(fp);
 					return false;
@@ -389,8 +390,8 @@ bool config_parse_file(config_t *config, const char *filename) {
 				} else if (strcasecmp(value, "false") == 0 || strcmp(value, "0") == 0) {
 					current_watch->buffer_output = false;
 				} else {
-					log_message(LOG_LEVEL_ERR, "Invalid value for buffer_output at line %d: %s", 
-							  line_number, value);
+					log_message(LOG_LEVEL_ERR, "Invalid value for buffer_output at line %d: %s",
+					            line_number, value);
 					watch_entry_destroy(current_watch);
 					fclose(fp);
 					return false;
@@ -401,8 +402,8 @@ bool config_parse_file(config_t *config, const char *filename) {
 				} else if (strcasecmp(value, "false") == 0 || strcmp(value, "0") == 0) {
 					current_watch->recursive = false;
 				} else {
-					log_message(LOG_LEVEL_ERR, "Invalid value for recursive at line %d: %s", 
-							  line_number, value);
+					log_message(LOG_LEVEL_ERR, "Invalid value for recursive at line %d: %s",
+					            line_number, value);
 					watch_entry_destroy(current_watch);
 					fclose(fp);
 					return false;
@@ -413,8 +414,8 @@ bool config_parse_file(config_t *config, const char *filename) {
 				} else if (strcasecmp(value, "false") == 0 || strcmp(value, "0") == 0) {
 					current_watch->hidden = false;
 				} else {
-					log_message(LOG_LEVEL_ERR, "Invalid value for hidden at line %d: %s", 
-							  line_number, value);
+					log_message(LOG_LEVEL_ERR, "Invalid value for hidden at line %d: %s",
+					            line_number, value);
 					watch_entry_destroy(current_watch);
 					fclose(fp);
 					return false;
@@ -423,18 +424,18 @@ bool config_parse_file(config_t *config, const char *filename) {
 				double complexity_value = atof(value);
 				if (complexity_value <= 0) {
 					log_message(LOG_LEVEL_ERR, "Invalid complexity value at line %d: %s (must be > 0)",
-							  line_number, value);
+					            line_number, value);
 					watch_entry_destroy(current_watch);
 					fclose(fp);
 					return false;
 				} else {
 					current_watch->complexity = complexity_value;
-				}	
+				}
 			} else if (strcasecmp(key, "delay") == 0 || strcasecmp(key, "processing_delay") == 0) {
 				int delay_value = atoi(value);
 				if (delay_value < 0) {
-					log_message(LOG_LEVEL_ERR, "Invalid processing_delay value at line %d: %s (must be >= 0)", 
-							  line_number, value);
+					log_message(LOG_LEVEL_ERR, "Invalid processing_delay value at line %d: %s (must be >= 0)",
+					            line_number, value);
 					watch_entry_destroy(current_watch);
 					fclose(fp);
 					return false;
@@ -446,7 +447,7 @@ bool config_parse_file(config_t *config, const char *filename) {
 			}
 		}
 	}
-	
+
 	/* Process the last watch entry */
 	if (current_watch != NULL) {
 		/* Validate the watch entry */
@@ -456,21 +457,21 @@ bool config_parse_file(config_t *config, const char *filename) {
 			fclose(fp);
 			return false;
 		}
-		
+
 		if (current_watch->events == EVENT_NONE) {
 			log_message(LOG_LEVEL_ERR, "Missing or invalid events in section [%s]", current_watch->name);
 			watch_entry_destroy(current_watch);
 			fclose(fp);
 			return false;
 		}
-		
+
 		if (current_watch->command == NULL) {
 			log_message(LOG_LEVEL_ERR, "Missing command in section [%s]", current_watch->name);
 			watch_entry_destroy(current_watch);
 			fclose(fp);
 			return false;
 		}
-		
+
 		/* Add the watch entry to the configuration */
 		if (!config_add_watch(config, current_watch)) {
 			watch_entry_destroy(current_watch);
@@ -478,14 +479,14 @@ bool config_parse_file(config_t *config, const char *filename) {
 			return false;
 		}
 	}
-	
+
 	fclose(fp);
-	
+
 	/* Check if we have at least one watch entry */
 	if (config->watch_count == 0) {
 		log_message(LOG_LEVEL_ERR, "No valid watch entries found in config file");
 		return false;
 	}
-	
+
 	return true;
 }

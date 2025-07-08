@@ -50,11 +50,11 @@ static void signal_handler(int sig) {
 /* Set up signal handlers */
 bool daemon_setup_signals(void) {
 	struct sigaction sa;
-	
+
 	/* Set up signal handlers */
 	memset(&sa, 0, sizeof(sa));
 	sa.sa_handler = signal_handler;
-	
+
 	if (sigaction(SIGINT, &sa, NULL) == -1) {
 		log_message(LOG_LEVEL_ERR, "Failed to set up SIGINT handler: %s", strerror(errno));
 		return false;
@@ -67,10 +67,10 @@ bool daemon_setup_signals(void) {
 		log_message(LOG_LEVEL_ERR, "Failed to set up SIGHUP handler: %s", strerror(errno));
 		return false;
 	}
-	
+
 	/* Ignore SIGPIPE */
 	signal(SIGPIPE, SIG_IGN);
-	
+
 	return true;
 }
 
@@ -87,42 +87,42 @@ void daemon_set_monitor(monitor_t *monitor) {
 /* Start daemon */
 bool daemon_start(config_t *config) {
 	pid_t pid, sid;
-	
+
 	if (config == NULL) {
 		log_message(LOG_LEVEL_ERR, "Invalid configuration for daemon");
 		return false;
 	}
-	
+
 	/* Fork the parent process */
 	pid = fork();
 	if (pid < 0) {
 		log_message(LOG_LEVEL_ERR, "Failed to fork: %s", strerror(errno));
 		return false;
 	}
-	
+
 	/* Exit the parent process */
 	if (pid > 0) {
 		exit(EXIT_SUCCESS);
 	}
-	
+
 	/* Create a new session ID for the child process */
 	sid = setsid();
 	if (sid < 0) {
 		log_message(LOG_LEVEL_ERR, "Failed to create new session: %s", strerror(errno));
 		return false;
 	}
-	
+
 	/* Change the current working directory to root */
 	if (chdir("/") < 0) {
 		log_message(LOG_LEVEL_ERR, "Failed to change directory: %s", strerror(errno));
 		return false;
 	}
-	
+
 	/* Close standard file descriptors */
 	close(STDIN_FILENO);
 	close(STDOUT_FILENO);
 	close(STDERR_FILENO);
-	
+
 	/* Open null device */
 	int fd = open("/dev/null", O_RDWR);
 	if (fd != -1) {
@@ -130,16 +130,16 @@ bool daemon_start(config_t *config) {
 		dup2(fd, STDIN_FILENO);
 		dup2(fd, STDOUT_FILENO);
 		dup2(fd, STDERR_FILENO);
-		
+
 		if (fd > STDERR_FILENO) {
 			close(fd);
 		}
 	}
-	
+
 	/* Set file creation mask */
 	umask(0);
-	
+
 	log_message(LOG_LEVEL_INFO, "Started daemon with PID %d", getpid());
-	
+
 	return true;
 }

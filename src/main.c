@@ -3,7 +3,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <getopt.h>
-#include <syslog.h>
 
 #include "config.h"
 #include "monitor.h"
@@ -41,7 +40,7 @@ int main(int argc, char *argv[]) {
 	int log_level = LOG_LEVEL_NOTICE;
 	char *config_file = NULL;
 	int daemon_mode = 0;
-	
+
 	/* Get program name */
 	program_name = strrchr(argv[0], '/');
 	if (program_name == NULL) {
@@ -49,14 +48,14 @@ int main(int argc, char *argv[]) {
 	} else {
 		program_name++;
 	}
-	
+
 	/* Set up signal handlers */
 	if (!daemon_setup_signals()) {
 		log_message(LOG_LEVEL_ERR, "Failed to set up signal handlers");
 		log_close();
 		return EXIT_FAILURE;
 	}
-	
+
 	/* Parse command line options */
 	static struct option long_options[] = {
 		{"config", required_argument, 0, 'c'},
@@ -66,7 +65,7 @@ int main(int argc, char *argv[]) {
 		{"help", no_argument, 0, 'h'},
 		{0, 0, 0, 0}
 	};
-	
+
 	while ((c = getopt_long(argc, argv, "c:dl:b:h", long_options, &option_index)) != -1) {
 		switch (c) {
 			case 'c':
@@ -95,15 +94,15 @@ int main(int argc, char *argv[]) {
 				abort();
 		}
 	}
-	
+
 	/* Use default config file if not specified */
 	if (config_file == NULL) {
 		config_file = DEFAULT_CONFIG_FILE;
 	}
-	
+
 	/* Initialize logging */
 	log_init(program_name, LOG_DAEMON, log_level, !daemon_mode);
-	
+
 	/* Create configuration */
 	config = config_create();
 	if (config == NULL) {
@@ -111,11 +110,11 @@ int main(int argc, char *argv[]) {
 		log_close();
 		return EXIT_FAILURE;
 	}
-	
+
 	/* Set daemon mode */
 	config->daemon_mode = daemon_mode;
 	config->syslog_level = log_level;
-	
+
 	/* Parse configuration file */
 	if (!config_parse_file(config, config_file)) {
 		log_message(LOG_LEVEL_ERR, "Failed to parse configuration file: %s", config_file);
@@ -123,7 +122,7 @@ int main(int argc, char *argv[]) {
 		log_close();
 		return EXIT_FAILURE;
 	}
-	
+
 	/* Start daemon if requested */
 	if (config->daemon_mode) {
 		if (!daemon_start(config)) {
@@ -132,12 +131,12 @@ int main(int argc, char *argv[]) {
 			log_close();
 			return EXIT_FAILURE;
 		}
-		
+
 		/* Re-initialize logging without console output after daemonizing */
 		log_close();
 		log_init(program_name, LOG_DAEMON, log_level, 0);
 	}
-	
+
 	/* Initialize command subsystem */
 	if (!command_init()) {
 		log_message(LOG_LEVEL_ERR, "Failed to initialize command subsystem");
@@ -145,7 +144,7 @@ int main(int argc, char *argv[]) {
 		log_close();
 		return EXIT_FAILURE;
 	}
-	
+
 	/* Initialize entity states */
 	if (!entity_state_init()) {
 		log_message(LOG_LEVEL_ERR, "Failed to initialize entity states");
@@ -154,7 +153,7 @@ int main(int argc, char *argv[]) {
 		log_close();
 		return EXIT_FAILURE;
 	}
-	
+
 	/* Create monitor */
 	monitor = monitor_create(config);
 	if (monitor == NULL) {
@@ -165,7 +164,7 @@ int main(int argc, char *argv[]) {
 		log_close();
 		return EXIT_FAILURE;
 	}
-	
+
 	/* Set up monitor */
 	if (!monitor_setup(monitor)) {
 		log_message(LOG_LEVEL_ERR, "Failed to set up monitor");
@@ -175,13 +174,13 @@ int main(int argc, char *argv[]) {
 		log_close();
 		return EXIT_FAILURE;
 	}
-	
+
 	/* Store global reference for signal handler */
 	g_monitor = monitor;
-	
+
 	/* Set monitor reference for daemon signal handler */
 	daemon_set_monitor(monitor);
-	
+
 	/* Start monitor */
 	if (!monitor_start(monitor)) {
 		log_message(LOG_LEVEL_ERR, "Failed to start monitor");
@@ -191,13 +190,13 @@ int main(int argc, char *argv[]) {
 		log_close();
 		return EXIT_FAILURE;
 	}
-	
+
 	/* Clean up */
 	daemon_set_monitor(NULL);
 	monitor_destroy(monitor);
 	entity_state_cleanup();
 	command_cleanup();
 	log_close();
-	
+
 	return EXIT_SUCCESS;
 }
