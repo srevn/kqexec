@@ -441,6 +441,7 @@ static const char *format_size_human_readable(size_t size, char *buf, size_t buf
  * %w: Name of the watch from the config
  * %r: Event path relative to the watch path
  * %f: The file that triggered a directory event (most recent)
+ * %F: The basename of the file that triggered a directory event (most recent)
  * %s: Size of the file in bytes (recursive for directories)
  * %S: Human-readable size (e.g., 1.2M, 512K)
  * %t: Time of the event (format: YYYY-MM-DD HH:MM:SS)
@@ -508,16 +509,25 @@ char *command_substitute_placeholders(const watch_entry_t *watch, const char *co
 	/* Get entity state for size and trigger file placeholders */
 	entity_state_t *state = get_entity_state(event->path, ENTITY_UNKNOWN, (watch_entry_t *) watch);
 
-	/* Substitute %f with the trigger file path */
-	if (state) {
-		entity_state_t *root_state = find_root_state(state);
-		if (root_state && root_state->trigger_file_path) {
-			substitute(result, "%f", root_state->trigger_file_path);
-		} else {
-			substitute(result, "%f", event->path); /* Fallback to event path */
+	/* Substitute %f and %F with trigger file path and name */
+	if (strstr(result, "%f") || strstr(result, "%F")) {
+		const char *trigger_file_path = event->path; /* Default to event path */
+		if (state) {
+			entity_state_t *root_state = find_root_state(state);
+			if (root_state && root_state->trigger_file_path) {
+				trigger_file_path = root_state->trigger_file_path;
+			}
 		}
-	} else {
-		substitute(result, "%f", event->path); /* Fallback if no state */
+
+		substitute(result, "%f", trigger_file_path);
+
+		if (strstr(result, "%F")) {
+			char *path_copy = strdup(trigger_file_path);
+			if (path_copy) {
+				substitute(result, "%F", basename(path_copy));
+				free(path_copy);
+			}
+		}
 	}
 
 	/* Handle size placeholders %s and %S */

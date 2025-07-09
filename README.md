@@ -122,6 +122,7 @@ Commands can include the following placeholders that will be replaced at runtime
 - `%w` : Name of the watch from the config
 - `%r` : Event path relative to the watch path
 - `%f` : The file that triggered a directory event (most recent)
+- `%F` : The basename of the file that triggered a directory event
 - `%s` : Size of the file in bytes (recursive for directories)
 - `%S` : Human-readable size (e.g., 1.2M, 512K)
 - `%t` : Time of the event (format: YYYY-MM-DD HH:MM:SS)
