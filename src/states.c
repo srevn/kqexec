@@ -15,20 +15,46 @@
 #include "logger.h"
 #include "monitor.h"
 
-/* Hash table size for storing entity states */
-#define ENTITY_HASH_SIZE 1024
+/* Hash table of path states */
+static path_state_t **path_states = NULL;
 
-/* Hash table of entity states */
-static entity_state_t **entity_states = NULL;
-
-/* Mutex for protecting access to the entity_states hash table */
+/* Mutex for protecting access to the path_states hash table */
 static pthread_mutex_t entity_states_mutex;
+
+/* Check if entity state is corrupted by verifying magic number */
+static bool is_entity_state_corrupted(const entity_state_t *state) {
+	if (!state) return true;
+	
+	if ((uintptr_t)state < 0x1000 || ((uintptr_t)state & 0x7) != 0) {
+		log_message(LOG_LEVEL_WARNING, "Entity state appears to be invalid pointer: %p", state);
+		return true;
+	}
+	
+	if (state->magic != ENTITY_STATE_MAGIC) {
+		log_message(LOG_LEVEL_WARNING, "Entity state corruption detected: magic=0x%x, expected=0x%x",
+					state->magic, ENTITY_STATE_MAGIC);
+		return true;
+	}
+	return false;
+}
+
+/* Hash function for a path string */
+static unsigned int hash_path(const char *path) {
+	unsigned int hash = 5381; /* djb2 hash initial value */
+	if (!path) return 0;
+	
+	for (const char *p = path; *p; p++) {
+		hash = ((hash << 5) + hash) + (unsigned char)*p;
+	}
+	
+	return hash % PATH_HASH_SIZE;
+}
 
 /* Initialize the entity state system */
 bool entity_state_init(void) {
-	entity_states = calloc(ENTITY_HASH_SIZE, sizeof(entity_state_t *));
-	if (entity_states == NULL) {
-		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for entity states");
+	path_states = calloc(PATH_HASH_SIZE, sizeof(path_state_t *));
+	if (path_states == NULL) {
+		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for path states");
 		return false;
 	}
 
@@ -38,8 +64,8 @@ bool entity_state_init(void) {
 	pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
 	if (pthread_mutex_init(&entity_states_mutex, &attr) != 0) {
 		log_message(LOG_LEVEL_ERR, "Failed to initialize entity states mutex");
-		free(entity_states);
-		entity_states = NULL;
+		free(path_states);
+		path_states = NULL;
 		return false;
 	}
 	pthread_mutexattr_destroy(&attr);
@@ -51,33 +77,45 @@ bool entity_state_init(void) {
 /* Free resources used by an entity state */
 static void free_entity_state(entity_state_t *state) {
 	if (state) {
-		free(state->path);
 		free(state->last_activity_path);
 		free(state->trigger_file_path);
-		/* watch_entry_t *watch is owned by config, do not free here */
 		free(state);
+	}
+}
+
+/* Free resources used by a path state and all its entity states */
+static void free_path_state(path_state_t *ps) {
+	if (ps) {
+		entity_state_t *state = ps->head_entity_state;
+		while (state) {
+			entity_state_t *next = state->next_for_path;
+			free_entity_state(state);
+			state = next;
+		}
+		free(ps->path);
+		free(ps);
 	}
 }
 
 /* Clean up the entity state system */
 void entity_state_cleanup(void) {
-	if (entity_states == NULL) return;
+	if (path_states == NULL) return;
 
 	/* Lock mutex during cleanup */
 	pthread_mutex_lock(&entity_states_mutex);
 
-	/* Free all entity states */
-	for (int i = 0; i < ENTITY_HASH_SIZE; i++) {
-		entity_state_t *state = entity_states[i];
-		while (state) {
-			entity_state_t *next = state->next;
-			free_entity_state(state);
-			state = next;
+	/* Free all path states */
+	for (int i = 0; i < PATH_HASH_SIZE; i++) {
+		path_state_t *ps = path_states[i];
+		while (ps) {
+			path_state_t *next = ps->next_in_bucket;
+			free_path_state(ps);
+			ps = next;
 		}
-		entity_states[i] = NULL;
+		path_states[i] = NULL;
 	}
-	free(entity_states);
-	entity_states = NULL;
+	free(path_states);
+	path_states = NULL;
 
 	/* Unlock mutex after search */
 	pthread_mutex_unlock(&entity_states_mutex);
@@ -86,18 +124,6 @@ void entity_state_cleanup(void) {
 	log_message(LOG_LEVEL_DEBUG, "Entity state system cleanup complete");
 }
 
-/* Calculate a hash value for a path */
-static unsigned int hash_path(const char *path) {
-	unsigned int hash = 5381; /* djb2 hash initial value */
-	if (!path) return 0;
-
-	/* djb2 hash algorithm */
-	for (const char *p = path; *p; p++) {
-		hash = ((hash << 5) + hash) + (unsigned char) *p;
-	}
-
-	return hash % ENTITY_HASH_SIZE;
-}
 
 /* Initialize activity tracking for a new entity state */
 static void init_activity_tracking(entity_state_t *state, watch_entry_t *watch) {
@@ -112,29 +138,9 @@ static void init_activity_tracking(entity_state_t *state, watch_entry_t *watch) 
 	state->last_activity_in_tree = state->last_update;
 }
 
-/* Initialize change tracking fields for a new entity state */
-void init_change_tracking(entity_state_t *state) {
-	if (!state) return;
-
-	/* Initialize stable reference stats with current stats */
-	state->stable_reference_stats = state->dir_stats;
-	state->reference_stats_initialized = true;
-
-	/* Reset all cumulative change counters */
-	state->cumulative_file_change = 0;
-	state->cumulative_dir_change = 0;
-	state->cumulative_depth_change = 0;
-	state->stability_lost = false;
-
-	log_message(LOG_LEVEL_DEBUG,
-	            "Initialized change tracking for %s with reference stats: files=%d, dirs=%d, depth=%d",
-	            state->path, state->stable_reference_stats.file_count,
-	            state->stable_reference_stats.dir_count, state->stable_reference_stats.depth);
-}
-
 /* Update cumulative changes based on current vs. previous stats */
 void update_cumulative_changes(entity_state_t *state) {
-	if (!state) return;
+	if (!state || !state->path_state) return;
 
 	/* Skip if we don't have previous stats yet */
 	if (state->prev_stats.file_count == 0 && state->prev_stats.dir_count == 0 &&
@@ -153,7 +159,7 @@ void update_cumulative_changes(entity_state_t *state) {
 		/* Large structure deletion detected but depth unchanged - likely a bug */
 		log_message(LOG_LEVEL_DEBUG,
 		            "Deletion detected with no depth change for %s - inferring depth reduction",
-		            state->path);
+		            state->path_state->path);
 
 		/* Calculate inferred depth change proportional to directory removal */
 		float deletion_ratio = (float) abs(new_dir_change) /
@@ -182,7 +188,7 @@ void update_cumulative_changes(entity_state_t *state) {
 	if (new_file_change != 0 || new_dir_change != 0 || new_depth_change != 0) {
 		log_message(LOG_LEVEL_DEBUG,
 		            "Updated cumulative changes for %s: files=%+d (%+d), dirs=%+d (%+d), depth=%+d (%+d)",
-		            state->path,
+		            state->path_state->path,
 		            state->cumulative_file_change, new_file_change,
 		            state->cumulative_dir_change, new_dir_change,
 		            state->cumulative_depth_change, new_depth_change);
@@ -488,15 +494,15 @@ bool verify_directory_stability(entity_state_t *context_state, const char *dir_p
 
 /* Find the state corresponding to the root path of a watch */
 entity_state_t *find_root_state(entity_state_t *state) {
-	if (!state || !state->watch || !state->watch->path) {
-		if (state && state->path) {
-			log_message(LOG_LEVEL_WARNING, "Invalid watch info for state %s", state->path);
+	if (!state || !state->watch || !state->watch->path || !state->path_state) {
+		if (state && state->path_state) {
+			log_message(LOG_LEVEL_WARNING, "Invalid watch info for state %s", state->path_state->path);
 		}
 		return NULL;
 	}
 
 	/* If current state is already the root, return it */
-	if (strcmp(state->path, state->watch->path) == 0) {
+	if (strcmp(state->path_state->path, state->watch->path) == 0) {
 		return state;
 	}
 
@@ -504,91 +510,37 @@ entity_state_t *find_root_state(entity_state_t *state) {
 	return get_entity_state(state->watch->path, ENTITY_DIRECTORY, state->watch);
 }
 
-/* Find all entity states for a given path (must be called with mutex locked) */
-static void find_states_by_path_locked(const char *path, entity_state_t ***found_states, int *count) {
-	*found_states = NULL;
-	*count = 0;
-	if (!path || !entity_states) return;
-
-	unsigned int hash = hash_path(path);
-	entity_state_t *state = entity_states[hash];
-
-	/* First pass: count matching states */
-	int match_count = 0;
-	entity_state_t *current = state;
-	while (current) {
-		if (current->path && strcmp(current->path, path) == 0) {
-			match_count++;
+/* Synchronize activity states for all watches on a given path */
+void synchronize_activity_states(path_state_t *path_state, entity_state_t *trigger_state) {
+	if (!path_state || !trigger_state || is_entity_state_corrupted(trigger_state)) {
+		if (trigger_state && is_entity_state_corrupted(trigger_state)) {
+			log_message(LOG_LEVEL_WARNING, "Skipping synchronization due to corrupted trigger state");
 		}
-		current = current->next;
-	}
-
-	if (match_count == 0) return;
-
-	/* Allocate memory for the found states */
-	*found_states = malloc(match_count * sizeof(entity_state_t *));
-	if (!*found_states) {
-		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for found states");
-		return;
-	}
-
-	/* Second pass: populate the array */
-	current = state;
-	int i = 0;
-	while (current) {
-		if (current->path && strcmp(current->path, path) == 0) {
-			(*found_states)[i++] = current;
-		}
-		current = current->next;
-	}
-	*count = match_count;
-}
-
-/* Find all entity states for a path (regardless of watch) */
-void synchronize_activity_states(const char *path, entity_state_t *trigger_state) {
-	if (!path || !trigger_state || !entity_states) {
 		return;
 	}
 
 	pthread_mutex_lock(&entity_states_mutex);
 
-	log_message(LOG_LEVEL_DEBUG, "Synchronizing activity states for path: %s", path);
-
-	entity_state_t **states_for_path = NULL;
-	int state_count = 0;
-	find_states_by_path_locked(path, &states_for_path, &state_count);
-
-	if (state_count == 0) {
-		pthread_mutex_unlock(&entity_states_mutex);
-		free(states_for_path);
-		return;
-	}
-
-	/* First pass: Find the most recent activity timestamp and other max values */
 	struct timespec latest_activity_time = trigger_state->last_activity_in_tree;
 	bool any_watch_active = trigger_state->activity_in_progress;
 	int max_instability_count = trigger_state->instability_count;
 
-	for (int i = 0; i < state_count; i++) {
-		entity_state_t *state = states_for_path[i];
-		if (!state->path || !state->watch) {
-			continue;
+	/* First pass: Find the most recent activity time and active status */
+	for (entity_state_t *state = path_state->head_entity_state; state; state = state->next_for_path) {
+		if (is_entity_state_corrupted(state) || state == trigger_state) continue;
+
+		if (state->last_activity_in_tree.tv_sec > latest_activity_time.tv_sec ||
+		    (state->last_activity_in_tree.tv_sec == latest_activity_time.tv_sec &&
+		     state->last_activity_in_tree.tv_nsec > latest_activity_time.tv_nsec)) {
+			latest_activity_time = state->last_activity_in_tree;
 		}
 
-		if (state != trigger_state) {
-			if (state->last_activity_in_tree.tv_sec > latest_activity_time.tv_sec ||
-			    (state->last_activity_in_tree.tv_sec == latest_activity_time.tv_sec &&
-			     state->last_activity_in_tree.tv_nsec > latest_activity_time.tv_nsec)) {
-				latest_activity_time = state->last_activity_in_tree;
-			}
-
-			/* If trigger state is active, merge values from other states.
-			 * Otherwise, we are resetting, so we don't merge. */
-			if (trigger_state->activity_in_progress) {
-				any_watch_active = any_watch_active || state->activity_in_progress;
-				if (state->instability_count > max_instability_count) {
-					max_instability_count = state->instability_count;
-				}
+		/* If trigger state is active, merge values from other states.
+		 * Otherwise, we are resetting, so we don't merge. */
+		if (trigger_state->activity_in_progress) {
+			any_watch_active = any_watch_active || state->activity_in_progress;
+			if (state->instability_count > max_instability_count) {
+				max_instability_count = state->instability_count;
 			}
 		}
 	}
@@ -596,17 +548,12 @@ void synchronize_activity_states(const char *path, entity_state_t *trigger_state
 	/* Also update the trigger state's instability count to the max value */
 	trigger_state->instability_count = max_instability_count;
 
-	/* Second pass: Update all states for the path with consistent values */
-	for (int i = 0; i < state_count; i++) {
-		entity_state_t *state = states_for_path[i];
-		if (!state->path || !state->watch) {
-			continue;
-		}
+	/* Second pass: Update all states with consistent values */
+	for (entity_state_t *state = path_state->head_entity_state; state; state = state->next_for_path) {
+		if (is_entity_state_corrupted(state)) continue;
 
 		if (state != trigger_state) {
-			log_message(LOG_LEVEL_DEBUG, "Synchronizing state for path %s (watch: %s) with trigger (watch: %s)",
-			            path, (state->watch && state->watch->name) ? state->watch->name : "unknown",
-			            (trigger_state->watch && trigger_state->watch->name) ? trigger_state->watch->name : "unknown");
+			log_message(LOG_LEVEL_DEBUG, "Synchronizing state for watch %s", state->watch->name);
 
 			bool fully_compatible = (state->watch->recursive == trigger_state->watch->recursive &&
 			                         state->watch->events == trigger_state->watch->events &&
@@ -618,7 +565,7 @@ void synchronize_activity_states(const char *path, entity_state_t *trigger_state
 			state->last_activity_in_tree = latest_activity_time;
 			state->activity_in_progress = any_watch_active;
 
-			if (fully_compatible) {
+			if (fully_compatible && state->type == ENTITY_DIRECTORY && trigger_state->type == ENTITY_DIRECTORY) {
 				state->dir_stats = trigger_state->dir_stats;
 				state->prev_stats = trigger_state->prev_stats;
 				state->stability_check_count = trigger_state->stability_check_count;
@@ -632,8 +579,6 @@ void synchronize_activity_states(const char *path, entity_state_t *trigger_state
 		}
 	}
 
-	free(states_for_path);
-	/* Lock mutex during cleanup */
 	pthread_mutex_unlock(&entity_states_mutex);
 }
 
@@ -657,7 +602,7 @@ void record_activity(entity_state_t *state, operation_type_t op) {
 
 	/* Update the last activity path */
 	free(state->last_activity_path);
-	state->last_activity_path = strdup(state->path);
+	state->last_activity_path = strdup(state->path_state->path);
 
 	/* Update Root State's Tree Activity Time for recursive watches */
 	if (state->watch && state->watch->recursive) {
@@ -667,7 +612,7 @@ void record_activity(entity_state_t *state, operation_type_t op) {
 			/* Update the root's tree activity time and path */
 			root->last_activity_in_tree = state->last_update;
 			free(root->last_activity_path);
-			root->last_activity_path = strdup(state->path);
+			root->last_activity_path = strdup(state->path_state->path);
 			root->activity_in_progress = true;
 
 			/* Reset root's stability checks */
@@ -676,7 +621,7 @@ void record_activity(entity_state_t *state, operation_type_t op) {
 			/* For directory operations, update directory stats immediately */
 			if (op == OP_DIR_CONTENT_CHANGED && root->type == ENTITY_DIRECTORY) {
 				dir_stats_t new_stats;
-				if (gather_basic_directory_stats(root->path, &new_stats, 0)) {
+				if (gather_basic_directory_stats(root->path_state->path, &new_stats, 0)) {
 					/* Save previous stats for comparison */
 					root->prev_stats = root->dir_stats;
 					/* Update with new stats */
@@ -687,7 +632,7 @@ void record_activity(entity_state_t *state, operation_type_t op) {
 
 					log_message(LOG_LEVEL_DEBUG,
 					            "Updated directory stats for %s after change: files=%d, dirs=%d, max_depth=%d (was: files=%d, dirs=%d, max_depth=%d)",
-					            root->path,
+					            root->path_state->path,
 					            root->dir_stats.recursive_file_count, root->dir_stats.recursive_dir_count,
 					            root->dir_stats.max_depth,
 					            root->prev_stats.recursive_file_count, root->prev_stats.recursive_dir_count,
@@ -696,10 +641,10 @@ void record_activity(entity_state_t *state, operation_type_t op) {
 			}
 
 			/* Synchronize with other watches for the same path */
-			synchronize_activity_states(root->path, root);
+			synchronize_activity_states(root->path_state, root);
 
 			/* Now propagate activity to all parent directories between this entity and root */
-			char *path_copy = strdup(state->path);
+			char *path_copy = strdup(state->path_state->path);
 			if (path_copy) {
 				/* Get parent directory path */
 				char *last_slash = strrchr(path_copy, '/');
@@ -707,7 +652,7 @@ void record_activity(entity_state_t *state, operation_type_t op) {
 					*last_slash = '\0'; /* Truncate to get parent directory */
 
 					/* Skip if we've reached or gone beyond the root watch path */
-					if (strlen(path_copy) < strlen(root->path)) {
+					if (strlen(path_copy) < strlen(root->watch->path)) {
 						break;
 					}
 
@@ -716,14 +661,14 @@ void record_activity(entity_state_t *state, operation_type_t op) {
 					if (parent_state) {
 						parent_state->last_activity_in_tree = state->last_update;
 						free(parent_state->last_activity_path);
-						parent_state->last_activity_path = strdup(state->path);
+						parent_state->last_activity_path = strdup(state->path_state->path);
 						parent_state->activity_in_progress = true;
 						parent_state->stability_check_count = 0;
 
 						/* Update directory stats for parent if this is a content change */
 						if (op == OP_DIR_CONTENT_CHANGED && parent_state->type == ENTITY_DIRECTORY) {
 							dir_stats_t parent_new_stats;
-							if (gather_basic_directory_stats(parent_state->path, &parent_new_stats, 0)) {
+							if (gather_basic_directory_stats(parent_state->path_state->path, &parent_new_stats, 0)) {
 								parent_state->prev_stats = parent_state->dir_stats;
 								parent_state->dir_stats = parent_new_stats;
 
@@ -732,7 +677,7 @@ void record_activity(entity_state_t *state, operation_type_t op) {
 							}
 						}
 
-						synchronize_activity_states(parent_state->path, parent_state);
+						synchronize_activity_states(parent_state->path_state, parent_state);
 					}
 
 					/* Move to next parent directory */
@@ -740,16 +685,16 @@ void record_activity(entity_state_t *state, operation_type_t op) {
 				}
 				free(path_copy);
 			}
-		} else if (strcmp(state->path, state->watch->path) == 0) {
+		} else if (strcmp(state->path_state->path, state->watch->path) == 0) {
 			/* This is the root itself */
 			state->last_activity_in_tree = state->last_update;
 			free(state->last_activity_path);
-			state->last_activity_path = strdup(state->path);
+			state->last_activity_path = strdup(state->path_state->path);
 
 			/* Update directory stats immediately for content changes to root */
 			if (op == OP_DIR_CONTENT_CHANGED && state->type == ENTITY_DIRECTORY) {
 				dir_stats_t new_stats;
-				if (gather_basic_directory_stats(state->path, &new_stats, 0)) {
+				if (gather_basic_directory_stats(state->path_state->path, &new_stats, 0)) {
 					/* Save previous stats for comparison */
 					state->prev_stats = state->dir_stats;
 					/* Update with new stats */
@@ -760,17 +705,17 @@ void record_activity(entity_state_t *state, operation_type_t op) {
 
 					log_message(LOG_LEVEL_DEBUG,
 					            "Updated directory stats for root %s after change: files=%d, dirs=%d, depth=%d",
-					            state->path, state->dir_stats.file_count, state->dir_stats.dir_count,
+					            state->path_state->path, state->dir_stats.file_count, state->dir_stats.dir_count,
 					            state->dir_stats.depth);
 				}
 			}
 
-			synchronize_activity_states(state->path, state);
+			synchronize_activity_states(state->path_state, state);
 		}
 	}
 
 	/* Always sync the current state */
-	synchronize_activity_states(state->path, state);
+	synchronize_activity_states(state->path_state, state);
 }
 
 /* Determine the required quiet period based on state type and activity */
@@ -863,7 +808,7 @@ long get_required_quiet_period(entity_state_t *state) {
 
 			log_message(LOG_LEVEL_DEBUG,
 			            "Using operation-centric quiet period for %s: %ld ms (cumulative changes: %+d files, %+d dirs, %+d depth, in dir with %d entries, depth %d)",
-			            state->path, required_ms, state->cumulative_file_change,
+			            state->path_state->path, required_ms, state->cumulative_file_change,
 			            state->cumulative_dir_change, state->cumulative_depth_change,
 			            total_entries, tree_depth);
 		} else {
@@ -874,7 +819,7 @@ long get_required_quiet_period(entity_state_t *state) {
 
 			log_message(LOG_LEVEL_DEBUG,
 			            "Using base quiet period for %s: %ld ms (recursive entries: %d, max depth: %d, total subdirs: %d)",
-			            state->path, required_ms, total_entries, tree_depth, subdir_count);
+			            state->path_state->path, required_ms, total_entries, tree_depth, subdir_count);
 		}
 	}
 
@@ -895,7 +840,7 @@ bool is_quiet_period_elapsed(entity_state_t *state, struct timespec *now) {
 	if (!state || !now) return true; /* Cannot check, assume elapsed */
 
 	struct timespec *last_activity_ts = NULL;
-	const char *time_source_path = state->path;
+	const char *time_source_path = state->path_state->path;
 	entity_state_t *state_for_period_calc = state;
 
 	/* Determine which timestamp to check against */
@@ -904,11 +849,11 @@ bool is_quiet_period_elapsed(entity_state_t *state, struct timespec *now) {
 		entity_state_t *root = find_root_state(state);
 		if (root) {
 			last_activity_ts = &root->last_activity_in_tree;
-			time_source_path = root->path;
+			time_source_path = root->path_state->path;
 			state_for_period_calc = root;
 		} else {
 			log_message(LOG_LEVEL_WARNING, "Cannot find root state for %s, falling back to local activity",
-			            state->path);
+			            state->path_state->path);
 			/* Fallback: use local activity if root not found */
 			if (state->activity_sample_count == 0) return true;
 			int latest_idx = (state->activity_index + MAX_ACTIVITY_SAMPLES - 1) % MAX_ACTIVITY_SAMPLES;
@@ -923,7 +868,7 @@ bool is_quiet_period_elapsed(entity_state_t *state, struct timespec *now) {
 
 	/* Check for valid timestamp */
 	if (!last_activity_ts || (last_activity_ts->tv_sec == 0 && last_activity_ts->tv_nsec == 0)) {
-		log_message(LOG_LEVEL_DEBUG, "No valid activity timestamp for %s, quiet period assumed elapsed", state->path);
+		log_message(LOG_LEVEL_DEBUG, "No valid activity timestamp for %s, quiet period assumed elapsed", state->path_state->path);
 		return true;
 	}
 
@@ -949,7 +894,7 @@ bool is_quiet_period_elapsed(entity_state_t *state, struct timespec *now) {
 
 	if (elapsed_ms < 0) {
 		log_message(LOG_LEVEL_WARNING, "Clock appears to have moved backwards for %s, assuming quiet period elapsed",
-		            state->path);
+		            state->path_state->path);
 		return true;
 	}
 
@@ -957,10 +902,10 @@ bool is_quiet_period_elapsed(entity_state_t *state, struct timespec *now) {
 
 	if (!elapsed) {
 		log_message(LOG_LEVEL_DEBUG, "Quiet period check for %s: %ld ms elapsed < %ld ms required (using time from %s)",
-		            state->path, elapsed_ms, required_quiet_period_ms, time_source_path);
+		            state->path_state->path, elapsed_ms, required_quiet_period_ms, time_source_path);
 	} else {
 		log_message(LOG_LEVEL_DEBUG, "Quiet period elapsed for %s: %ld ms >= %ld ms required",
-		            state->path, elapsed_ms, required_quiet_period_ms);
+		            state->path_state->path, elapsed_ms, required_quiet_period_ms);
 	}
 
 	return elapsed;
@@ -983,73 +928,83 @@ static void _copy_directory_tracking_state(entity_state_t *dest, const entity_st
 
 /* Get or create an entity state for a given path and watch */
 entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_entry_t *watch) {
-	if (!path || !watch || !entity_states) {
-		log_message(LOG_LEVEL_ERR, "Invalid arguments (path=%s, watch=%p, states_initialized=%d)",
-		            path ? path : "NULL", watch, entity_states != NULL);
+	if (!path || !watch || !path_states) {
+		log_message(LOG_LEVEL_ERR, "Invalid arguments to get_entity_state");
 		return NULL;
 	}
 
 	/* Additional safety check for watch structure */
 	if (!watch->name) {
-		log_message(LOG_LEVEL_ERR, "Watch has NULL name (path=%s, watch=%p)", path, watch);
+		log_message(LOG_LEVEL_ERR, "Watch has NULL name for path %s", path);
 		return NULL;
 	}
 
 	unsigned int hash = hash_path(path);
+	
+	pthread_mutex_lock(&entity_states_mutex);
+	
+	path_state_t *ps = path_states[hash];
 
-	if (hash >= ENTITY_HASH_SIZE) {
-		log_message(LOG_LEVEL_ERR, "Hash out of bounds: %u >= %d", hash, ENTITY_HASH_SIZE);
-		return NULL;
+	/* Find existing path_state */
+	while (ps) {
+		if (strcmp(ps->path, path) == 0) {
+			break;
+		}
+		ps = ps->next_in_bucket;
 	}
 
-	pthread_mutex_lock(&entity_states_mutex);
+	/* If path_state not found, create it */
+	if (!ps) {
+		ps = calloc(1, sizeof(path_state_t));
+		if (!ps) {
+			log_message(LOG_LEVEL_ERR, "Failed to allocate memory for path_state: %s", path);
+			pthread_mutex_unlock(&entity_states_mutex);
+			return NULL;
+		}
+		ps->path = strdup(path);
+		if (!ps->path) {
+			log_message(LOG_LEVEL_ERR, "Failed to duplicate path for path_state: %s", path);
+			free(ps);
+			pthread_mutex_unlock(&entity_states_mutex);
+			return NULL;
+		}
+		ps->next_in_bucket = path_states[hash];
+		path_states[hash] = ps;
+	}
 
-	entity_state_t *state = entity_states[hash];
-
-	/* Look for existing state matching both path AND watch */
+	/* Find existing entity_state for this watch */
+	entity_state_t *state = ps->head_entity_state;
 	while (state) {
-		if (state->path && state->watch && state->watch->name &&
-		    strcmp(state->path, path) == 0 &&
-		    strcmp(state->watch->name, watch->name) == 0) {
+		if (strcmp(state->watch->name, watch->name) == 0) {
 			if (state->type == ENTITY_UNKNOWN && type != ENTITY_UNKNOWN) {
 				state->type = type;
 			}
 			pthread_mutex_unlock(&entity_states_mutex);
 			return state;
 		}
-		state = state->next;
+		state = state->next_for_path;
 	}
 
-	/* Before creating a new state, check if another state for the same path exists to copy stats */
-	entity_state_t *existing_state_for_path = NULL;
-	entity_state_t *search_state = entity_states[hash];
-	while (search_state) {
-		if (search_state->path && strcmp(search_state->path, path) == 0) {
-			existing_state_for_path = search_state;
-			break;
-		}
-		search_state = search_state->next;
-	}
+	/* Check if we have an existing state for this path to copy stats from */
+	entity_state_t *existing_state_for_path = ps->head_entity_state;
 
-	/* Create new state */
+	/* Create new entity_state */
 	state = calloc(1, sizeof(entity_state_t));
 	if (!state) {
-		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for entity state: %s", path);
+		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for entity_state: %s", path);
+		/* If the path_state was newly created for this entity, free it to prevent a leak */
+		if (!ps->head_entity_state) {
+			path_states[hash] = ps->next_in_bucket;
+			free_path_state(ps);
+		}
 		pthread_mutex_unlock(&entity_states_mutex);
 		return NULL;
 	}
 
 	/* Initialize magic number for corruption detection */
 	state->magic = ENTITY_STATE_MAGIC;
-
-	state->path = strdup(path);
-	if (!state->path) {
-		log_message(LOG_LEVEL_ERR, "Failed to duplicate path string for entity state: %s", path);
-		free(state);
-		pthread_mutex_unlock(&entity_states_mutex);
-		return NULL;
-	}
-
+	
+	state->path_state = ps;
 	state->type = type;
 	state->watch = watch;
 
@@ -1090,28 +1045,27 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 		state->checking_scheduled = false;
 
 		if (state->type == ENTITY_DIRECTORY && state->exists) {
-			if (gather_basic_directory_stats(state->path, &state->dir_stats, 0)) {
+			if (gather_basic_directory_stats(path, &state->dir_stats, 0)) {
 				state->prev_stats = state->dir_stats;
 				state->stable_reference_stats = state->dir_stats;
 				state->reference_stats_initialized = true;
 				log_message(LOG_LEVEL_DEBUG,
 				            "Initialized directory stats for %s: files=%d, dirs=%d, depth=%d, size=%.2f MB",
-				            state->path, state->dir_stats.file_count, state->dir_stats.dir_count,
+				            path, state->dir_stats.file_count, state->dir_stats.dir_count,
 				            state->dir_stats.depth, state->dir_stats.total_size / (1024.0 * 1024.0));
 			} else {
 				log_message(LOG_LEVEL_WARNING,
-				            "Failed to gather initial stats for directory: %s", state->path);
+				            "Failed to gather initial stats for directory: %s", path);
 			}
 		}
 	}
 
-	/* Add to hash table */
-	state->next = entity_states[hash];
-	entity_states[hash] = state;
+	/* Add to the path_state's list */
+	state->next_for_path = ps->head_entity_state;
+	ps->head_entity_state = state;
 
-	log_message(LOG_LEVEL_DEBUG, "Created new state for path=%s, watch=%s, type=%d",
-	            path, watch->name, state->type);
-
+	log_message(LOG_LEVEL_DEBUG, "Created new state for path=%s, watch=%s", path, watch->name);
+	
 	pthread_mutex_unlock(&entity_states_mutex);
 	return state;
 }
@@ -1127,19 +1081,19 @@ operation_type_t determine_operation(entity_state_t *state, event_type_t new_eve
 
 	/* Check current existence vs tracked existence */
 	struct stat st;
-	bool exists_now = (stat(state->path, &st) == 0);
+	bool exists_now = (stat(state->path_state->path, &st) == 0);
 
 	operation_type_t determined_op = OP_NONE;
 
 	if (state->exists && !exists_now) {
 		/* Deletion */
 		determined_op = (state->type == ENTITY_FILE) ? OP_FILE_DELETED : OP_DIR_DELETED;
-		log_message(LOG_LEVEL_DEBUG, "Entity %s detected as DELETED", state->path);
+		log_message(LOG_LEVEL_DEBUG, "Entity %s detected as DELETED", state->path_state->path);
 		state->exists = false;
 	} else if (!state->exists && exists_now) {
 		/* Creation */
 		determined_op = (state->type == ENTITY_FILE) ? OP_FILE_CREATED : OP_DIR_CREATED;
-		log_message(LOG_LEVEL_DEBUG, "Entity %s detected as CREATED", state->path);
+		log_message(LOG_LEVEL_DEBUG, "Entity %s detected as CREATED", state->path_state->path);
 		state->exists = true;
 
 		/* Update type if it was unknown */
@@ -1150,7 +1104,7 @@ operation_type_t determine_operation(entity_state_t *state, event_type_t new_eve
 
 		/* For directory creation, gather initial stats */
 		if (state->type == ENTITY_DIRECTORY) {
-			gather_basic_directory_stats(state->path, &state->dir_stats, 0);
+			gather_basic_directory_stats(state->path_state->path, &state->dir_stats, 0);
 			state->prev_stats = state->dir_stats;
 		}
 	} else if (exists_now) {
@@ -1160,22 +1114,22 @@ operation_type_t determine_operation(entity_state_t *state, event_type_t new_eve
 		/* Prioritize which operation to report if multiple flags are set */
 		if (state->type == ENTITY_DIRECTORY && (state->content_changed || state->structure_changed)) {
 			determined_op = OP_DIR_CONTENT_CHANGED;
-			log_message(LOG_LEVEL_DEBUG, "Directory %s structure changed", state->path);
+			log_message(LOG_LEVEL_DEBUG, "Directory %s structure changed", state->path_state->path);
 		} else if (state->type == ENTITY_FILE && state->content_changed) {
 			determined_op = OP_FILE_RENAMED;
-			log_message(LOG_LEVEL_DEBUG, "File %s content changed", state->path);
+			log_message(LOG_LEVEL_DEBUG, "File %s content changed", state->path_state->path);
 		} else if (state->type == ENTITY_FILE && state->structure_changed) {
 			determined_op = OP_FILE_CONTENT_CHANGED;
-			log_message(LOG_LEVEL_DEBUG, "File %s content changed", state->path);
+			log_message(LOG_LEVEL_DEBUG, "File %s content changed", state->path_state->path);
 		} else if (state->metadata_changed) {
 			determined_op = (state->type == ENTITY_FILE) ? OP_FILE_METADATA_CHANGED : OP_DIR_METADATA_CHANGED;
-			log_message(LOG_LEVEL_DEBUG, "Entity %s metadata changed", state->path);
+			log_message(LOG_LEVEL_DEBUG, "Entity %s metadata changed", state->path_state->path);
 		} else {
-			log_message(LOG_LEVEL_DEBUG, "Entity %s exists but no relevant changes detected", state->path);
+			log_message(LOG_LEVEL_DEBUG, "Entity %s exists but no relevant changes detected", state->path_state->path);
 			determined_op = OP_NONE;
 		}
 	} else {
-		log_message(LOG_LEVEL_DEBUG, "Entity %s still does not exist", state->path);
+		log_message(LOG_LEVEL_DEBUG, "Entity %s still does not exist", state->path_state->path);
 		determined_op = OP_NONE;
 	}
 
@@ -1186,15 +1140,15 @@ operation_type_t determine_operation(entity_state_t *state, event_type_t new_eve
 event_type_t operation_to_event_type(operation_type_t op) {
 	switch (op) {
 		case OP_FILE_CONTENT_CHANGED:
-		case OP_DIR_CONTENT_CHANGED: return EVENT_STRUCTURE;
+		case OP_DIR_CONTENT_CHANGED:  return EVENT_STRUCTURE;
 		case OP_FILE_CREATED:
 		case OP_FILE_DELETED:
 		case OP_FILE_RENAMED:
 		case OP_DIR_CREATED:
-		case OP_DIR_DELETED: return EVENT_CONTENT;
+		case OP_DIR_DELETED:          return EVENT_CONTENT;
 		case OP_FILE_METADATA_CHANGED:
 		case OP_DIR_METADATA_CHANGED: return EVENT_METADATA;
-		default: return EVENT_NONE;
+		default:                      return EVENT_NONE;
 	}
 }
 
@@ -1215,15 +1169,15 @@ bool should_execute_command(monitor_t *monitor, entity_state_t *state, operation
 			/* Always trigger a deferred check; queue deduplicates */
 			root->activity_in_progress = true;
 			log_message(LOG_LEVEL_DEBUG, "Directory content change for %s, marked root %s as active - command deferred",
-			            state->path, root->path);
-			synchronize_activity_states(root->path, root);
+			            state->path_state->path, root->path_state->path);
+			synchronize_activity_states(root->path_state, root);
 
 			if (!root) {
 				return false;
 			}
 
 			schedule_deferred_check(monitor, root);
-			log_message(LOG_LEVEL_DEBUG, "Added directory %s to deferred check queue", root->path);
+			log_message(LOG_LEVEL_DEBUG, "Added directory %s to deferred check queue", root->path_state->path);
 		}
 		return false; /* Decision happens later in process_deferred_dir_scans */
 	}
@@ -1249,15 +1203,15 @@ bool should_execute_command(monitor_t *monitor, entity_state_t *state, operation
 	if (debounce_ms < 0) debounce_ms = 0;
 
 	log_message(LOG_LEVEL_DEBUG, "Debounce check for %s: %ld ms elapsed, %d ms required",
-	            state->path, elapsed_ms_since_command, debounce_ms);
+	            state->path_state->path, elapsed_ms_since_command, debounce_ms);
 
 	/* Check if enough time has passed or if it's the first command */
 	if (elapsed_ms_since_command >= debounce_ms || state->last_command_time == 0) {
-		log_message(LOG_LEVEL_DEBUG, "Debounce check passed for %s, command allowed", state->path);
+		log_message(LOG_LEVEL_DEBUG, "Debounce check passed for %s, command allowed", state->path_state->path);
 		return true;
 	}
 
-	log_message(LOG_LEVEL_DEBUG, "Command execution debounced for %s", state->path);
+	log_message(LOG_LEVEL_DEBUG, "Command execution debounced for %s", state->path_state->path);
 	return false;
 }
 
@@ -1360,7 +1314,7 @@ bool process_event(monitor_t *monitor, watch_entry_t *watch, file_event_t *event
 		return false; /* No relevant change detected */
 	}
 
-	log_message(LOG_LEVEL_DEBUG, "Determined operation type %d for %s", op, state->path);
+	log_message(LOG_LEVEL_DEBUG, "Determined operation type %d for %s", op, state->path_state->path);
 
 	/* Check if operation is included in watch mask */
 	event_type_t event_type_for_mask = operation_to_event_type(op);
@@ -1374,7 +1328,7 @@ bool process_event(monitor_t *monitor, watch_entry_t *watch, file_event_t *event
 	if (should_execute_command(monitor, state, op, command_get_debounce_time())) {
 		/* Execute command immediately (only for non-directory-content changes) */
 		file_event_t synthetic_event = {
-			.path = state->path,
+			.path = state->path_state->path,
 			.type = event_type_for_mask,
 			.time = state->last_update,
 			.wall_time = state->wall_time,
@@ -1382,10 +1336,10 @@ bool process_event(monitor_t *monitor, watch_entry_t *watch, file_event_t *event
 		};
 
 		log_message(LOG_LEVEL_INFO, "Executing command for %s (watch: %s, operation: %d)",
-		            state->path, watch->name, op);
+		            state->path_state->path, watch->name, op);
 
 		if (command_execute(watch, &synthetic_event)) {
-			log_message(LOG_LEVEL_INFO, "Command execution successful for %s", state->path);
+			log_message(LOG_LEVEL_INFO, "Command execution successful for %s", state->path_state->path);
 
 			/* Update last command time and reset change flags */
 			state->last_command_time = state->last_update.tv_sec;
@@ -1395,18 +1349,18 @@ bool process_event(monitor_t *monitor, watch_entry_t *watch, file_event_t *event
 
 			return true;
 		} else {
-			log_message(LOG_LEVEL_WARNING, "Command execution failed for %s", state->path);
+			log_message(LOG_LEVEL_WARNING, "Command execution failed for %s", state->path_state->path);
 			return false;
 		}
 	} else {
-		log_message(LOG_LEVEL_DEBUG, "Command for %s (op %d) deferred or debounced", state->path, op);
+		log_message(LOG_LEVEL_DEBUG, "Command for %s (op %d) deferred or debounced", state->path_state->path, op);
 		return false;
 	}
 }
 
 /* Update entity states with new watch pointers after config reload */
 void update_entity_states_after_reload(config_t *new_config) {
-	if (!new_config || !entity_states) {
+	if (!new_config || !path_states) {
 		return;
 	}
 
@@ -1414,24 +1368,28 @@ void update_entity_states_after_reload(config_t *new_config) {
 
 	log_message(LOG_LEVEL_DEBUG, "Updating all entity states after reload");
 
-	/* Iterate through all entity states and update pointers by name comparison */
-	for (int i = 0; i < ENTITY_HASH_SIZE; i++) {
-		entity_state_t *state = entity_states[i];
-		while (state) {
-			bool found_new_watch = false;
-			for (int j = 0; j < new_config->watch_count; j++) {
-				if (state->watch && state->watch->name && new_config->watches[j] &&
-				    new_config->watches[j]->name &&
-				    strcmp(state->watch->name, new_config->watches[j]->name) == 0) {
-					state->watch = new_config->watches[j];
-					found_new_watch = true;
-					break;
+	/* Iterate through all path states and update entity state pointers by name comparison */
+	for (int i = 0; i < PATH_HASH_SIZE; i++) {
+		path_state_t *ps = path_states[i];
+		while (ps) {
+			entity_state_t *state = ps->head_entity_state;
+			while (state) {
+				bool found_new_watch = false;
+				for (int j = 0; j < new_config->watch_count; j++) {
+					if (state->watch && state->watch->name && new_config->watches[j] &&
+					    new_config->watches[j]->name &&
+					    strcmp(state->watch->name, new_config->watches[j]->name) == 0) {
+						state->watch = new_config->watches[j];
+						found_new_watch = true;
+						break;
+					}
 				}
+				if (!found_new_watch) {
+					log_message(LOG_LEVEL_DEBUG, "Could not find new watch for state: %s", state->path_state->path);
+				}
+				state = state->next_for_path;
 			}
-			if (!found_new_watch) {
-				log_message(LOG_LEVEL_DEBUG, "Could not find new watch for state: %s", state->path);
-			}
-			state = state->next;
+			ps = ps->next_in_bucket;
 		}
 	}
 
@@ -1441,7 +1399,7 @@ void update_entity_states_after_reload(config_t *new_config) {
 
 /* Clean up entity states that reference deleted watches after config reload */
 void cleanup_orphaned_entity_states(config_t *new_config) {
-	if (!new_config || !entity_states) {
+	if (!new_config || !path_states) {
 		return;
 	}
 
@@ -1449,34 +1407,57 @@ void cleanup_orphaned_entity_states(config_t *new_config) {
 
 	log_message(LOG_LEVEL_DEBUG, "Cleaning up orphaned entity states");
 
-	for (int i = 0; i < ENTITY_HASH_SIZE; i++) {
-		entity_state_t *state = entity_states[i];
-		entity_state_t *prev = NULL;
+	for (int i = 0; i < PATH_HASH_SIZE; i++) {
+		path_state_t *ps = path_states[i];
+		path_state_t *prev_ps = NULL;
 
-		while (state) {
-			bool is_orphaned = true;
-			for (int j = 0; j < new_config->watch_count; j++) {
-				if (state->watch == new_config->watches[j]) {
-					is_orphaned = false;
-					break;
+		while (ps) {
+			entity_state_t *state = ps->head_entity_state;
+			entity_state_t *prev_state = NULL;
+
+			/* Clean up orphaned entity states within this path state */
+			while (state) {
+				bool is_orphaned = true;
+				for (int j = 0; j < new_config->watch_count; j++) {
+					if (state->watch == new_config->watches[j]) {
+						is_orphaned = false;
+						break;
+					}
+				}
+
+				if (is_orphaned) {
+					log_message(LOG_LEVEL_DEBUG, "Removing orphaned state for path %s (watch %s)",
+					            state->path_state->path, state->watch ? state->watch->name : "<unknown>");
+
+					entity_state_t *to_free = state;
+					if (prev_state) {
+						prev_state->next_for_path = state->next_for_path;
+					} else {
+						ps->head_entity_state = state->next_for_path;
+					}
+					state = state->next_for_path;
+					free_entity_state(to_free);
+				} else {
+					prev_state = state;
+					state = state->next_for_path;
 				}
 			}
 
-			if (is_orphaned) {
-				log_message(LOG_LEVEL_DEBUG, "Removing orphaned state for path %s (watch %s)",
-				            state->path, state->watch ? state->watch->name : "<unknown>");
-
-				entity_state_t *to_free = state;
-				if (prev) {
-					prev->next = state->next;
+			/* If this path state has no more entity states, remove it */
+			if (!ps->head_entity_state) {
+				log_message(LOG_LEVEL_DEBUG, "Removing empty path state for path %s", ps->path);
+				
+				path_state_t *to_free_ps = ps;
+				if (prev_ps) {
+					prev_ps->next_in_bucket = ps->next_in_bucket;
 				} else {
-					entity_states[i] = state->next;
+					path_states[i] = ps->next_in_bucket;
 				}
-				state = state->next;
-				free_entity_state(to_free);
+				ps = ps->next_in_bucket;
+				free_path_state(to_free_ps);
 			} else {
-				prev = state;
-				state = state->next;
+				prev_ps = ps;
+				ps = ps->next_in_bucket;
 			}
 		}
 	}

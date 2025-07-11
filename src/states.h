@@ -21,6 +21,9 @@ typedef struct file_event file_event_t;
 #define DIR_QUIET_PERIOD_MS 1000         /* Longer quiet period for directory operations */
 #define MAX_ACTIVITY_SAMPLES 5           /* Number of recent events to track for activity analysis */
 
+/* Hash table size for storing path states */
+#define PATH_HASH_SIZE 1024
+
 /* Magic number for entity state corruption detection */
 #define ENTITY_STATE_MAGIC 0x4B514558    /* "KQEX" */
 
@@ -71,10 +74,13 @@ typedef struct {
     size_t recursive_total_size;         /* Total size of all files in tree */
 } dir_stats_t;
 
-/* Entity state tracking structure */
+/* Forward declaration for path_state */
+struct path_state;
+
+/* Entity state tracking structure (per watch) */
 typedef struct entity_state {
     uint32_t magic;                      /* Magic number for corruption detection */
-    char *path;                          /* Path to the entity */
+    struct path_state *path_state;       /* Back-pointer to the parent path state */
     entity_type_t type;                  /* File or directory */
     watch_entry_t *watch;                /* The watch entry for this state */
     struct timespec last_update;         /* When state was last updated (MONOTONIC) */
@@ -115,9 +121,16 @@ typedef struct entity_state {
     char *last_activity_path;            /* Path of the most recent activity */
     char *trigger_file_path;             /* Path of the specific file that triggered a directory event */
     
-    /* Hash table linkage */
-    struct entity_state *next;           /* Next entity in hash bucket */
+    /* Linkage for all states under the same path */
+    struct entity_state *next_for_path;  /* Next state for the same path */
 } entity_state_t;
+
+/* State for a given path, holding a list of all watches on that path */
+typedef struct path_state {
+    char *path;                          /* The path being watched */
+    entity_state_t *head_entity_state;   /* Head of the list of states for this path */
+    struct path_state *next_in_bucket;   /* Next path_state in the hash bucket */
+} path_state_t;
 
 /* Function prototypes */
 bool entity_state_init(void);
@@ -127,7 +140,7 @@ operation_type_t determine_operation(entity_state_t *state, event_type_t new_eve
 event_type_t operation_to_event_type(operation_type_t op);
 bool should_execute_command(monitor_t *monitor, entity_state_t *state, operation_type_t op, int debounce_ms);
 bool process_event(monitor_t *monitor, watch_entry_t *watch, file_event_t *event, entity_type_t entity_type);
-void synchronize_activity_states(const char *path, entity_state_t *trigger_state);
+void synchronize_activity_states(path_state_t *path_state, entity_state_t *trigger_state);
 bool gather_basic_directory_stats(const char *dir_path, dir_stats_t *stats, int recursion_depth);
 bool is_quiet_period_elapsed(entity_state_t *state, struct timespec *now);
 long get_required_quiet_period(entity_state_t *state);
@@ -135,7 +148,6 @@ entity_state_t *find_root_state(entity_state_t *state);
 bool verify_directory_stability(entity_state_t *context_state, const char *dir_path, dir_stats_t *stats, int recursion_depth);
 bool compare_dir_stats(dir_stats_t *prev, dir_stats_t *current);
 void update_cumulative_changes(entity_state_t *state);
-void init_change_tracking(entity_state_t *state);
 void update_entity_states_after_reload(config_t *new_config);
 void cleanup_orphaned_entity_states(config_t *new_config);
 char *find_most_recent_file_in_dir(const char *dir_path);

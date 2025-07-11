@@ -930,8 +930,8 @@ void schedule_deferred_check(monitor_t *monitor, entity_state_t *state) {
 		return;
 	}
 
-	if (!state->path || !state->watch) {
-		log_message(LOG_LEVEL_WARNING, "Cannot schedule deferred check - state has null path or watch");
+	if (!state->path_state || !state->watch) {
+		log_message(LOG_LEVEL_WARNING, "Cannot schedule deferred check - state has null path_state or watch");
 		return;
 	}
 
@@ -943,7 +943,7 @@ void schedule_deferred_check(monitor_t *monitor, entity_state_t *state) {
 			root_state = state;
 		} else {
 			log_message(LOG_LEVEL_WARNING,
-			            "Cannot schedule check for %s - no root state found", state->path);
+			            "Cannot schedule check for %s - no root state found", state->path_state->path);
 			return;
 		}
 	}
@@ -957,7 +957,7 @@ void schedule_deferred_check(monitor_t *monitor, entity_state_t *state) {
 		root_state->reference_stats_initialized = true;
 		log_message(LOG_LEVEL_DEBUG,
 		            "Initialized reference stats for %s: files=%d, dirs=%d, depth=%d",
-		            root_state->path, root_state->dir_stats.file_count,
+		            root_state->path_state->path, root_state->dir_stats.file_count,
 		            root_state->dir_stats.dir_count, root_state->dir_stats.depth);
 	}
 
@@ -969,7 +969,7 @@ void schedule_deferred_check(monitor_t *monitor, entity_state_t *state) {
 	if (root_state->last_activity_in_tree.tv_sec < now.tv_sec - 10) {
 		log_message(LOG_LEVEL_DEBUG,
 		            "Last activity timestamp for %s is too old, using current time",
-		            root_state->path);
+		            root_state->path_state->path);
 		root_state->last_activity_in_tree = now;
 	}
 
@@ -987,14 +987,14 @@ void schedule_deferred_check(monitor_t *monitor, entity_state_t *state) {
 	}
 
 	/* Add to queue */
-	check_queue_add_or_update(monitor, root_state->path, root_state->watch, next_check);
+	check_queue_add_or_update(monitor, root_state->path_state->path, root_state->watch, next_check);
 
 	/* For the synchronization to work correctly, also perform a synchronize_activity_states call */
-	synchronize_activity_states(root_state->path, root_state);
+	synchronize_activity_states(root_state->path_state, root_state);
 
 	log_message(LOG_LEVEL_DEBUG,
 	            "Scheduled deferred check for %s: in %ld ms (directory with %d files, %d dirs)",
-	            root_state->path, required_quiet_period_ms,
+	            root_state->path_state->path, required_quiet_period_ms,
 	            root_state->dir_stats.file_count, root_state->dir_stats.dir_count);
 }
 
@@ -1093,7 +1093,7 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 		if (!quiet_period_has_elapsed) {
 			/* Quiet period not yet elapsed, reschedule */
 			log_message(LOG_LEVEL_DEBUG, "Quiet period not yet elapsed for %s (watch: %s), rescheduling",
-			            root_state->path, primary_watch->name);
+			            root_state->path_state->path, primary_watch->name);
 
 			/* Update next check time based on latest activity */
 			struct timespec next_check;
@@ -1130,7 +1130,7 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 			            monitor->watch_count - prev_watch_count);
 
 			/* Synchronize state after adding watches but before rescheduling */
-			synchronize_activity_states(root_state->path, root_state);
+			synchronize_activity_states(root_state->path_state, root_state);
 
 			/* Reschedule with a shorter interval for quick follow-up */
 			struct timespec next_check;
@@ -1186,7 +1186,7 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 					/* Mark as not active for all watches */
 					root_state->activity_in_progress = false;
 					root_state->exists = false;
-					synchronize_activity_states(entry->path, root_state);
+					synchronize_activity_states(root_state->path_state, root_state);
 
 					/* Remove from queue */
 					check_queue_remove(monitor, entry->path);
@@ -1230,7 +1230,7 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 		}
 
 		/* Synchronize updated stats with other watches for the same path */
-		synchronize_activity_states(entry->path, root_state);
+		synchronize_activity_states(root_state->path_state, root_state);
 
 		if (!is_stable) {
 			/* Directory is unstable - reset counter and reschedule */
@@ -1239,7 +1239,7 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 
 			/* Update activity timestamp */
 			root_state->last_activity_in_tree = *current_time;
-			synchronize_activity_states(entry->path, root_state);
+			synchronize_activity_states(root_state->path_state, root_state);
 
 			log_message(LOG_LEVEL_DEBUG, "Directory %s is still unstable (instability count: %d), rescheduling",
 			            entry->path, root_state->instability_count);
@@ -1306,7 +1306,7 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 
 		log_message(LOG_LEVEL_DEBUG,
 		            "Directory stability check for %s: %d/%d checks based on cumulative changes (%+d files, %+d dirs, %+d depth) in dir with %d entries, depth %d",
-		            root_state->path, root_state->stability_check_count, required_checks,
+		            root_state->path_state->path, root_state->stability_check_count, required_checks,
 		            root_state->cumulative_file_change, root_state->cumulative_dir_change,
 		            root_state->cumulative_depth_change, total_entries, tree_depth);
 
@@ -1334,7 +1334,7 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 		commands_attempted_total++;
 		log_message(LOG_LEVEL_INFO,
 		            "Directory %s stability confirmed (%d/%d checks), proceeding to command execution",
-		            root_state->path, root_state->stability_check_count, required_checks);
+		            root_state->path_state->path, root_state->stability_check_count, required_checks);
 
 		/* Reset activity flag, stability counter, and all change tracking on the root state */
 		root_state->activity_in_progress = false;
@@ -1348,7 +1348,7 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 		root_state->instability_count = 0;
 
 		/* Propagate the reset state to all related states for this path */
-		synchronize_activity_states(root_state->path, root_state);
+		synchronize_activity_states(root_state->path_state, root_state);
 
 		/* Find the most recent file if any command needs it */
 		for (int i = 0; i < entry->watch_count; i++) {
