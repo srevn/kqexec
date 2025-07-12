@@ -21,10 +21,10 @@
 static path_state_t **path_states = NULL;
 
 /* Mutex for protecting access to the path_states hash table */
-pthread_mutex_t entity_states_mutex;
+pthread_mutex_t states_mutex;
 
 /* Check if entity state is corrupted by verifying magic number */
-bool is_entity_state_corrupted(const entity_state_t *state) {
+bool states_corrupted(const entity_state_t *state) {
 	if (!state) return true;
 	
 	if ((uintptr_t)state < 0x1000 || ((uintptr_t)state & 0x7) != 0) {
@@ -53,7 +53,7 @@ static unsigned int hash_path(const char *path) {
 }
 
 /* Initialize the entity state system */
-bool entity_state_init(void) {
+bool states_init(void) {
 	path_states = calloc(PATH_HASH_SIZE, sizeof(path_state_t *));
 	if (path_states == NULL) {
 		log_message(ERROR, "Failed to allocate memory for path states");
@@ -64,7 +64,7 @@ bool entity_state_init(void) {
 	pthread_mutexattr_t attr;
 	pthread_mutexattr_init(&attr);
 	pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
-	if (pthread_mutex_init(&entity_states_mutex, &attr) != 0) {
+	if (pthread_mutex_init(&states_mutex, &attr) != 0) {
 		log_message(ERROR, "Failed to initialize entity states mutex");
 		free(path_states);
 		path_states = NULL;
@@ -79,8 +79,8 @@ bool entity_state_init(void) {
 /* Free resources used by an entity state */
 static void free_entity_state(entity_state_t *state) {
 	if (state) {
-		free(state->last_activity_path);
-		free(state->trigger_file_path);
+		free(state->active_path);
+		free(state->trigger_path);
 		free(state);
 	}
 }
@@ -88,9 +88,9 @@ static void free_entity_state(entity_state_t *state) {
 /* Free resources used by a path state and all its entity states */
 static void free_path_state(path_state_t *ps) {
 	if (ps) {
-		entity_state_t *state = ps->head_entity_state;
+		entity_state_t *state = ps->entity_head;
 		while (state) {
-			entity_state_t *next = state->next_for_path;
+			entity_state_t *next = state->path_next;
 			free_entity_state(state);
 			state = next;
 		}
@@ -100,17 +100,17 @@ static void free_path_state(path_state_t *ps) {
 }
 
 /* Clean up the entity state system */
-void entity_state_cleanup(void) {
+void states_cleanup(void) {
 	if (path_states == NULL) return;
 
 	/* Lock mutex during cleanup */
-	pthread_mutex_lock(&entity_states_mutex);
+	pthread_mutex_lock(&states_mutex);
 
 	/* Free all path states */
 	for (int i = 0; i < PATH_HASH_SIZE; i++) {
 		path_state_t *ps = path_states[i];
 		while (ps) {
-			path_state_t *next = ps->next_in_bucket;
+			path_state_t *next = ps->bucket_next;
 			free_path_state(ps);
 			ps = next;
 		}
@@ -120,47 +120,44 @@ void entity_state_cleanup(void) {
 	path_states = NULL;
 
 	/* Unlock mutex after search */
-	pthread_mutex_unlock(&entity_states_mutex);
-	pthread_mutex_destroy(&entity_states_mutex);
+	pthread_mutex_unlock(&states_mutex);
+	pthread_mutex_destroy(&states_mutex);
 
 	log_message(DEBUG, "Entity state system cleanup complete");
 }
 
-
 /* Initialize activity tracking for a new entity state */
-static void init_activity_tracking(entity_state_t *state, watch_entry_t *watch) {
+static void init_tracking(entity_state_t *state, watch_entry_t *watch) {
 	if (!state) return;
 
-	state->activity_sample_count = 0;
+	state->activity_count = 0;
 	state->activity_index = 0;
-	state->activity_in_progress = false;
+	state->activity_active = false;
 	state->watch = watch;
 
 	/* Initialize tree time. Use last_update as a reasonable starting point. */
-	state->last_activity_in_tree = state->last_update;
+	state->tree_activity = state->last_update;
 }
 
-/* Find the state corresponding to the root path of a watch */
-
 /* Copies all directory-related statistics and tracking fields from a source to a destination state. */
-static void _copy_directory_tracking_state(entity_state_t *dest, const entity_state_t *src) {
+static void copy_state(entity_state_t *dest, const entity_state_t *src) {
 	if (!dest || !src) return;
 
 	dest->dir_stats = src->dir_stats;
 	dest->prev_stats = src->prev_stats;
-	dest->stable_reference_stats = src->stable_reference_stats;
-	dest->reference_stats_initialized = src->reference_stats_initialized;
-	dest->cumulative_file_change = src->cumulative_file_change;
-	dest->cumulative_dir_change = src->cumulative_dir_change;
-	dest->cumulative_depth_change = src->cumulative_depth_change;
+	dest->reference_stats = src->reference_stats;
+	dest->reference_init = src->reference_init;
+	dest->cumulative_file = src->cumulative_file;
+	dest->cumulative_dir = src->cumulative_dir;
+	dest->cumulative_depth = src->cumulative_depth;
 	dest->stability_lost = src->stability_lost;
 	dest->instability_count = src->instability_count;
 }
 
 /* Get or create an entity state for a given path and watch */
-entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_entry_t *watch) {
+entity_state_t *states_get(const char *path, entity_type_t type, watch_entry_t *watch) {
 	if (!path || !watch || !path_states) {
-		log_message(ERROR, "Invalid arguments to get_entity_state");
+		log_message(ERROR, "Invalid arguments to states_get");
 		return NULL;
 	}
 
@@ -172,7 +169,7 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 
 	unsigned int hash = hash_path(path);
 	
-	pthread_mutex_lock(&entity_states_mutex);
+	pthread_mutex_lock(&states_mutex);
 	
 	path_state_t *ps = path_states[hash];
 
@@ -181,7 +178,7 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 		if (strcmp(ps->path, path) == 0) {
 			break;
 		}
-		ps = ps->next_in_bucket;
+		ps = ps->bucket_next;
 	}
 
 	/* If path_state not found, create it */
@@ -189,46 +186,46 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 		ps = calloc(1, sizeof(path_state_t));
 		if (!ps) {
 			log_message(ERROR, "Failed to allocate memory for path_state: %s", path);
-			pthread_mutex_unlock(&entity_states_mutex);
+			pthread_mutex_unlock(&states_mutex);
 			return NULL;
 		}
 		ps->path = strdup(path);
 		if (!ps->path) {
 			log_message(ERROR, "Failed to duplicate path for path_state: %s", path);
 			free(ps);
-			pthread_mutex_unlock(&entity_states_mutex);
+			pthread_mutex_unlock(&states_mutex);
 			return NULL;
 		}
-		ps->next_in_bucket = path_states[hash];
+		ps->bucket_next = path_states[hash];
 		path_states[hash] = ps;
 	}
 
 	/* Find existing entity_state for this watch */
-	entity_state_t *state = ps->head_entity_state;
+	entity_state_t *state = ps->entity_head;
 	while (state) {
 		if (strcmp(state->watch->name, watch->name) == 0) {
 			if (state->type == ENTITY_UNKNOWN && type != ENTITY_UNKNOWN) {
 				state->type = type;
 			}
-			pthread_mutex_unlock(&entity_states_mutex);
+			pthread_mutex_unlock(&states_mutex);
 			return state;
 		}
-		state = state->next_for_path;
+		state = state->path_next;
 	}
 
 	/* Check if we have an existing state for this path to copy stats from */
-	entity_state_t *existing_state_for_path = ps->head_entity_state;
+	entity_state_t *existing_state_for_path = ps->entity_head;
 
 	/* Create new entity_state */
 	state = calloc(1, sizeof(entity_state_t));
 	if (!state) {
 		log_message(ERROR, "Failed to allocate memory for entity_state: %s", path);
 		/* If the path_state was newly created for this entity, free it to prevent a leak */
-		if (!ps->head_entity_state) {
-			path_states[hash] = ps->next_in_bucket;
+		if (!ps->entity_head) {
+			path_states[hash] = ps->bucket_next;
 			free_path_state(ps);
 		}
-		pthread_mutex_unlock(&entity_states_mutex);
+		pthread_mutex_unlock(&states_mutex);
 		return NULL;
 	}
 
@@ -252,34 +249,34 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 
 	clock_gettime(CLOCK_MONOTONIC, &state->last_update);
 	clock_gettime(CLOCK_REALTIME, &state->wall_time);
-	state->last_activity_in_tree = state->last_update;
-	state->last_activity_path = strdup(path);
-	state->trigger_file_path = NULL;
+	state->tree_activity = state->last_update;
+	state->active_path = strdup(path);
+	state->trigger_path = NULL;
 
-	init_activity_tracking(state, watch);
-	state->last_command_time = 0;
-	state->failed_checks = 0;
+	init_tracking(state, watch);
+	state->command_time = 0;
+	state->checks_failed = 0;
 
 	/* If an existing state for this path was found, copy its stats */
 	if (existing_state_for_path) {
 		log_message(DEBUG, "Copying stats from existing state for path %s (watch: %s)",
 		            path, existing_state_for_path->watch->name);
-		_copy_directory_tracking_state(state, existing_state_for_path);
+		copy_state(state, existing_state_for_path);
 	} else {
 		/* This is the first state for this path, initialize stats from scratch */
 		state->instability_count = 0;
-		state->reference_stats_initialized = false;
-		state->cumulative_file_change = 0;
-		state->cumulative_dir_change = 0;
-		state->cumulative_depth_change = 0;
+		state->reference_init = false;
+		state->cumulative_file = 0;
+		state->cumulative_dir = 0;
+		state->cumulative_depth = 0;
 		state->stability_lost = false;
-		state->checking_scheduled = false;
+		state->check_pending = false;
 
 		if (state->type == ENTITY_DIRECTORY && state->exists) {
-			if (scanner_gather_directory_stats(path, &state->dir_stats, 0)) {
+			if (scanner_scan(path, &state->dir_stats, 0)) {
 				state->prev_stats = state->dir_stats;
-				state->stable_reference_stats = state->dir_stats;
-				state->reference_stats_initialized = true;
+				state->reference_stats = state->dir_stats;
+				state->reference_init = true;
 				log_message(DEBUG,
 				            "Initialized directory stats for %s: files=%d, dirs=%d, depth=%d, size=%.2f MB",
 				            path, state->dir_stats.file_count, state->dir_stats.dir_count,
@@ -292,26 +289,22 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 	}
 
 	/* Add to the path_state's list */
-	state->next_for_path = ps->head_entity_state;
-	ps->head_entity_state = state;
+	state->path_next = ps->entity_head;
+	ps->entity_head = state;
 
 	log_message(DEBUG, "Created new state for path=%s, watch=%s", path, watch->name);
 	
-	pthread_mutex_unlock(&entity_states_mutex);
+	pthread_mutex_unlock(&states_mutex);
 	return state;
 }
 
-
-/* Check if a command should be executed for a given operation */
-
-
 /* Update entity states with new watch pointers after config reload */
-void update_entity_states_after_reload(config_t *new_config) {
+void states_update(config_t *new_config) {
 	if (!new_config || !path_states) {
 		return;
 	}
 
-	pthread_mutex_lock(&entity_states_mutex);
+	pthread_mutex_lock(&states_mutex);
 
 	log_message(DEBUG, "Updating all entity states after reload");
 
@@ -319,7 +312,7 @@ void update_entity_states_after_reload(config_t *new_config) {
 	for (int i = 0; i < PATH_HASH_SIZE; i++) {
 		path_state_t *ps = path_states[i];
 		while (ps) {
-			entity_state_t *state = ps->head_entity_state;
+			entity_state_t *state = ps->entity_head;
 			while (state) {
 				bool found_new_watch = false;
 				for (int j = 0; j < new_config->watch_count; j++) {
@@ -334,23 +327,23 @@ void update_entity_states_after_reload(config_t *new_config) {
 				if (!found_new_watch) {
 					log_message(DEBUG, "Could not find new watch for state: %s", state->path_state->path);
 				}
-				state = state->next_for_path;
+				state = state->path_next;
 			}
-			ps = ps->next_in_bucket;
+			ps = ps->bucket_next;
 		}
 	}
 
 	/* Unlock mutex */
-	pthread_mutex_unlock(&entity_states_mutex);
+	pthread_mutex_unlock(&states_mutex);
 }
 
 /* Clean up entity states that reference deleted watches after config reload */
-void cleanup_orphaned_entity_states(config_t *new_config) {
+void states_prune(config_t *new_config) {
 	if (!new_config || !path_states) {
 		return;
 	}
 
-	pthread_mutex_lock(&entity_states_mutex);
+	pthread_mutex_lock(&states_mutex);
 
 	log_message(DEBUG, "Cleaning up orphaned entity states");
 
@@ -359,7 +352,7 @@ void cleanup_orphaned_entity_states(config_t *new_config) {
 		path_state_t *prev_ps = NULL;
 
 		while (ps) {
-			entity_state_t *state = ps->head_entity_state;
+			entity_state_t *state = ps->entity_head;
 			entity_state_t *prev_state = NULL;
 
 			/* Clean up orphaned entity states within this path state */
@@ -378,37 +371,37 @@ void cleanup_orphaned_entity_states(config_t *new_config) {
 
 					entity_state_t *to_free = state;
 					if (prev_state) {
-						prev_state->next_for_path = state->next_for_path;
+						prev_state->path_next = state->path_next;
 					} else {
-						ps->head_entity_state = state->next_for_path;
+						ps->entity_head = state->path_next;
 					}
-					state = state->next_for_path;
+					state = state->path_next;
 					free_entity_state(to_free);
 				} else {
 					prev_state = state;
-					state = state->next_for_path;
+					state = state->path_next;
 				}
 			}
 
 			/* If this path state has no more entity states, remove it */
-			if (!ps->head_entity_state) {
+			if (!ps->entity_head) {
 				log_message(DEBUG, "Removing empty path state for path %s", ps->path);
 				
 				path_state_t *to_free_ps = ps;
 				if (prev_ps) {
-					prev_ps->next_in_bucket = ps->next_in_bucket;
+					prev_ps->bucket_next = ps->bucket_next;
 				} else {
-					path_states[i] = ps->next_in_bucket;
+					path_states[i] = ps->bucket_next;
 				}
-				ps = ps->next_in_bucket;
+				ps = ps->bucket_next;
 				free_path_state(to_free_ps);
 			} else {
 				prev_ps = ps;
-				ps = ps->next_in_bucket;
+				ps = ps->bucket_next;
 			}
 		}
 	}
 
 	/* Unlock mutex */
-	pthread_mutex_unlock(&entity_states_mutex);
+	pthread_mutex_unlock(&states_mutex);
 }

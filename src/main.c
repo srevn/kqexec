@@ -146,7 +146,7 @@ int main(int argc, char *argv[]) {
 	}
 
 	/* Initialize entity states */
-	if (!entity_state_init()) {
+	if (!states_init()) {
 		log_message(ERROR, "Failed to initialize entity states");
 		command_cleanup();
 		config_destroy(config);
@@ -158,7 +158,7 @@ int main(int argc, char *argv[]) {
 	monitor = monitor_create(config);
 	if (monitor == NULL) {
 		log_message(ERROR, "Failed to create monitor");
-		entity_state_cleanup();
+		states_cleanup();
 		command_cleanup();
 		config_destroy(config);
 		log_close();
@@ -169,7 +169,7 @@ int main(int argc, char *argv[]) {
 	if (!monitor_setup(monitor)) {
 		log_message(ERROR, "Failed to set up monitor");
 		monitor_destroy(monitor);
-		entity_state_cleanup();
+		states_cleanup();
 		command_cleanup();
 		log_close();
 		return EXIT_FAILURE;
@@ -185,7 +185,7 @@ int main(int argc, char *argv[]) {
 	if (!monitor_start(monitor)) {
 		log_message(ERROR, "Failed to start monitor");
 		monitor_destroy(monitor);
-		entity_state_cleanup();
+		states_cleanup();
 		command_cleanup();
 		log_close();
 		return EXIT_FAILURE;
@@ -194,7 +194,7 @@ int main(int argc, char *argv[]) {
 	/* Clean up */
 	daemon_set_monitor(NULL);
 	monitor_destroy(monitor);
-	entity_state_cleanup();
+	states_cleanup();
 	command_cleanup();
 	log_close();
 

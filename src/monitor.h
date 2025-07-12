@@ -48,11 +48,10 @@ bool monitor_setup(monitor_t *monitor);
 bool monitor_start(monitor_t *monitor);
 void monitor_stop(monitor_t *monitor);
 bool monitor_reload(monitor_t *monitor);
-void monitor_request_reload(monitor_t *monitor);
-bool monitor_add_watch(monitor_t *monitor, watch_entry_t *watch);
-bool monitor_add_dir_recursive(monitor_t *monitor, const char *dir_path, watch_entry_t *watch);
-bool monitor_process_events(monitor_t *monitor);
-bool monitor_validate_and_refresh_path(monitor_t *monitor, const char *path);
-bool monitor_remove_stale_subdirectory_watches(monitor_t *monitor, const char *parent_path);
+bool monitor_add(monitor_t *monitor, watch_entry_t *watch);
+bool monitor_tree(monitor_t *monitor, const char *dir_path, watch_entry_t *watch);
+bool monitor_poll(monitor_t *monitor);
+bool monitor_sync(monitor_t *monitor, const char *path);
+bool monitor_prune(monitor_t *monitor, const char *parent_path);
 
 #endif /* MONITOR_H */

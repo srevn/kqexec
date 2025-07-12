@@ -72,6 +72,7 @@ int events_timeout(monitor_t *monitor, struct timespec *now);
 
 /* Event processing */
 bool events_handle(monitor_t *monitor, struct kevent *events, int count, struct timespec *time);
+bool event_process(monitor_t *monitor, watch_entry_t *watch, file_event_t *event, entity_type_t entity_type);
 struct timespec* timeout_calculate(monitor_t *monitor, struct timespec *timeout, struct timespec *now);
 
 /* Event queue management */
@@ -81,6 +82,5 @@ void event_queue_destroy(event_queue_t *queue);
 /* Event to operation translation */
 operation_type_t determine_operation(entity_state_t *state, event_type_t new_event_type);
 event_type_t operation_to_event_type(operation_type_t op);
-bool process_event(monitor_t *monitor, watch_entry_t *watch, file_event_t *event, entity_type_t entity_type);
 
 #endif /* EVENTS_H */

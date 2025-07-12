@@ -48,7 +48,7 @@ void thread_safe_log(int level, const char *format, ...) {
 }
 
 /* SIGCHLD handler to reap child processes and mark command intents as complete */
-static void command_sigchld_handler(int sig) {
+static void command_sigchld(int sig) {
 	(void) sig;
 	pid_t pid;
 	int status;
@@ -61,7 +61,7 @@ static void command_sigchld_handler(int sig) {
 
 	while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
 		/* Mark the command intent as complete */
-		command_intent_mark_complete(pid);
+		command_intent_complete(pid);
 	}
 
 	/* Restore original signal mask */
@@ -73,7 +73,7 @@ bool command_init(void) {
 	/* Set up SIGCHLD handler */
 	struct sigaction sa;
 	memset(&sa, 0, sizeof(sa));
-	sa.sa_handler = command_sigchld_handler;
+	sa.sa_handler = command_sigchld;
 	sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
 	if (sigaction(SIGCHLD, &sa, NULL) == -1) {
 		log_message(ERROR, "Failed to set up SIGCHLD handler: %s", strerror(errno));
@@ -119,7 +119,7 @@ void command_intent_cleanup(void) {
 }
 
 /* Check if a path is affected by any active command */
-bool is_path_affected_by_command(const char *path) {
+bool command_affects(const char *path) {
 	time_t now;
 	time(&now);
 	sigset_t mask, oldmask;
@@ -192,7 +192,7 @@ bool is_path_affected_by_command(const char *path) {
 }
 
 /* Clean up expired command intents - call this periodically and safely */
-void command_intent_cleanup_expired(void) {
+void command_intent_expire(void) {
 	sigset_t mask, oldmask;
 	time_t now;
 	time(&now);
@@ -351,7 +351,7 @@ command_intent_t *command_intent_create(pid_t pid, const char *command, const ch
 }
 
 /* Mark a command intent as complete */
-bool command_intent_mark_complete(pid_t pid) {
+bool command_intent_complete(pid_t pid) {
 	sigset_t mask, oldmask;
 
 	/* Block SIGCHLD while accessing command_intents array */
@@ -404,7 +404,7 @@ int command_get_debounce_time(void) {
 }
 
 /* Helper function to substitute a placeholder in a string */
-static void substitute(char *result, const char *placeholder, const char *value) {
+static void command_substitute(char *result, const char *placeholder, const char *value) {
 	char *current_pos;
 	while ((current_pos = strstr(result, placeholder)) != NULL) {
 		char temp[MAX_CMD_LEN];
@@ -417,7 +417,7 @@ static void substitute(char *result, const char *placeholder, const char *value)
 }
 
 /* Helper function to format size in a human-readable way */
-static const char *format_size_human_readable(size_t size, char *buf, size_t buf_size) {
+static const char *human_readable_size(size_t size, char *buf, size_t buf_size) {
 	const char *suffixes[] = {"B", "K", "M", "G", "T"};
 	int i = 0;
 	double d_size = (double) size;
@@ -446,7 +446,7 @@ static const char *format_size_human_readable(size_t size, char *buf, size_t buf
  * %u: User who triggered the event
  * %e: Event type which occurred
  */
-char *command_substitute_placeholders(const watch_entry_t *watch, const char *command, const file_event_t *event) {
+char *command_placeholders(const watch_entry_t *watch, const char *command, const file_event_t *event) {
 	char *result;
 	char time_str[64];
 	char user_str[64];
@@ -473,27 +473,27 @@ char *command_substitute_placeholders(const watch_entry_t *watch, const char *co
 	result[MAX_CMD_LEN - 1] = '\0';
 
 	/* Substitute %p with the path */
-	substitute(result, "%p", event->path);
+	command_substitute(result, "%p", event->path);
 
 	/* Substitute %n with the filename/dirname */
 	if (strstr(result, "%n")) {
 		char *path_copy = strdup(event->path);
-		substitute(result, "%n", basename(path_copy));
+		command_substitute(result, "%n", basename(path_copy));
 		free(path_copy);
 	}
 
 	/* Substitute %d with the directory */
 	if (strstr(result, "%d")) {
 		char *path_copy = strdup(event->path);
-		substitute(result, "%d", dirname(path_copy));
+		command_substitute(result, "%d", dirname(path_copy));
 		free(path_copy);
 	}
 
 	/* Substitute %b with the base watch path */
-	substitute(result, "%b", watch->path);
+	command_substitute(result, "%b", watch->path);
 
 	/* Substitute %w with the watch name */
-	substitute(result, "%w", watch->name);
+	command_substitute(result, "%w", watch->name);
 
 	/* Substitute %r with the relative path */
 	if (strstr(result, "%r")) {
@@ -501,28 +501,28 @@ char *command_substitute_placeholders(const watch_entry_t *watch, const char *co
 		if (*relative_path == '/') {
 			relative_path++;
 		}
-		substitute(result, "%r", relative_path);
+		command_substitute(result, "%r", relative_path);
 	}
 
 	/* Get entity state for size and trigger file placeholders */
-	entity_state_t *state = get_entity_state(event->path, ENTITY_UNKNOWN, (watch_entry_t *) watch);
+	entity_state_t *state = states_get(event->path, ENTITY_UNKNOWN, (watch_entry_t *) watch);
 
 	/* Substitute %f and %F with trigger file path and name */
 	if (strstr(result, "%f") || strstr(result, "%F")) {
-		const char *trigger_file_path = event->path; /* Default to event path */
+		const char *trigger_path = event->path; /* Default to event path */
 		if (state) {
-			entity_state_t *root_state = stability_get_root(state);
-			if (root_state && root_state->trigger_file_path) {
-				trigger_file_path = root_state->trigger_file_path;
+			entity_state_t *root_state = stability_root(state);
+			if (root_state && root_state->trigger_path) {
+				trigger_path = root_state->trigger_path;
 			}
 		}
 
-		substitute(result, "%f", trigger_file_path);
+		command_substitute(result, "%f", trigger_path);
 
 		if (strstr(result, "%F")) {
-			char *path_copy = strdup(trigger_file_path);
+			char *path_copy = strdup(trigger_path);
 			if (path_copy) {
-				substitute(result, "%F", basename(path_copy));
+				command_substitute(result, "%F", basename(path_copy));
 				free(path_copy);
 			}
 		}
@@ -532,22 +532,22 @@ char *command_substitute_placeholders(const watch_entry_t *watch, const char *co
 	if (strstr(result, "%s") || strstr(result, "%S")) {
 		size_t size = 0;
 		if (state && state->type == ENTITY_DIRECTORY) {
-			size = state->dir_stats.recursive_total_size;
+			size = state->dir_stats.tree_size;
 		} else if (stat(event->path, &st) == 0) {
 			size = st.st_size;
 		}
 
 		snprintf(size_str, sizeof(size_str), "%zu", size);
-		substitute(result, "%s", size_str);
+		command_substitute(result, "%s", size_str);
 
-		format_size_human_readable(size, human_size_str, sizeof(human_size_str));
-		substitute(result, "%S", human_size_str);
+		human_readable_size(size, human_size_str, sizeof(human_size_str));
+		command_substitute(result, "%S", human_size_str);
 	}
 
 	/* Substitute %t with the time */
 	localtime_r(&event->wall_time.tv_sec, &tm);
 	strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", &tm);
-	substitute(result, "%t", time_str);
+	command_substitute(result, "%t", time_str);
 
 	/* Substitute %u with the user */
 	pwd = getpwuid(event->user_id);
@@ -556,11 +556,11 @@ char *command_substitute_placeholders(const watch_entry_t *watch, const char *co
 	} else {
 		snprintf(user_str, sizeof(user_str), "%d", event->user_id);
 	}
-	substitute(result, "%u", user_str);
+	command_substitute(result, "%u", user_str);
 
 	/* Substitute %e with the event type */
 	event_str = (char *) event_type_to_string(event->type);
-	substitute(result, "%e", event_str);
+	command_substitute(result, "%e", event_str);
 
 	return result;
 }
@@ -625,7 +625,7 @@ bool command_execute_sync(const watch_entry_t *watch, const file_event_t *event)
 	time(&start_time);
 
 	/* Substitute placeholders in the command */
-	command = command_substitute_placeholders(watch, watch->command, event);
+	command = command_placeholders(watch, watch->command, event);
 	if (command == NULL) {
 		return false;
 	}
@@ -791,7 +791,7 @@ bool command_execute_sync(const watch_entry_t *watch, const file_event_t *event)
 	waitpid(pid, &status, 0);
 
 	/* Mark the command intent as complete immediately */
-	command_intent_mark_complete(pid);
+	command_intent_complete(pid);
 
 	/* Restore previous signal mask */
 	sigprocmask(SIG_SETMASK, &oldmask, NULL);
@@ -815,9 +815,9 @@ bool command_execute_sync(const watch_entry_t *watch, const file_event_t *event)
 	            					watch->name, pid, end_time - start_time, WEXITSTATUS(status));
 
 	/* Mark the entity state with the command execution */
-	entity_state_t *state = get_entity_state(event->path, ENTITY_UNKNOWN, (watch_entry_t *) watch);
+	entity_state_t *state = states_get(event->path, ENTITY_UNKNOWN, (watch_entry_t *) watch);
 	if (state) {
-		state->last_command_time = time(NULL);
+		state->command_time = time(NULL);
 	}
 
 	free(command);

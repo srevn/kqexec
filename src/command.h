@@ -27,15 +27,15 @@ int command_get_debounce_time(void);
 void command_debounce_time(int milliseconds);
 bool command_execute(const watch_entry_t *watch, const file_event_t *event);
 bool command_execute_sync(const watch_entry_t *watch, const file_event_t *event);
-char *command_substitute_placeholders(const watch_entry_t *watch, const char *command, const file_event_t *event);
+char *command_placeholders(const watch_entry_t *watch, const char *command, const file_event_t *event);
 void thread_safe_log(int level, const char *format, ...);
 void command_cleanup(void);
 
 /* Function prototypes for command intent tracking */
 void command_intent_cleanup(void);
-void command_intent_cleanup_expired(void);
+void command_intent_expire(void);
 command_intent_t *command_intent_create(pid_t pid, const char *command, const char *base_path);
-bool command_intent_mark_complete(pid_t pid);
-bool is_path_affected_by_command(const char *path);
+bool command_intent_complete(pid_t pid);
+bool command_affects(const char *path);
 
 #endif /* COMMAND_H */

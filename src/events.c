@@ -1,7 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <errno.h>
 #include <unistd.h>
 #include <sys/time.h>
 #include <sys/event.h>
@@ -89,7 +88,7 @@ void events_schedule(monitor_t *monitor, watch_entry_t *watch, file_event_t *eve
 	delayed->process_time = process_time;
 
 	log_message(DEBUG, "Scheduled delayed event for %s (watch: %s) in %d ms",
-	            event->path, watch->name, watch->processing_delay);
+	            		event->path, watch->name, watch->processing_delay);
 }
 
 /* Process delayed events that are ready */
@@ -109,10 +108,10 @@ void events_process(monitor_t *monitor) {
 		if (now.tv_sec > delayed->process_time.tv_sec ||
 		    (now.tv_sec == delayed->process_time.tv_sec && now.tv_nsec >= delayed->process_time.tv_nsec)) {
 			log_message(DEBUG, "Processing delayed event for %s (watch: %s)",
-			            delayed->event.path, delayed->watch->name);
+			        			delayed->event.path, delayed->watch->name);
 
 			/* Process the event */
-			process_event(monitor, delayed->watch, &delayed->event, delayed->entity_type);
+			event_process(monitor, delayed->watch, &delayed->event, delayed->entity_type);
 
 			/* Free the path string */
 			free(delayed->event.path);
@@ -216,12 +215,12 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int count, struct 
 				entity_type_t entity_type = (info->watch->type == WATCH_FILE) ? ENTITY_FILE : ENTITY_DIRECTORY;
 
 				log_message(DEBUG, "Event: path=%s, flags=0x%x -> type=%s (watch: %s)",
-				            info->path, events[i].fflags, event_type_to_string(event.type), info->watch->name);
+									info->path, events[i].fflags, event_type_to_string(event.type), info->watch->name);
 
 				/* Proactive validation for directory events on NOTE_WRITE */
 				if (info->watch->type == WATCH_DIRECTORY && (events[i].fflags & NOTE_WRITE)) {
 					log_message(DEBUG, "Write event on dir %s, validating and re-scanning.", info->path);
-					if (monitor_validate_and_refresh_path(monitor, info->path)) {
+					if (monitor_sync(monitor, info->path)) {
 						/* The watches array was modified, restart the event processing to use the new array */
 						goto event_loop_start;
 					}
@@ -233,7 +232,7 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int count, struct 
 					events_schedule(monitor, info->watch, &event, entity_type);
 				} else {
 					/* Process the event immediately */
-					process_event(monitor, info->watch, &event, entity_type);
+					event_process(monitor, info->watch, &event, entity_type);
 				}
 			}
 		}
@@ -366,7 +365,7 @@ operation_type_t determine_operation(entity_state_t *state, event_type_t new_eve
 
 		/* For directory creation, gather initial stats */
 		if (state->type == ENTITY_DIRECTORY) {
-			scanner_gather_directory_stats(state->path_state->path, &state->dir_stats, 0);
+			scanner_scan(state->path_state->path, &state->dir_stats, 0);
 			state->prev_stats = state->dir_stats;
 		}
 	} else if (exists_now) {
@@ -399,20 +398,20 @@ operation_type_t determine_operation(entity_state_t *state, event_type_t new_eve
 }
 
 /* Process a single file system event */
-bool process_event(monitor_t *monitor, watch_entry_t *watch, file_event_t *event, entity_type_t entity_type) {
+bool event_process(monitor_t *monitor, watch_entry_t *watch, file_event_t *event, entity_type_t entity_type) {
 	if (watch == NULL || event == NULL || event->path == NULL) {
-		log_message(ERROR, "process_event: Received NULL watch, event, or event path");
+		log_message(ERROR, "event_process: Received NULL watch, event, or event path");
 		return false;
 	}
 
 	/* Additional safety checks for watch structure */
 	if (!watch->name || !watch->command) {
-		log_message(ERROR, "process_event: Watch has NULL name or command");
+		log_message(ERROR, "event_process: Watch has NULL name or command");
 		return false;
 	}
 
 	log_message(DEBUG, "Processing event for %s (watch: %s, type: %s)",
-	            event->path, watch->name, event_type_to_string(event->type));
+	        			event->path, watch->name, event_type_to_string(event->type));
 
 	/* Handle config file events specially for hot reload */
 	if (watch->name != NULL && strcmp(watch->name, "__config_file__") == 0) {
@@ -432,7 +431,8 @@ bool process_event(monitor_t *monitor, watch_entry_t *watch, file_event_t *event
 
 		log_message(NOTICE, "Configuraion changed: %s", event->path);
 		if (monitor != NULL) {
-			monitor_request_reload(monitor);
+			monitor->reload_requested = true;
+			log_message(DEBUG, "Configuration reload requested");
 		} else {
 			log_message(WARNING, "Config file changed but no monitor available for reload");
 		}
@@ -440,16 +440,15 @@ bool process_event(monitor_t *monitor, watch_entry_t *watch, file_event_t *event
 	}
 
 	/* Check if this event was caused by one of our commands */
-	if (is_path_affected_by_command(event->path)) {
-		log_message(DEBUG, "Ignoring event for %s - caused by our command execution",
-		            event->path);
+	if (command_affects(event->path)) {
+		log_message(DEBUG, "Ignoring event for %s - caused by our command execution", event->path);
 		return false;
 	}
 
 	/* Get state using the event path and watch config */
-	entity_state_t *state = get_entity_state(event->path, entity_type, watch);
+	entity_state_t *state = states_get(event->path, entity_type, watch);
 	if (state == NULL) {
-		return false; /* Error already logged by get_entity_state */
+		return false; /* Error already logged by states_get */
 	}
 
 	/* Update timestamps before determining operation */
@@ -468,12 +467,12 @@ bool process_event(monitor_t *monitor, watch_entry_t *watch, file_event_t *event
 	event_type_t event_type_for_mask = operation_to_event_type(op);
 	if ((watch->events & event_type_for_mask) == 0) {
 		log_message(DEBUG, "Operation maps to event type %s, which is not in watch mask for %s",
-		            event_type_to_string(event_type_for_mask), watch->name);
+		        			event_type_to_string(event_type_for_mask), watch->name);
 		return false;
 	}
 
 	/* Check debounce/deferral logic */
-	if (stability_can_execute(monitor, state, op, command_get_debounce_time())) {
+	if (stability_ready(monitor, state, op, command_get_debounce_time())) {
 		/* Execute command immediately (only for non-directory-content changes) */
 		file_event_t synthetic_event = {
 			.path = state->path_state->path,
@@ -484,13 +483,13 @@ bool process_event(monitor_t *monitor, watch_entry_t *watch, file_event_t *event
 		};
 
 		log_message(INFO, "Executing command for %s (watch: %s, operation: %d)",
-		            state->path_state->path, watch->name, op);
+		    			   state->path_state->path, watch->name, op);
 
 		if (command_execute(watch, &synthetic_event)) {
 			log_message(INFO, "Command execution successful for %s", state->path_state->path);
 
 			/* Update last command time and reset change flags */
-			state->last_command_time = state->last_update.tv_sec;
+			state->command_time = state->last_update.tv_sec;
 			state->structure_changed = false;
 			state->metadata_changed = false;
 			state->content_changed = false;

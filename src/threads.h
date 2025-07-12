@@ -1,5 +1,5 @@
-#ifndef THREAD_POOL_H
-#define THREAD_POOL_H
+#ifndef THREADS_H
+#define THREADS_H
 
 #include <stdbool.h>
 
@@ -36,4 +36,4 @@ void thread_pool_destroy(void);
 bool thread_pool_submit(const watch_entry_t *watch, const file_event_t *event);
 void thread_pool_wait_all(void);
 
-#endif /* THREAD_POOL_H */
+#endif /* THREADS_H */

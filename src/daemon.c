@@ -36,7 +36,8 @@ static void signal_handler(int sig) {
 			/* Request reload if monitor is available */
 			if (g_monitor != NULL) {
 				log_message(INFO, "Received SIGHUP, requesting configuration reload");
-				monitor_request_reload(g_monitor);
+				g_monitor->reload_requested = true;
+				log_message(DEBUG, "Configuration reload requested");
 			} else {
 				log_message(WARNING, "Received SIGHUP but monitor is not available");
 			}

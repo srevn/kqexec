@@ -20,9 +20,9 @@ typedef enum {
 
 /* Entity type for clarity in handling */
 typedef enum {
-    ENTITY_UNKNOWN,                      /* Unknown type, to be determined */
-    ENTITY_FILE,                         /* Regular file */
-    ENTITY_DIRECTORY,                    /* Directory */
+	ENTITY_UNKNOWN,             /* Unknown type, to be determined */
+	ENTITY_FILE,                /* Regular file */
+	ENTITY_DIRECTORY,           /* Directory */
 } entity_type_t;
 
 /* Structure for a watch entry in the configuration */
