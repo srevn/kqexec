@@ -18,6 +18,7 @@
 #include "logger.h"
 #include "queue.h"
 #include "events.h"
+#include "scanner.h"
 
 /* Maximum number of events to process at once */
 #define MAX_EVENTS 64
@@ -584,7 +585,7 @@ void schedule_deferred_check(monitor_t *monitor, entity_state_t *state) {
 		root_state->last_activity_in_tree = now;
 	}
 
-	long required_quiet_period_ms = get_required_quiet_period(root_state);
+	long required_quiet_period_ms = scanner_get_quiet_period(root_state);
 
 	struct timespec next_check;
 	next_check.tv_sec = root_state->last_activity_in_tree.tv_sec + (required_quiet_period_ms / 1000);
@@ -599,8 +600,8 @@ void schedule_deferred_check(monitor_t *monitor, entity_state_t *state) {
 	/* Add to queue */
 	queue_upsert(monitor->check_queue, root_state->path_state->path, root_state->watch, next_check);
 
-	/* For the synchronization to work correctly, also perform a synchronize_activity_states call */
-	synchronize_activity_states(root_state->path_state, root_state);
+	/* For the synchronization to work correctly, also perform a scanner_synchronize_activity_states call */
+	scanner_synchronize_activity_states(root_state->path_state, root_state);
 
 	log_message(DEBUG, "Scheduled deferred check for %s: in %ld ms (directory with %d files, %d dirs)",
 	            		root_state->path_state->path, required_quiet_period_ms,

@@ -7,6 +7,7 @@
 #include <sys/types.h>
 
 #include "config.h"
+#include "scanner.h"
 
 /* Forward declaration for monitor_t */
 struct monitor;
@@ -15,11 +16,6 @@ typedef struct monitor monitor_t;
 /* Forward declaration for file_event_t */
 struct file_event;
 typedef struct file_event file_event_t;
-
-/* Activity window size for detecting quiet periods (in milliseconds) */
-#define QUIET_PERIOD_MS 500              /* Default quiet period */
-#define DIR_QUIET_PERIOD_MS 1000         /* Longer quiet period for directory operations */
-#define MAX_ACTIVITY_SAMPLES 5           /* Number of recent events to track for activity analysis */
 
 /* Hash table size for storing path states */
 #define PATH_HASH_SIZE 1024
@@ -33,46 +29,6 @@ typedef enum {
     ENTITY_FILE,                         /* Regular file */
     ENTITY_DIRECTORY,                    /* Directory */
 } entity_type_t;
-
-/* Logical operation types */
-typedef enum {
-    OP_NONE = 0,                         /* No operation */
-    
-    /* File operations */
-    OP_FILE_CONTENT_CHANGED,             /* File content was modified */
-    OP_FILE_CREATED,                     /* File was created */
-    OP_FILE_DELETED,                     /* File was deleted */
-    OP_FILE_RENAMED,                     /* File was renamed/moved */
-    OP_FILE_METADATA_CHANGED,            /* File attributes changed */
-    
-    /* Directory operations */
-    OP_DIR_CONTENT_CHANGED,              /* Directory content changed */
-    OP_DIR_CREATED,                      /* Directory was created */
-    OP_DIR_DELETED,                      /* Directory was deleted */
-    OP_DIR_METADATA_CHANGED              /* Directory attributes changed */
-} operation_type_t;
-
-/* Activity sample for analyzing bursts of events */
-typedef struct {
-    struct timespec timestamp;           /* When the event occurred */
-    operation_type_t operation;          /* Type of operation */
-} activity_sample_t;
-
-/* Directory statistics for stability verification */
-typedef struct {
-    int depth;                           /* Directory tree depth */
-    int file_count;                      /* Number of files in the directory */
-    int dir_count;                       /* Number of subdirectories */
-    size_t total_size;                   /* Total size of files in the directory */
-    time_t latest_mtime;                 /* Latest modification time */
-    bool has_temp_files;                 /* Flag for temporary files */
-    
-    /* Recursive stats */
-    int max_depth;                       /* Maximum depth reached from this dir */
-    int recursive_file_count;            /* Total number of files in this dir and all subdirs */
-    int recursive_dir_count;             /* Total number of dirs in this dir and all subdirs */
-    size_t recursive_total_size;         /* Total size of all files in tree */
-} dir_stats_t;
 
 /* Forward declaration for path_state */
 struct path_state;
@@ -132,24 +88,21 @@ typedef struct path_state {
     struct path_state *next_in_bucket;   /* Next path_state in the hash bucket */
 } path_state_t;
 
+/* External variables */
+extern pthread_mutex_t entity_states_mutex;
+
 /* Function prototypes */
 bool entity_state_init(void);
 void entity_state_cleanup(void);
+bool is_entity_state_corrupted(const entity_state_t *state);
 entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_entry_t *watch);
-operation_type_t determine_operation(entity_state_t *state, event_type_t new_event_type);
-event_type_t operation_to_event_type(operation_type_t op);
-bool should_execute_command(monitor_t *monitor, entity_state_t *state, operation_type_t op, int debounce_ms);
-bool process_event(monitor_t *monitor, watch_entry_t *watch, file_event_t *event, entity_type_t entity_type);
-void synchronize_activity_states(path_state_t *path_state, entity_state_t *trigger_state);
-bool gather_basic_directory_stats(const char *dir_path, dir_stats_t *stats, int recursion_depth);
-bool is_quiet_period_elapsed(entity_state_t *state, struct timespec *now);
-long get_required_quiet_period(entity_state_t *state);
 entity_state_t *find_root_state(entity_state_t *state);
-bool verify_directory_stability(entity_state_t *context_state, const char *dir_path, dir_stats_t *stats, int recursion_depth);
-bool compare_dir_stats(dir_stats_t *prev, dir_stats_t *current);
-void update_cumulative_changes(entity_state_t *state);
 void update_entity_states_after_reload(config_t *new_config);
 void cleanup_orphaned_entity_states(config_t *new_config);
-char *find_most_recent_file_in_dir(const char *dir_path);
+
+/* Event to operation translation */
+operation_type_t determine_operation(entity_state_t *state, event_type_t new_event_type);
+event_type_t operation_to_event_type(operation_type_t op);
+bool process_event(monitor_t *monitor, watch_entry_t *watch, file_event_t *event, entity_type_t entity_type);
 
 #endif /* STATES_H */

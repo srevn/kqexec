@@ -10,6 +10,7 @@
 #include "logger.h"
 #include "command.h"
 #include "queue.h"
+#include "scanner.h"
 
 /* Maximum allowed failures before giving up */
 #define MAX_FAILED_CHECKS 3
@@ -77,7 +78,7 @@ bool check_quiet_elapsed(entity_state_t *root_state, struct timespec *current_ti
 		*elapsed_ms_out = elapsed_ms;
 	}
 
-	long required_quiet_period_ms = get_required_quiet_period(root_state);
+	long required_quiet_period_ms = scanner_get_quiet_period(root_state);
 
 	log_message(DEBUG, "Path %s: %ld ms elapsed of %ld ms quiet period, direct_entries=%d+%d, recursive_entries=%d+%d, depth=%d",
 	        			root_state->path_state->path, elapsed_ms, required_quiet_period_ms,
@@ -85,7 +86,7 @@ bool check_quiet_elapsed(entity_state_t *root_state, struct timespec *current_ti
 	        			root_state->dir_stats.recursive_file_count, root_state->dir_stats.recursive_dir_count,
 	        			root_state->dir_stats.depth);
 
-	return is_quiet_period_elapsed(root_state, current_time);
+	return scanner_is_quiet_period_elapsed(root_state, current_time);
 }
 
 /* Reschedule a deferred check */
@@ -94,7 +95,7 @@ void reschedule_check(monitor_t *monitor, deferred_check_t *entry, entity_state_
 		return;
 	}
 
-	long required_quiet_period_ms = get_required_quiet_period(root_state);
+	long required_quiet_period_ms = scanner_get_quiet_period(root_state);
 
 	/* Update next check time based on latest activity */
 	struct timespec next_check;
@@ -137,7 +138,7 @@ bool scan_directory_stability(entity_state_t *root_state, const char *path, dir_
 	}
 
 	/* Perform recursive stability verification */
-	bool scan_completed = verify_directory_stability(root_state, path, current_stats_out, 0);
+	bool scan_completed = scanner_verify_directory_stability(root_state, path, current_stats_out, 0);
 
 	/* Only update directory stats if the scan was fully completed */
 	if (scan_completed) {
@@ -149,7 +150,7 @@ bool scan_directory_stability(entity_state_t *root_state, const char *path, dir_
 
 		/* Update cumulative changes based on the difference */
 		root_state->prev_stats = temp_prev_stats;
-		update_cumulative_changes(root_state);
+		scanner_update_cumulative_changes(root_state);
 
 		/* Set previous stats to current for the next cycle's comparison */
 		root_state->prev_stats = *current_stats_out;
@@ -181,7 +182,7 @@ scan_failure_type_t handle_scan_failure(monitor_t *monitor, deferred_check_t *en
 			/* Mark as not active for all watches */
 			root_state->activity_in_progress = false;
 			root_state->exists = false;
-			synchronize_activity_states(root_state->path_state, root_state);
+			scanner_synchronize_activity_states(root_state->path_state, root_state);
 
 			return SCAN_FAILURE_MAX_ATTEMPTS_REACHED;
 		}
@@ -246,7 +247,7 @@ bool is_directory_stable(entity_state_t *root_state, const dir_stats_t *current_
 	}
 
 	bool has_prev_stats = (root_state->prev_stats.file_count > 0 || root_state->prev_stats.dir_count > 0);
-	if (has_prev_stats && !compare_dir_stats(&root_state->prev_stats, (dir_stats_t *) current_stats)) {
+	if (has_prev_stats && !scanner_compare_directory_stats(&root_state->prev_stats, (dir_stats_t *) current_stats)) {
 		log_message(DEBUG, "Directory unstable: content changed from %d/%d to %d/%d",
 		        			root_state->prev_stats.recursive_file_count, root_state->prev_stats.recursive_dir_count,
 		        			current_stats->recursive_file_count, current_stats->recursive_dir_count);
@@ -274,7 +275,7 @@ void reset_stability_tracking(entity_state_t *root_state) {
 	root_state->instability_count = 0;
 
 	/* Propagate the reset state to all related states for this path */
-	synchronize_activity_states(root_state->path_state, root_state);
+	scanner_synchronize_activity_states(root_state->path_state, root_state);
 }
 
 /* Execute commands for all watches of a stable directory */
@@ -296,7 +297,7 @@ bool execute_deferred_commands(monitor_t *monitor, deferred_check_t *entry, enti
 
 			if (stat(scan_path, &st) == 0 && S_ISDIR(st.st_mode)) {
 				/* It's a directory, scan it for the most recent file */
-				root_state->trigger_file_path = find_most_recent_file_in_dir(scan_path);
+				root_state->trigger_file_path = scanner_find_recent_file(scan_path);
 			} else {
 				/* It's a file, or doesn't exist; use the path directly */
 				root_state->trigger_file_path = strdup(scan_path);
@@ -419,7 +420,7 @@ void stability_process_queue(monitor_t *monitor, struct timespec *current_time) 
 			log_message(DEBUG, "Found new directories during scan, deferring command execution");
 
 			/* Synchronize state after adding watches but before rescheduling */
-			synchronize_activity_states(root_state->path_state, root_state);
+			scanner_synchronize_activity_states(root_state->path_state, root_state);
 
 			/* Reschedule with a shorter interval for quick follow-up */
 			struct timespec next_check;
@@ -466,7 +467,7 @@ void stability_process_queue(monitor_t *monitor, struct timespec *current_time) 
 		bool is_stable = is_directory_stable(root_state, &current_stats, scan_completed);
 
 		/* Synchronize updated stats with other watches for the same path */
-		synchronize_activity_states(root_state->path_state, root_state);
+		scanner_synchronize_activity_states(root_state->path_state, root_state);
 
 		if (!is_stable) {
 			/* Directory is unstable - reset counter and reschedule */
@@ -475,7 +476,7 @@ void stability_process_queue(monitor_t *monitor, struct timespec *current_time) 
 
 			/* Update activity timestamp */
 			root_state->last_activity_in_tree = *current_time;
-			synchronize_activity_states(root_state->path_state, root_state);
+			scanner_synchronize_activity_states(root_state->path_state, root_state);
 
 			log_message(DEBUG, "Directory %s is still unstable (instability count: %d), rescheduling",
 			            		entry->path, root_state->instability_count);

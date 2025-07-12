@@ -31,6 +31,7 @@ SRCS = src/main.c \
 	   src/events.c \
 	   src/config.c \
 	   src/monitor.c \
+	   src/scanner.c \
 	   src/stability.c \
 	   src/command.c \
 	   src/threads.c \
