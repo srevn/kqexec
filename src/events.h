@@ -70,12 +70,12 @@ typedef struct {
 
 /* Event lifecycle management */
 void events_schedule(monitor_t *monitor, watch_entry_t *watch, file_event_t *event, entity_type_t entity_type);
-void events_process(monitor_t *monitor);
+void events_delayed(monitor_t *monitor);
 int events_timeout(monitor_t *monitor, struct timespec *now);
 
 /* Event processing */
 bool events_handle(monitor_t *monitor, struct kevent *events, int count, struct timespec *time, sync_request_t *sync_request);
-bool event_process(monitor_t *monitor, watch_entry_t *watch, file_event_t *event, entity_type_t entity_type);
+bool events_process(monitor_t *monitor, watch_entry_t *watch, file_event_t *event, entity_type_t entity_type);
 struct timespec *timeout_calculate(monitor_t *monitor, struct timespec *timeout, struct timespec *now);
 
 /* Event queue management */

@@ -151,7 +151,7 @@ void events_schedule(monitor_t *monitor, watch_entry_t *watch, file_event_t *eve
 }
 
 /* Process delayed events that are ready */
-void events_process(monitor_t *monitor) {
+void events_delayed(monitor_t *monitor) {
 	if (!monitor || !monitor->delayed_events || monitor->delayed_event_count == 0) {
 		return;
 	}
@@ -170,7 +170,7 @@ void events_process(monitor_t *monitor) {
 			        			delayed->event.path, delayed->watch->name);
 
 			/* Process the event */
-			event_process(monitor, delayed->watch, &delayed->event, delayed->entity_type);
+			events_process(monitor, delayed->watch, &delayed->event, delayed->entity_type);
 
 			/* Free the path string */
 			free(delayed->event.path);
@@ -288,7 +288,7 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int count, struct 
 					events_schedule(monitor, info->watch, &event, entity_type);
 				} else {
 					/* Process the event immediately */
-					event_process(monitor, info->watch, &event, entity_type);
+					events_process(monitor, info->watch, &event, entity_type);
 				}
 			}
 		}
@@ -454,15 +454,15 @@ operation_type_t determine_operation(entity_state_t *state, event_type_t new_eve
 }
 
 /* Process a single file system event */
-bool event_process(monitor_t *monitor, watch_entry_t *watch, file_event_t *event, entity_type_t entity_type) {
+bool events_process(monitor_t *monitor, watch_entry_t *watch, file_event_t *event, entity_type_t entity_type) {
 	if (watch == NULL || event == NULL || event->path == NULL) {
-		log_message(ERROR, "event_process: Received NULL watch, event, or event path");
+		log_message(ERROR, "events_process: Received NULL watch, event, or event path");
 		return false;
 	}
 
 	/* Additional safety checks for watch structure */
 	if (!watch->name || !watch->command) {
-		log_message(ERROR, "event_process: Watch has NULL name or command");
+		log_message(ERROR, "events_process: Watch has NULL name or command");
 		return false;
 	}
 

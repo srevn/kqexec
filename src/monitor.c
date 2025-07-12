@@ -617,7 +617,7 @@ bool monitor_poll(monitor_t *monitor) {
 	stability_process(monitor, &after_kevent_time);
 
 	/* Process delayed events */
-	events_process(monitor);
+	events_delayed(monitor);
 
 	/* Clean up expired command intents */
 	command_intent_expire();
