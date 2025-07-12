@@ -17,7 +17,7 @@ typedef struct {
 	ino_t inode;                           /* Inode number for validation */
 	dev_t device;                          /* Device ID for validation */
 	watch_entry_t *watch;                  /* Associated watch entry */
-	bool is_shared_fd;                     /* Whether this FD is shared with other watches */
+	bool shared_fd;                        /* Whether this FD is shared with other watches */
 	time_t last_validation;                /* Last time this path was validated */
 } watch_info_t;
 

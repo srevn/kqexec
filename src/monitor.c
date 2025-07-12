@@ -74,7 +74,7 @@ static void watch_destroy(watch_info_t *info) {
 	}
 
 	/* Only close the file descriptor if it's not shared with other watches */
-	if (info->wd >= 0 && !info->is_shared_fd) {
+	if (info->wd >= 0 && !info->shared_fd) {
 		close(info->wd);
 	}
 
@@ -173,7 +173,7 @@ static bool monitor_kqueue(monitor_t *monitor, watch_info_t *info) {
 		flags |= NOTE_ATTRIB | NOTE_LINK;
 	}
 	if (info->watch->events & EVENT_CONTENT) {
-		flags |= NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE;
+		flags |= NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE | NOTE_WRITE;
 	}
 
 	/* Register for events */
@@ -237,8 +237,8 @@ bool monitor_tree(monitor_t *monitor, const char *dir_path, watch_entry_t *watch
 			info->wd = fd;
 			info->path = strdup(dir_path);
 			info->watch = watch;
-			info->is_shared_fd = true;
-			existing_info->is_shared_fd = true;
+			info->shared_fd = true;
+			existing_info->shared_fd = true;
 
 			if (!watch_stat(info)) {
 				watch_destroy(info);
@@ -269,7 +269,7 @@ bool monitor_tree(monitor_t *monitor, const char *dir_path, watch_entry_t *watch
 			info->wd = fd;
 			info->path = strdup(dir_path);
 			info->watch = watch;
-			info->is_shared_fd = false;
+			info->shared_fd = false;
 
 			if (!watch_stat(info)) {
 				watch_destroy(info);
@@ -359,7 +359,7 @@ bool monitor_add(monitor_t *monitor, watch_entry_t *watch) {
 		info->wd = existing_info->wd;
 		info->path = strdup(watch->path);
 		info->watch = watch;
-		info->is_shared_fd = true; /* Mark that this FD is shared */
+		info->shared_fd = true; /* Mark that this FD is shared */
 
 		if (!watch_stat(info)) {
 			watch_destroy(info);
@@ -372,7 +372,7 @@ bool monitor_add(monitor_t *monitor, watch_entry_t *watch) {
 		}
 
 		/* Update the existing info to also mark it as shared */
-		existing_info->is_shared_fd = true;
+		existing_info->shared_fd = true;
 
 		/* For directories with recursive monitoring, we still need to discover subdirectories */
 		if (watch->type == WATCH_DIRECTORY && watch->recursive) {
@@ -424,7 +424,7 @@ bool monitor_add(monitor_t *monitor, watch_entry_t *watch) {
 		info->wd = fd;
 		info->path = strdup(watch->path);
 		info->watch = watch;
-		info->is_shared_fd = false; /* Initially not shared */
+		info->shared_fd = false; /* Initially not shared */
 
 		if (!watch_stat(info)) {
 			watch_destroy(info);
@@ -824,7 +824,7 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 				log_message(DEBUG, "Path recreated: %s. Refreshing watch.", path);
 
 				/* Close old file descriptor if not shared */
-				if (!info->is_shared_fd && info->wd >= 0) {
+				if (!info->shared_fd && info->wd >= 0) {
 					close(info->wd);
 				}
 
@@ -846,7 +846,7 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 				info->wd = new_fd;
 				info->inode = st.st_ino;
 				info->device = st.st_dev;
-				info->is_shared_fd = false; /* It's a new FD */
+				info->shared_fd = false; /* It's a new FD */
 
 				/* Re-register with kqueue */
 				monitor_kqueue(monitor, info);

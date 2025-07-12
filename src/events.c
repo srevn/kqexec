@@ -241,7 +241,7 @@ static event_type_t flags_to_event_type(uint32_t flags) {
 	}
 
 	/* Modification events */
-	if (flags & (NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE)) {
+	if (flags & (NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE | NOTE_WRITE)) {
 		event |= EVENT_CONTENT;
 	}
 
@@ -487,6 +487,8 @@ bool events_process(monitor_t *monitor, watch_entry_t *watch, file_event_t *even
 
 		log_message(NOTICE, "Configuraion changed: %s", event->path);
 		if (monitor != NULL) {
+			/* Add 100ms delay to allow atomic save operations to complete */
+			usleep(100000);
 			monitor->reload_requested = true;
 			log_message(DEBUG, "Configuration reload requested");
 		} else {

@@ -92,21 +92,22 @@ hidden = false                # Whether to monitor hidden files/dirs (default: f
 Kqexec supports the following event types that can be specified in the configuration file:
 
 - `STRUCTURE`: Monitors directory structure changes
-  - Maps to NOTE_WRITE and NOTE_EXTEND in kqueue
+  - Maps to `NOTE_WRITE` and `NOTE_EXTEND` in kqueue
   - Most effective for directories, not files
   - Triggers when a file's content is modified within a directory
   - Triggers for creation, deletion, and renaming operations within a directory
   - Example: When items are added to or removed from a directory
 
 - `METADATA`: Monitors attribute changes for both files and directories
-  - Maps to NOTE_ATTRIB and NOTE_LINK in kqueue
+  - Maps to `NOTE_ATTRIB` and `NOTE_LINK` in kqueue
   - Works for both files and directories
   - Triggers when permissions, timestamps, or link counts change
   - Example: When `chmod` or `chown` is used on a file or directory
 
 - `CONTENT`: Monitors changes to file contents
-  - Maps to NOTE_DELETE, NOTE_RENAME, and NOTE_REVOKE in kqueue
+  - Maps to `NOTE_DELETE`, `NOTE_RENAME`, `NOTE_REVOKE`, and `NOTE_WRITE` in kqueue
   - Triggers when a file's content is modified
+  - Covers both atomic saves (modern editors) and in-place edits (nano, vi)
   - Example: When a text editor saves changes to a file
 
 - `ALL`: Monitors all event types (combination of all the above)
