@@ -9,3 +9,4 @@
 /src/command.o
 /src/logger.o
 /kqexec
+/src/events.o

@@ -17,6 +17,7 @@
 #include "states.h"
 #include "logger.h"
 #include "queue.h"
+#include "events.h"
 
 /* Maximum number of events to process at once */
 #define MAX_EVENTS 64
@@ -537,28 +538,6 @@ bool monitor_setup(monitor_t *monitor) {
 	return true;
 }
 
-/* Convert kqueue flags to event type bitmask */
-static event_type_t flags_to_event_type(uint32_t flags) {
-	event_type_t event = EVENT_NONE;
-
-	/* Content changes */
-	if (flags & (NOTE_WRITE | NOTE_EXTEND)) {
-		event |= EVENT_STRUCTURE;
-	}
-
-	/* Metadata changes */
-	if (flags & (NOTE_ATTRIB | NOTE_LINK)) {
-		event |= EVENT_METADATA;
-	}
-
-	/* Modification events */
-	if (flags & (NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE)) {
-		event |= EVENT_CONTENT;
-	}
-
-	return event;
-}
-
 /* Function to schedule a deferred directory check */
 void schedule_deferred_check(monitor_t *monitor, entity_state_t *state) {
 	if (!monitor || !state) {
@@ -628,41 +607,6 @@ void schedule_deferred_check(monitor_t *monitor, entity_state_t *state) {
 	            		root_state->dir_stats.file_count, root_state->dir_stats.dir_count);
 }
 
-
-/* Calculate timeout for the next delayed event */
-static int get_next_delayed_event_timeout(monitor_t *monitor, struct timespec *now) {
-	if (!monitor || !monitor->delayed_events || monitor->delayed_event_count == 0) {
-		return -1; /* No timeout needed */
-	}
-
-	struct timespec earliest = monitor->delayed_events[0].process_time;
-	for (int i = 1; i < monitor->delayed_event_count; i++) {
-		if (monitor->delayed_events[i].process_time.tv_sec < earliest.tv_sec ||
-		    (monitor->delayed_events[i].process_time.tv_sec == earliest.tv_sec &&
-		     monitor->delayed_events[i].process_time.tv_nsec < earliest.tv_nsec)) {
-			earliest = monitor->delayed_events[i].process_time;
-		}
-	}
-
-	/* Calculate timeout in milliseconds */
-	long timeout_ms;
-	if (now->tv_sec > earliest.tv_sec || (now->tv_sec == earliest.tv_sec && now->tv_nsec > earliest.tv_nsec)) {
-		timeout_ms = 0; /* Already overdue */
-	} else {
-		struct timespec diff;
-		diff.tv_sec = earliest.tv_sec - now->tv_sec;
-		if (earliest.tv_nsec >= now->tv_nsec) {
-			diff.tv_nsec = earliest.tv_nsec - now->tv_nsec;
-		} else {
-			diff.tv_sec--;
-			diff.tv_nsec = 1000000000 + earliest.tv_nsec - now->tv_nsec;
-		}
-		timeout_ms = diff.tv_sec * 1000 + diff.tv_nsec / 1000000;
-	}
-
-	return timeout_ms > 0 ? (int) timeout_ms : 0;
-}
-
 /* Process events from kqueue and handle commands */
 bool monitor_process_events(monitor_t *monitor) {
 	struct kevent events[MAX_EVENTS];
@@ -683,75 +627,10 @@ bool monitor_process_events(monitor_t *monitor) {
 	}
 
 	/* Calculate timeout based on pending deferred scans and delayed events */
-	memset(&timeout, 0, sizeof(timeout));
-	p_timeout = NULL;
-
 	struct timespec now_monotonic;
 	clock_gettime(CLOCK_MONOTONIC, &now_monotonic);
-
-	/* Get timeout for delayed events */
-	int delayed_timeout_ms = get_next_delayed_event_timeout(monitor, &now_monotonic);
-
-	/* Check if we have any pending deferred checks */
-	if (monitor->check_queue && monitor->check_queue->size > 0) {
-		/* Debug output for the queue status */
-		if (monitor->check_queue->items[0].path) {
-			log_message(DEBUG, "Deferred queue status: %d entries, next check for path %s",
-			        			monitor->check_queue->size, monitor->check_queue->items[0].path);
-		}
-
-		/* Get the earliest check time (top of min-heap) */
-		struct timespec next_check = monitor->check_queue->items[0].next_check;
-
-		/* Calculate relative timeout */
-		if (now_monotonic.tv_sec < next_check.tv_sec ||
-		    (now_monotonic.tv_sec == next_check.tv_sec &&
-		     now_monotonic.tv_nsec < next_check.tv_nsec)) {
-			/* Time until next check */
-			timeout.tv_sec = next_check.tv_sec - now_monotonic.tv_sec;
-			if (next_check.tv_nsec >= now_monotonic.tv_nsec) {
-				timeout.tv_nsec = next_check.tv_nsec - now_monotonic.tv_nsec;
-			} else {
-				timeout.tv_sec--;
-				timeout.tv_nsec = 1000000000 + next_check.tv_nsec - now_monotonic.tv_nsec;
-			}
-
-			/* Ensure sane values */
-			if (timeout.tv_sec < 0) {
-				timeout.tv_sec = 0;
-				timeout.tv_nsec = 50000000; /* 50ms minimum */
-			} else if (timeout.tv_sec == 0 && timeout.tv_nsec < 10000000) {
-				timeout.tv_nsec = 50000000; /* 50ms minimum */
-			}
-
-			p_timeout = &timeout;
-		} else {
-			/* Check time already passed, use minimal timeout */
-			timeout.tv_sec = 0;
-			timeout.tv_nsec = 10000000; /* 10ms */
-			p_timeout = &timeout;
-			log_message(DEBUG, "Deferred check overdue, using minimal timeout");
-		}
-	} else if (delayed_timeout_ms >= 0) {
-		/* No deferred checks, but we have delayed events */
-		timeout.tv_sec = delayed_timeout_ms / 1000;
-		timeout.tv_nsec = (delayed_timeout_ms % 1000) * 1000000;
-		p_timeout = &timeout;
-		log_message(DEBUG, "No deferred checks, timeout for delayed events: %d ms", delayed_timeout_ms);
-	} else {
-		log_message(DEBUG, "No pending directory activity or delayed events, waiting indefinitely");
-		p_timeout = NULL;
-	}
-
-	/* If we have both deferred checks and delayed events, use the shorter timeout */
-	if (p_timeout && delayed_timeout_ms >= 0) {
-		long current_timeout_ms = timeout.tv_sec * 1000 + timeout.tv_nsec / 1000000;
-		if (delayed_timeout_ms < current_timeout_ms) {
-			timeout.tv_sec = delayed_timeout_ms / 1000;
-			timeout.tv_nsec = (delayed_timeout_ms % 1000) * 1000000;
-			log_message(DEBUG, "Using shorter delayed event timeout: %d ms", delayed_timeout_ms);
-		}
-	}
+	
+	p_timeout = timeout_calculate(monitor, &timeout, &now_monotonic);
 
 	/* Wait for events */
 	nev = kevent(monitor->kq, NULL, 0, events, MAX_EVENTS, p_timeout);
@@ -773,47 +652,7 @@ bool monitor_process_events(monitor_t *monitor) {
 	/* Process new events */
 	if (nev > 0) {
 		log_message(DEBUG, "Processing %d new kqueue events", nev);
-		for (int i = 0; i < nev; i++) {
-		event_loop_start:; /* Label to restart the loop if watches array is modified */
-
-			/* Find all watches that use this file descriptor */
-			for (int j = 0; j < monitor->watch_count; j++) {
-				watch_info_t *info = monitor->watches[j];
-
-				if ((uintptr_t) info->wd == events[i].ident) {
-					file_event_t event;
-					memset(&event, 0, sizeof(event));
-					event.path = info->path;
-					event.type = flags_to_event_type(events[i].fflags);
-					event.time = after_kevent_time;
-					clock_gettime(CLOCK_REALTIME, &event.wall_time);
-					event.user_id = getuid();
-
-					entity_type_t entity_type = (info->watch->type == WATCH_FILE) ? ENTITY_FILE : ENTITY_DIRECTORY;
-
-					log_message(DEBUG, "Event: path=%s, flags=0x%x -> type=%s (watch: %s)",
-					        			info->path, events[i].fflags, event_type_to_string(event.type), info->watch->name);
-
-					/* Proactive validation for directory events on NOTE_WRITE */
-					if (info->watch->type == WATCH_DIRECTORY && (events[i].fflags & NOTE_WRITE)) {
-						log_message(DEBUG, "Write event on dir %s, validating and re-scanning.", info->path);
-						if (monitor_validate_and_refresh_path(monitor, info->path)) {
-							/* The watches array was modified, restart the event processing to use the new array */
-							goto event_loop_start;
-						}
-					}
-
-					/* Check if this watch has a processing delay configured */
-					if (info->watch->processing_delay > 0) {
-						/* Schedule the event for delayed processing */
-						schedule_delayed_event(monitor, info->watch, &event, entity_type);
-					} else {
-						/* Process the event immediately */
-						process_event(monitor, info->watch, &event, entity_type);
-					}
-				}
-			}
-		}
+		events_handle(monitor, events, nev, &after_kevent_time);
 	} else {
 		/* nev == 0 means timeout occurred */
 		if (p_timeout) {
@@ -828,7 +667,7 @@ bool monitor_process_events(monitor_t *monitor) {
 	stability_process_queue(monitor, &after_kevent_time);
 
 	/* Process delayed events */
-	process_delayed_events(monitor);
+	events_process(monitor);
 
 	/* Clean up expired command intents */
 	command_intent_cleanup_expired();
@@ -1088,92 +927,7 @@ bool monitor_validate_and_refresh_path(monitor_t *monitor, const char *path) {
 	return list_modified;
 }
 
-/* Schedule an event for delayed processing */
-void schedule_delayed_event(monitor_t *monitor, watch_entry_t *watch, file_event_t *event, entity_type_t entity_type) {
-	if (!monitor || !watch || !event || watch->processing_delay <= 0) {
-		return;
-	}
 
-	/* Expand delayed events array if needed */
-	if (monitor->delayed_event_count >= monitor->delayed_event_capacity) {
-		int new_capacity = monitor->delayed_event_capacity == 0 ? 16 : monitor->delayed_event_capacity * 2;
-		delayed_event_t *new_events = realloc(monitor->delayed_events, new_capacity * sizeof(delayed_event_t));
-		if (!new_events) {
-			log_message(ERROR, "Failed to allocate memory for delayed events");
-			return;
-		}
-		monitor->delayed_events = new_events;
-		monitor->delayed_event_capacity = new_capacity;
-	}
-
-	/* Calculate process time */
-	struct timespec process_time;
-	clock_gettime(CLOCK_MONOTONIC, &process_time);
-	process_time.tv_sec += watch->processing_delay / 1000;
-	process_time.tv_nsec += (watch->processing_delay % 1000) * 1000000;
-
-	/* Normalize nsec */
-	if (process_time.tv_nsec >= 1000000000) {
-		process_time.tv_sec++;
-		process_time.tv_nsec -= 1000000000;
-	}
-
-	/* Store the delayed event */
-	delayed_event_t *delayed = &monitor->delayed_events[monitor->delayed_event_count++];
-	delayed->event.path = strdup(event->path);
-	delayed->event.type = event->type;
-	delayed->event.time = event->time;
-	delayed->event.wall_time = event->wall_time;
-	delayed->event.user_id = event->user_id;
-	delayed->watch = watch;
-	delayed->entity_type = entity_type;
-	delayed->process_time = process_time;
-
-	log_message(DEBUG, "Scheduled delayed event for %s (watch: %s) in %d ms",
-	    				event->path, watch->name, watch->processing_delay);
-}
-
-/* Process delayed events that are ready */
-void process_delayed_events(monitor_t *monitor) {
-	if (!monitor || !monitor->delayed_events || monitor->delayed_event_count == 0) {
-		return;
-	}
-
-	struct timespec now;
-	clock_gettime(CLOCK_MONOTONIC, &now);
-
-	int processed = 0;
-	for (int i = 0; i < monitor->delayed_event_count; i++) {
-		delayed_event_t *delayed = &monitor->delayed_events[i];
-
-		/* Check if this event is ready to process */
-		if (now.tv_sec > delayed->process_time.tv_sec ||
-		    (now.tv_sec == delayed->process_time.tv_sec && now.tv_nsec >= delayed->process_time.tv_nsec)) {
-			log_message(DEBUG, "Processing delayed event for %s (watch: %s)",
-			            		delayed->event.path, delayed->watch->name);
-
-			/* Process the event */
-			process_event(monitor, delayed->watch, &delayed->event, delayed->entity_type);
-
-			/* Free the path string */
-			free(delayed->event.path);
-
-			/* Mark as processed */
-			processed++;
-
-			/* Move the last event to this position to avoid gaps */
-			if (i < monitor->delayed_event_count - 1) {
-				monitor->delayed_events[i] = monitor->delayed_events[monitor->delayed_event_count - 1];
-				i--; /* Reprocess this position */
-			}
-			monitor->delayed_event_count--;
-		}
-	}
-
-	if (processed > 0) {
-		log_message(DEBUG, "Processed %d delayed events", processed);
-	}
-}
 
 /* Stop the monitor by setting the running flag to false */
 void monitor_stop(monitor_t *monitor) {

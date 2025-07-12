@@ -28,6 +28,7 @@ endif
 # Source files
 SRCS = src/main.c \
 	   src/queue.c \
+	   src/events.c \
 	   src/config.c \
 	   src/monitor.c \
 	   src/stability.c \
