@@ -596,8 +596,19 @@ static void flush_output_buffer(const watch_entry_t *watch, char **buffer, int c
 	}
 }
 
-/* Synchronous command execution with robust output capture */
-bool command_execute_sync(const watch_entry_t *watch, const file_event_t *event) {
+/* Command execution synchronous or asynchronous */
+bool command_execute(const watch_entry_t *watch, const file_event_t *event, bool synchronous) {
+	if (watch == NULL || event == NULL) {
+		thread_safe_log(ERROR, "Invalid arguments to command_execute");
+		return false;
+	}
+
+	/* For asynchronous execution, delegate to thread pool */
+	if (!synchronous) {
+		return thread_pool_submit(watch, event);
+	}
+
+	/* Synchronous execution with robust output capture */
 	pid_t pid;
 	char *command;
 	int stdout_pipe[2] = {-1, -1}, stderr_pipe[2] = {-1, -1};
@@ -609,11 +620,6 @@ bool command_execute_sync(const watch_entry_t *watch, const file_event_t *event)
 	char **output_buffer = NULL;
 	int output_count = 0;
 	int output_capacity = 0;
-
-	if (watch == NULL || event == NULL) {
-		thread_safe_log(ERROR, "Invalid arguments to command_execute_sync_internal");
-		return false;
-	}
 
 	/* Handle special config reload command */
 	if (strcmp(watch->command, "__config_reload__") == 0) {
@@ -812,7 +818,7 @@ bool command_execute_sync(const watch_entry_t *watch, const file_event_t *event)
 
 	/* Log command completion */
 	thread_safe_log(INFO, "[%s] Finished execution (pid %d, duration: %lds, exit: %d)",
-	            					watch->name, pid, end_time - start_time, WEXITSTATUS(status));
+	        			   watch->name, pid, end_time - start_time, WEXITSTATUS(status));
 
 	/* Mark the entity state with the command execution */
 	entity_state_t *state = states_get(event->path, ENTITY_UNKNOWN, (watch_entry_t *) watch);
@@ -822,11 +828,6 @@ bool command_execute_sync(const watch_entry_t *watch, const file_event_t *event)
 
 	free(command);
 	return true;
-}
-
-/* Command execution using thread pool */
-bool command_execute(const watch_entry_t *watch, const file_event_t *event) {
-	return thread_pool_submit(watch, event);
 }
 
 /* Clean up command subsystem */

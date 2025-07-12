@@ -96,7 +96,7 @@ static void *worker_thread(void *arg) {
 
 		/* Execute the command */
 		if (item) {
-			command_execute_sync(item->watch, item->event);
+			command_execute(item->watch, item->event, true);
 
 			/* Clean up work item */
 			free_watch_entry(item->watch);
@@ -258,7 +258,7 @@ bool thread_pool_submit(const watch_entry_t *watch, const file_event_t *event) {
 	pthread_mutex_unlock(&g_thread_pool->queue_mutex);
 
 	thread_safe_log(DEBUG, "Submitted command execution for %s to thread pool (queue size: %d)",
-	                event->path, g_thread_pool->queue_size);
+	    					event->path, g_thread_pool->queue_size);
 
 	return true;
 }

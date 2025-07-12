@@ -474,7 +474,7 @@ bool stability_execute(monitor_t *monitor, deferred_check_t *entry, entity_state
 		/* Execute command */
 		log_message(INFO, "Executing deferred command for %s (watch: %s)", entry->path, watch->name);
 
-		if (command_execute(watch, &synthetic_event)) {
+		if (command_execute(watch, &synthetic_event, false)) {
 			commands_executed++;
 
 			/* Update last command time for this specific watch */

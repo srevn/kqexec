@@ -541,7 +541,7 @@ bool event_process(monitor_t *monitor, watch_entry_t *watch, file_event_t *event
 		log_message(INFO, "Executing command for %s (watch: %s, operation: %d)",
 		    			   state->path_state->path, watch->name, op);
 
-		if (command_execute(watch, &synthetic_event)) {
+		if (command_execute(watch, &synthetic_event, false)) {
 			log_message(INFO, "Command execution successful for %s", state->path_state->path);
 
 			/* Update last command time and reset change flags */
