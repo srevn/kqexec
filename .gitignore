@@ -2,6 +2,7 @@
 /src/queue.o
 /src/states.o
 /src/monitor.o
+/src/stability.o
 /src/threads.o
 /src/daemon.o
 /src/config.o

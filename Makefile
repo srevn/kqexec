@@ -30,6 +30,7 @@ SRCS = src/main.c \
 	   src/queue.c \
 	   src/config.c \
 	   src/monitor.c \
+	   src/stability.c \
 	   src/command.c \
 	   src/threads.c \
 	   src/states.c \

@@ -68,6 +68,7 @@ void monitor_stop(monitor_t *monitor);
 bool monitor_reload(monitor_t *monitor);
 void monitor_request_reload(monitor_t *monitor);
 bool monitor_add_watch(monitor_t *monitor, watch_entry_t *watch);
+bool monitor_add_dir_recursive(monitor_t *monitor, const char *dir_path, watch_entry_t *watch);
 bool monitor_process_events(monitor_t *monitor);
 void schedule_deferred_check(monitor_t *monitor, entity_state_t *state);
 void schedule_delayed_event(monitor_t *monitor, watch_entry_t *watch, file_event_t *event, entity_type_t entity_type);
