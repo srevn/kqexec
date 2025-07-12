@@ -674,7 +674,7 @@ static long scanner_backoff(entity_state_t *state, long required_ms) {
 
 	/* Increase backoff factor for repeated instability */
 	for (int i = 1; i < state->instability_count; i++) {
-		backoff_factor *= 1.5;
+		backoff_factor *= 1.25;
 	}
 
 	/* Apply a cap to the backoff factor to prevent excessive delays */
@@ -692,7 +692,7 @@ static long scanner_backoff(entity_state_t *state, long required_ms) {
 static long scanner_limit_period(entity_state_t *state, long required_ms) {
 	/* Set reasonable limits */
 	if (required_ms < 10) required_ms = 10;
-	if (required_ms > 10000) required_ms = 10000; /* Cap at 10 seconds */
+	if (required_ms > 15000) required_ms = 15000; /* Cap at 15 seconds */
 
 	/* Apply complexity multiplier from watch config */
 	if (state->watch && state->watch->complexity > 0) {
