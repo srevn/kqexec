@@ -34,7 +34,7 @@ bool states_corrupted(const entity_state_t *state) {
 	
 	if (state->magic != ENTITY_STATE_MAGIC) {
 		log_message(WARNING, "Entity state corruption detected: magic=0x%x, expected=0x%x",
-					state->magic, ENTITY_STATE_MAGIC);
+							  state->magic, ENTITY_STATE_MAGIC);
 		return true;
 	}
 	return false;
@@ -260,7 +260,7 @@ entity_state_t *states_get(const char *path, entity_type_t type, watch_entry_t *
 	/* If an existing state for this path was found, copy its stats */
 	if (existing_state_for_path) {
 		log_message(DEBUG, "Copying stats from existing state for path %s (watch: %s)",
-		            path, existing_state_for_path->watch->name);
+		        			path, existing_state_for_path->watch->name);
 		copy_state(state, existing_state_for_path);
 	} else {
 		/* This is the first state for this path, initialize stats from scratch */
@@ -277,13 +277,11 @@ entity_state_t *states_get(const char *path, entity_type_t type, watch_entry_t *
 				state->prev_stats = state->dir_stats;
 				state->reference_stats = state->dir_stats;
 				state->reference_init = true;
-				log_message(DEBUG,
-				            "Initialized directory stats for %s: files=%d, dirs=%d, depth=%d, size=%.2f MB",
-				            path, state->dir_stats.file_count, state->dir_stats.dir_count,
-				            state->dir_stats.depth, state->dir_stats.total_size / (1024.0 * 1024.0));
+				log_message(DEBUG, "Initialized directory stats for %s: files=%d, dirs=%d, depth=%d, size=%.2f MB",
+				        			path, state->dir_stats.file_count, state->dir_stats.dir_count,
+				        			state->dir_stats.depth, state->dir_stats.total_size / (1024.0 * 1024.0));
 			} else {
-				log_message(WARNING,
-				            "Failed to gather initial stats for directory: %s", path);
+				log_message(WARNING, "Failed to gather initial stats for directory: %s", path);
 			}
 		}
 	}
@@ -367,7 +365,7 @@ void states_prune(config_t *new_config) {
 
 				if (is_orphaned) {
 					log_message(DEBUG, "Removing orphaned state for path %s (watch %s)",
-					            state->path_state->path, state->watch ? state->watch->name : "<unknown>");
+					        			state->path_state->path, state->watch ? state->watch->name : "<unknown>");
 
 					entity_state_t *to_free = state;
 					if (prev_state) {

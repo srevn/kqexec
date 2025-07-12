@@ -10,12 +10,6 @@
 /* Maximum line length in config file */
 #define MAX_LINE_LEN 1024
 
-/* Configuration file section parsing state */
-typedef enum {
-	SECTION_NONE,
-	SECTION_ENTRY
-} section_state_t;
-
 /* Trim whitespace from a string */
 static char *trim(char *str) {
 	if (str == NULL) {

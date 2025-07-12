@@ -8,23 +8,23 @@
 
 /* Deferred directory check queue entry */
 typedef struct {
-	char *path;                      /* Path to the watched directory (unique key) */
-	struct timespec next_check;      /* When this directory needs checking */
-	watch_entry_t **watches;         /* Array of watches for this path */
-	int watch_count;                 /* Number of watches for this path */
-	int watch_capacity;              /* Allocated capacity for watches array */
+	char *path;                            /* Path to the watched directory (unique key) */
+	struct timespec next_check;            /* When this directory needs checking */
+	watch_entry_t **watches;               /* Array of watches for this path */
+	int watch_count;                       /* Number of watches for this path */
+	int watch_capacity;                    /* Allocated capacity for watches array */
 } deferred_check_t;
 
 /* Deferred check queue structure */
 typedef struct {
-	deferred_check_t *items;         /* Min-heap of deferred checks */
-	int size;                        /* Current number of entries */
-	int capacity;                    /* Allocated capacity */
+	deferred_check_t *items;               /* Min-heap of deferred checks */
+	int size;                              /* Current number of entries */
+	int capacity;                          /* Allocated capacity */
 } defer_queue_t;
 
 /* Function prototypes */
 bool queue_watch_add(deferred_check_t *entry, watch_entry_t *watch);
-defer_queue_t* queue_create(int initial_capacity);
+defer_queue_t *queue_create(int initial_capacity);
 void queue_destroy(defer_queue_t *queue);
 int time_compare(struct timespec *a, struct timespec *b);
 void heap_up(deferred_check_t *queue, int index);

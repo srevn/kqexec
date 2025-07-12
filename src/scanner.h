@@ -12,23 +12,23 @@ typedef struct entity_state entity_state_t;
 typedef struct path_state path_state_t;
 
 /* Activity window size for detecting quiet periods (in milliseconds) */
-#define QUIET_PERIOD_MS 500              /* Default quiet period */
-#define DIR_QUIET_PERIOD_MS 1000         /* Longer quiet period for directory operations */
+#define QUIET_PERIOD_MS 500                /* Default quiet period */
+#define DIR_QUIET_PERIOD_MS 1000           /* Longer quiet period for directory operations */
 
 /* Directory statistics for stability verification */
 typedef struct {
-    int depth;                           /* Directory tree depth */
-    int file_count;                      /* Number of files in the directory */
-    int dir_count;                       /* Number of subdirectories */
-    size_t total_size;                   /* Total size of files in the directory */
-    time_t last_mtime;                   /* Latest modification time */
-    bool has_temps;                      /* Flag for temporary files */
-    
-    /* Recursive stats */
-    int max_depth;                       /* Maximum depth reached from this dir */
-    int tree_files;                      /* Total number of files in this dir and all subdirs */
-    int tree_dirs;                       /* Total number of dirs in this dir and all subdirs */
-    size_t tree_size;                    /* Total size of all files in tree */
+	int depth;                             /* Directory tree depth */
+	int file_count;                        /* Number of files in the directory */
+	int dir_count;                         /* Number of subdirectories */
+	size_t total_size;                     /* Total size of files in the directory */
+	time_t last_mtime;                     /* Latest modification time */
+	bool has_temps;                        /* Flag for temporary files */
+
+	/* Recursive stats */
+	int max_depth;                         /* Maximum depth reached from this dir */
+	int tree_files;                        /* Total number of files in this dir and all subdirs */
+	int tree_dirs;                         /* Total number of dirs in this dir and all subdirs */
+	size_t tree_size;                      /* Total size of all files in tree */
 } dir_stats_t;
 
 /* Directory statistics and scanning */

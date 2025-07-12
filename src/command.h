@@ -7,18 +7,18 @@
 #include "monitor.h"
 
 /* Command execution configuration */
-#define DEFAULT_DEBOUNCE_TIME_MS 500    /* Default debounce time in milliseconds */
-#define MAX_AFFECTED_PATHS 32           /* Maximum number of paths affected by a command */
-#define MAX_AFFECTED_PATH_LEN 1024      /* Maximum length of an affected path */
+#define DEFAULT_DEBOUNCE_TIME_MS 500       /* Default debounce time in milliseconds */
+#define MAX_AFFECTED_PATHS 32              /* Maximum number of paths affected by a command */
+#define MAX_AFFECTED_PATH_LEN 1024         /* Maximum length of an affected path */
 
 /* Command intent tracking structure */
 typedef struct {
-	pid_t command_pid;                  /* Process ID of the executed command */
-	time_t start_time;                  /* When the command started */
-	time_t expected_end_time;           /* Estimated completion time */
-	char **affected_paths;              /* Paths that will be affected by this command */
-	int affected_path_count;            /* Number of affected paths */
-	bool active;                        /* Whether this intent is still active */
+	pid_t command_pid;                     /* Process ID of the executed command */
+	time_t start_time;                     /* When the command started */
+	time_t expected_end_time;              /* Estimated completion time */
+	char **affected_paths;                 /* Paths that will be affected by this command */
+	int affected_path_count;               /* Number of affected paths */
+	bool active;                           /* Whether this intent is still active */
 } command_intent_t;
 
 /* Function prototypes */

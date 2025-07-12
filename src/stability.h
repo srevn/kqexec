@@ -8,9 +8,9 @@
 
 /* Scan failure handling */
 typedef enum {
-    SCAN_FAILURE_DIRECTORY_DELETED,
-    SCAN_FAILURE_TEMPORARY_ERROR,
-    SCAN_FAILURE_MAX_ATTEMPTS_REACHED
+    SCAN_FAILURE_DIRECTORY_DELETED,        /* Directory was deleted during scan */
+    SCAN_FAILURE_TEMPORARY_ERROR,          /* Scan failed for other reasons (e.g., temp files) */
+    SCAN_FAILURE_MAX_ATTEMPTS_REACHED      /* Maximum attempts reached without success */
 } scan_failure_type_t;
 
 /* Main stability processing function */
