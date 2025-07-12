@@ -23,13 +23,6 @@ typedef struct file_event file_event_t;
 /* Magic number for entity state corruption detection */
 #define ENTITY_STATE_MAGIC 0x4B514558    /* "KQEX" */
 
-/* Entity type for clarity in handling */
-typedef enum {
-    ENTITY_UNKNOWN,                      /* Unknown type, to be determined */
-    ENTITY_FILE,                         /* Regular file */
-    ENTITY_DIRECTORY,                    /* Directory */
-} entity_type_t;
-
 /* Forward declaration for path_state */
 struct path_state;
 
@@ -99,10 +92,6 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 entity_state_t *find_root_state(entity_state_t *state);
 void update_entity_states_after_reload(config_t *new_config);
 void cleanup_orphaned_entity_states(config_t *new_config);
-
-/* Event to operation translation */
-operation_type_t determine_operation(entity_state_t *state, event_type_t new_event_type);
-event_type_t operation_to_event_type(operation_type_t op);
-bool process_event(monitor_t *monitor, watch_entry_t *watch, file_event_t *event, entity_type_t entity_type);
+bool should_execute_command(monitor_t *monitor, entity_state_t *state, operation_type_t op, int debounce_ms);
 
 #endif /* STATES_H */

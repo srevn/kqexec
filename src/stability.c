@@ -5,12 +5,12 @@
 #include <sys/stat.h>
 
 #include "monitor.h"
+#include "scanner.h"
 #include "stability.h"
 #include "states.h"
 #include "logger.h"
 #include "command.h"
 #include "queue.h"
-#include "scanner.h"
 
 /* Maximum allowed failures before giving up */
 #define MAX_FAILED_CHECKS 3
