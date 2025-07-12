@@ -46,6 +46,65 @@ void event_queue_destroy(event_queue_t *queue) {
 	free(queue);
 }
 
+/* Initialize a sync request structure */
+void sync_request_init(sync_request_t *sync_request) {
+	if (!sync_request) return;
+	sync_request->paths = NULL;
+	sync_request->count = 0;
+	sync_request->capacity = 0;
+}
+
+/* Add a path to the sync request */
+bool sync_request_add(sync_request_t *sync_request, const char *path) {
+	if (!sync_request || !path) return false;
+	
+	/* Check if path already exists to avoid duplicates */
+	for (int i = 0; i < sync_request->count; i++) {
+		if (strcmp(sync_request->paths[i], path) == 0) {
+			return true; /* Already exists, no need to add */
+		}
+	}
+	
+	/* Expand array if needed */
+	if (sync_request->count >= sync_request->capacity) {
+		int new_capacity = sync_request->capacity == 0 ? 4 : sync_request->capacity * 2;
+		char **new_paths = realloc(sync_request->paths, new_capacity * sizeof(char *));
+		if (!new_paths) {
+			log_message(ERROR, "Failed to allocate memory for sync request paths");
+			return false;
+		}
+		sync_request->paths = new_paths;
+		sync_request->capacity = new_capacity;
+	}
+	
+	/* Add the path */
+	sync_request->paths[sync_request->count] = strdup(path);
+	if (!sync_request->paths[sync_request->count]) {
+		log_message(ERROR, "Failed to duplicate path for sync request: %s", path);
+		return false;
+	}
+	sync_request->count++;
+	
+	log_message(DEBUG, "Added path to sync request: %s", path);
+	return true;
+}
+
+/* Clean up a sync request structure */
+void sync_request_cleanup(sync_request_t *sync_request) {
+	if (!sync_request) return;
+	
+	if (sync_request->paths) {
+		for (int i = 0; i < sync_request->count; i++) {
+			free(sync_request->paths[i]);
+		}
+		free(sync_request->paths);
+	}
+	
+	sync_request->paths = NULL;
+	sync_request->count = 0;
+	sync_request->capacity = 0;
+}
+
 /* Schedule an event for delayed processing */
 void events_schedule(monitor_t *monitor, watch_entry_t *watch, file_event_t *event, entity_type_t entity_type) {
 	if (!monitor || !watch || !event || watch->processing_delay <= 0) {
@@ -190,15 +249,13 @@ static event_type_t flags_to_event_type(uint32_t flags) {
 }
 
 /* Handle kqueue events */
-bool events_handle(monitor_t *monitor, struct kevent *events, int count, struct timespec *time) {
+bool events_handle(monitor_t *monitor, struct kevent *events, int count, struct timespec *time, sync_request_t *sync_request) {
 	if (!monitor || !events || count <= 0) {
 		return false;
 	}
 
 	/* Process new events */
 	for (int i = 0; i < count; i++) {
-	event_loop_start:; /* Label to restart the loop if watches array is modified */
-
 		/* Find all watches that use this file descriptor */
 		for (int j = 0; j < monitor->watch_count; j++) {
 			watch_info_t *info = monitor->watches[j];
@@ -219,10 +276,9 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int count, struct 
 
 				/* Proactive validation for directory events on NOTE_WRITE */
 				if (info->watch->type == WATCH_DIRECTORY && (events[i].fflags & NOTE_WRITE)) {
-					log_message(DEBUG, "Write event on dir %s, validating and re-scanning.", info->path);
-					if (monitor_sync(monitor, info->path)) {
-						/* The watches array was modified, restart the event processing to use the new array */
-						goto event_loop_start;
+					log_message(DEBUG, "Write event on dir %s, requesting sync validation.", info->path);
+					if (sync_request) {
+						sync_request_add(sync_request, info->path);
 					}
 				}
 

@@ -584,7 +584,25 @@ bool monitor_poll(monitor_t *monitor) {
 	/* Process new events */
 	if (nev > 0) {
 		log_message(DEBUG, "Processing %d new kqueue events", nev);
-		events_handle(monitor, events, nev, &after_kevent_time);
+		
+		/* Initialize sync request for collecting paths that need validation */
+		sync_request_t sync_request;
+		sync_request_init(&sync_request);
+		
+		/* Process events and collect sync requests */
+		events_handle(monitor, events, nev, &after_kevent_time, &sync_request);
+		
+		/* Handle any sync requests */
+		if (sync_request.count > 0) {
+			log_message(DEBUG, "Processing %d sync requests", sync_request.count);
+			for (int i = 0; i < sync_request.count; i++) {
+				log_message(DEBUG, "Syncing path: %s", sync_request.paths[i]);
+				monitor_sync(monitor, sync_request.paths[i]);
+			}
+		}
+		
+		/* Clean up sync request */
+		sync_request_cleanup(&sync_request);
 	} else {
 		/* nev == 0 means timeout occurred */
 		if (p_timeout) {

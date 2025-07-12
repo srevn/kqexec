@@ -9,7 +9,6 @@
 #include "config.h"
 #include "scanner.h"
 #include "events.h"
-#include "monitor.h"
 
 /* Hash table size for storing path states */
 #define PATH_HASH_SIZE 1024
