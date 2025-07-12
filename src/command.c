@@ -16,6 +16,7 @@
 #include "command.h"
 #include "threads.h"
 #include "states.h"
+#include "stability.h"
 #include "logger.h"
 
 /* Maximum length of command */
@@ -510,7 +511,7 @@ char *command_substitute_placeholders(const watch_entry_t *watch, const char *co
 	if (strstr(result, "%f") || strstr(result, "%F")) {
 		const char *trigger_file_path = event->path; /* Default to event path */
 		if (state) {
-			entity_state_t *root_state = find_root_state(state);
+			entity_state_t *root_state = stability_get_root(state);
 			if (root_state && root_state->trigger_file_path) {
 				trigger_file_path = root_state->trigger_file_path;
 			}

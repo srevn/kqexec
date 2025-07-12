@@ -2,12 +2,9 @@
 #define SCANNER_H
 
 #include <stdbool.h>
-#include <stdint.h>
-#include <time.h>
 #include <sys/types.h>
 
 #include "events.h"
-#include "config.h"
 
 /* Forward declarations */
 struct monitor;

@@ -2,10 +2,8 @@
 #define MONITOR_H
 
 #include <stdbool.h>
-#include <stdint.h>
 
 #include "queue.h"
-#include "states.h"
 #include "config.h"
 #include "events.h"
 
@@ -43,7 +41,6 @@ typedef struct monitor {
 	int delayed_event_capacity;      /* Allocated capacity */
 } monitor_t;
 
-
 /* Function prototypes */
 monitor_t *monitor_create(config_t *config);
 void monitor_destroy(monitor_t *monitor);
@@ -55,7 +52,6 @@ void monitor_request_reload(monitor_t *monitor);
 bool monitor_add_watch(monitor_t *monitor, watch_entry_t *watch);
 bool monitor_add_dir_recursive(monitor_t *monitor, const char *dir_path, watch_entry_t *watch);
 bool monitor_process_events(monitor_t *monitor);
-void schedule_deferred_check(monitor_t *monitor, entity_state_t *state);
 bool monitor_validate_and_refresh_path(monitor_t *monitor, const char *path);
 bool monitor_remove_stale_subdirectory_watches(monitor_t *monitor, const char *parent_path);
 

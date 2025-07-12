@@ -13,6 +13,7 @@
 #include "states.h"
 #include "scanner.h"
 #include "command.h"
+#include "stability.h"
 #include "logger.h"
 #include "monitor.h"
 
@@ -140,22 +141,6 @@ static void init_activity_tracking(entity_state_t *state, watch_entry_t *watch) 
 }
 
 /* Find the state corresponding to the root path of a watch */
-entity_state_t *find_root_state(entity_state_t *state) {
-	if (!state || !state->watch || !state->watch->path || !state->path_state) {
-		if (state && state->path_state) {
-			log_message(WARNING, "Invalid watch info for state %s", state->path_state->path);
-		}
-		return NULL;
-	}
-
-	/* If current state is already the root, return it */
-	if (strcmp(state->path_state->path, state->watch->path) == 0) {
-		return state;
-	}
-
-	/* Otherwise, get the state for the watch path */
-	return get_entity_state(state->watch->path, ENTITY_DIRECTORY, state->watch);
-}
 
 /* Copies all directory-related statistics and tracking fields from a source to a destination state. */
 static void _copy_directory_tracking_state(entity_state_t *dest, const entity_state_t *src) {
@@ -318,67 +303,6 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 
 
 /* Check if a command should be executed for a given operation */
-bool should_execute_command(monitor_t *monitor, entity_state_t *state, operation_type_t op, int default_debounce_ms) {
-	if (!state) return false;
-
-	struct timespec now;
-	clock_gettime(CLOCK_MONOTONIC, &now);
-
-	/* Record activity (updates timestamps and root tree time) */
-	scanner_record_activity(state, op);
-
-	/* Directory content changes always defer execution to process_deferred_dir_scans */
-	if (op == OP_DIR_CONTENT_CHANGED) {
-		entity_state_t *root = find_root_state(state);
-		if (root && monitor) {
-			/* Always trigger a deferred check; queue deduplicates */
-			root->activity_in_progress = true;
-			log_message(DEBUG, "Directory content change for %s, marked root %s as active - command deferred",
-			            state->path_state->path, root->path_state->path);
-			scanner_synchronize_activity_states(root->path_state, root);
-
-			if (!root) {
-				return false;
-			}
-
-			schedule_deferred_check(monitor, root);
-			log_message(DEBUG, "Added directory %s to deferred check queue", root->path_state->path);
-		}
-		return false; /* Decision happens later in process_deferred_dir_scans */
-	}
-
-	/* Standard time-based debounce for non-directory-content operations */
-	long elapsed_ms_since_command = (now.tv_sec - state->last_command_time) * 1000;
-
-	/* Adjust debounce based on operation type */
-	int debounce_ms = default_debounce_ms;
-	switch (op) {
-		case OP_FILE_DELETED:
-		case OP_DIR_DELETED:
-		case OP_FILE_CREATED:
-		case OP_DIR_CREATED:
-			debounce_ms = default_debounce_ms > 0 ? default_debounce_ms / 4 : 0; /* Shorter debounce */
-			break;
-		case OP_FILE_CONTENT_CHANGED:
-			debounce_ms = default_debounce_ms > 0 ? default_debounce_ms / 2 : 0; /* Medium debounce */
-			break;
-		default: /* METADATA, RENAME etc. use default */
-			break;
-	}
-	if (debounce_ms < 0) debounce_ms = 0;
-
-	log_message(DEBUG, "Debounce check for %s: %ld ms elapsed, %d ms required",
-	            state->path_state->path, elapsed_ms_since_command, debounce_ms);
-
-	/* Check if enough time has passed or if it's the first command */
-	if (elapsed_ms_since_command >= debounce_ms || state->last_command_time == 0) {
-		log_message(DEBUG, "Debounce check passed for %s, command allowed", state->path_state->path);
-		return true;
-	}
-
-	log_message(DEBUG, "Command execution debounced for %s", state->path_state->path);
-	return false;
-}
 
 
 /* Update entity states with new watch pointers after config reload */

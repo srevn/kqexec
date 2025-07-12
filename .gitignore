@@ -1,12 +1,13 @@
 /src/main.o
 /src/queue.o
+/src/events.o
 /src/states.o
+/src/daemon.o
 /src/monitor.o
+/src/scanner.o
 /src/stability.o
 /src/threads.o
-/src/daemon.o
 /src/config.o
 /src/command.o
 /src/logger.o
 /kqexec
-/src/events.o

@@ -89,9 +89,7 @@ bool entity_state_init(void);
 void entity_state_cleanup(void);
 bool is_entity_state_corrupted(const entity_state_t *state);
 entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_entry_t *watch);
-entity_state_t *find_root_state(entity_state_t *state);
 void update_entity_states_after_reload(config_t *new_config);
 void cleanup_orphaned_entity_states(config_t *new_config);
-bool should_execute_command(monitor_t *monitor, entity_state_t *state, operation_type_t op, int debounce_ms);
 
 #endif /* STATES_H */

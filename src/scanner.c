@@ -12,7 +12,7 @@
 
 #include "scanner.h"
 #include "states.h"
-#include "command.h"
+#include "stability.h"
 #include "logger.h"
 #include "monitor.h"
 
@@ -536,7 +536,7 @@ static void propagate_activity_to_parents(entity_state_t *state, entity_state_t 
 /* Handle activity recording for recursive watches */
 static void handle_recursive_watch_activity(entity_state_t *state, operation_type_t op) {
 	/* First, find the root state */
-	entity_state_t *root = find_root_state(state);
+	entity_state_t *root = stability_get_root(state);
 	if (root) {
 		/* Update the root's tree activity time and path */
 		root->last_activity_in_tree = state->last_update;
@@ -771,7 +771,7 @@ bool scanner_is_quiet_period_elapsed(entity_state_t *state, struct timespec *now
 	/* Determine which timestamp to check against */
 	if (state->type == ENTITY_DIRECTORY && state->watch && state->watch->recursive) {
 		/* For recursive directory watches, always check the root's tree time */
-		entity_state_t *root = find_root_state(state);
+		entity_state_t *root = stability_get_root(state);
 		if (root) {
 			last_activity_ts = &root->last_activity_in_tree;
 			time_source_path = root->path_state->path;

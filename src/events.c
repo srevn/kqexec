@@ -12,6 +12,7 @@
 #include "logger.h"
 #include "command.h"
 #include "states.h"
+#include "stability.h"
 #include "scanner.h"
 
 /* Create a new event queue */
@@ -472,7 +473,7 @@ bool process_event(monitor_t *monitor, watch_entry_t *watch, file_event_t *event
 	}
 
 	/* Check debounce/deferral logic */
-	if (should_execute_command(monitor, state, op, command_get_debounce_time())) {
+	if (stability_can_execute(monitor, state, op, command_get_debounce_time())) {
 		/* Execute command immediately (only for non-directory-content changes) */
 		file_event_t synthetic_event = {
 			.path = state->path_state->path,
