@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "queue.h"
 #include "states.h"
 #include "config.h"
 
@@ -21,15 +22,6 @@ typedef struct {
 	time_t last_validation;         /* Last time this path was validated */
 } watch_info_t;
 
-/* Deferred directory check queue entry */
-typedef struct {
-	char *path;                      /* Path to the watched directory (unique key) */
-	struct timespec next_check;      /* When this directory needs checking */
-	watch_entry_t **watches;         /* Array of watches for this path */
-	int watch_count;                 /* Number of watches for this path */
-	int watch_capacity;              /* Allocated capacity for watches array */
-} deferred_check_t;
-
 /* Structure to hold monitoring context */
 typedef struct monitor {
 	int kq;                          /* Kqueue descriptor */
@@ -42,9 +34,7 @@ typedef struct monitor {
 	char *config_file;               /* Copy of config file path for reloading */
 	
 	/* Priority queue for deferred directory checks */
-	deferred_check_t *check_queue;   /* Min-heap of deferred checks */
-	int check_queue_size;            /* Current number of entries */
-	int check_queue_capacity;        /* Allocated capacity */
+	defer_queue_t *check_queue;      /* Deferred checks queue */
 	
 	/* Queue for delayed event processing */
 	struct delayed_event *delayed_events; /* Array of delayed events */

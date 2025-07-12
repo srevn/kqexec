@@ -15,6 +15,7 @@
 #include "command.h"
 #include "states.h"
 #include "logger.h"
+#include "queue.h"
 
 /* Maximum number of events to process at once */
 #define MAX_EVENTS 64
@@ -24,367 +25,6 @@
 
 /* Define max allowed failures before giving up */
 #define MAX_FAILED_CHECKS 3
-
-/* Add a watch to a queue entry */
-static bool check_queue_add_watch(deferred_check_t *entry, watch_entry_t *watch) {
-	if (!entry || !watch) {
-		log_message(LOG_LEVEL_ERR, "Invalid parameters for check_queue_add_watch");
-		return false;
-	}
-
-	/* Check if this watch is already in the array */
-	for (int i = 0; i < entry->watch_count; i++) {
-		if (entry->watches && entry->watches[i] == watch) {
-			return true; /* Already present */
-		}
-	}
-
-	/* Ensure capacity */
-	if (entry->watch_count >= entry->watch_capacity) {
-		int new_capacity = entry->watch_capacity == 0 ? 4 : entry->watch_capacity * 2;
-		watch_entry_t **new_watches = realloc(entry->watches,
-		                                      new_capacity * sizeof(watch_entry_t *));
-		if (!new_watches) {
-			log_message(LOG_LEVEL_ERR, "Failed to resize watches array in queue entry");
-			return false;
-		}
-		entry->watches = new_watches;
-		entry->watch_capacity = new_capacity;
-
-		/* Zero out new memory */
-		if (entry->watch_count < new_capacity) {
-			memset(&entry->watches[entry->watch_count], 0,
-			       (new_capacity - entry->watch_count) * sizeof(watch_entry_t *));
-		}
-	}
-
-	/* Add the new watch */
-	entry->watches[entry->watch_count++] = watch;
-	return true;
-}
-
-/* Cleanup the priority queue */
-static void check_queue_cleanup(monitor_t *monitor) {
-	if (!monitor || !monitor->check_queue) return;
-
-	/* Free path strings and watch arrays */
-	for (int i = 0; i < monitor->check_queue_size; i++) {
-		if (monitor->check_queue[i].path) {
-			free(monitor->check_queue[i].path);
-			monitor->check_queue[i].path = NULL;
-		}
-		if (monitor->check_queue[i].watches) {
-			free(monitor->check_queue[i].watches);
-			monitor->check_queue[i].watches = NULL;
-		}
-
-		/* Clear the struct to prevent double-free issues */
-		memset(&monitor->check_queue[i], 0, sizeof(deferred_check_t));
-	}
-
-	free(monitor->check_queue);
-	monitor->check_queue = NULL;
-	monitor->check_queue_size = 0;
-	monitor->check_queue_capacity = 0;
-
-	log_message(LOG_LEVEL_DEBUG, "Cleaned up deferred check queue");
-}
-
-/* Initialize the priority queue */
-static void check_queue_init(monitor_t *monitor, int initial_capacity) {
-	if (!monitor) {
-		return;
-	}
-
-	if (initial_capacity < 8) initial_capacity = 8;
-
-	/* Make sure we're starting with a clean state */
-	if (monitor->check_queue) {
-		check_queue_cleanup(monitor);
-	}
-
-	monitor->check_queue = NULL;
-	monitor->check_queue_size = 0;
-	monitor->check_queue_capacity = 0;
-
-	/* Allocate memory for the queue and zero it out */
-	monitor->check_queue = calloc(initial_capacity, sizeof(deferred_check_t));
-	if (!monitor->check_queue) {
-		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for deferred check queue");
-	} else {
-		monitor->check_queue_capacity = initial_capacity;
-		log_message(LOG_LEVEL_DEBUG, "Initialized deferred check queue with capacity %d", initial_capacity);
-	}
-}
-
-/* Compare two timespec values for priority queue ordering */
-static int check_queue_compare(struct timespec *a, struct timespec *b) {
-	if (!a || !b) return 0; /* Handle NULL pointers */
-
-	if (a->tv_sec < b->tv_sec) return -1;
-	if (a->tv_sec > b->tv_sec) return 1;
-	if (a->tv_nsec < b->tv_nsec) return -1;
-	if (a->tv_nsec > b->tv_nsec) return 1;
-	return 0;
-}
-
-/* Restore heap property upward */
-static void check_queue_heapify_up(deferred_check_t *queue, int index) {
-	if (!queue || index <= 0) return;
-
-	int parent = (index - 1) / 2;
-
-	/* Ensure both queue entries have valid paths to avoid crash */
-	if (!queue[index].path || !queue[parent].path) {
-		log_message(LOG_LEVEL_WARNING, "Heapify up encountered invalid path at index %d or parent %d",
-		            index, parent);
-		return;
-	}
-
-	if (check_queue_compare(&queue[index].next_check,
-	                        &queue[parent].next_check) < 0) {
-		/* Swap with parent using a temporary copy */
-		deferred_check_t temp;
-		memcpy(&temp, &queue[index], sizeof(deferred_check_t));
-		memcpy(&queue[index], &queue[parent], sizeof(deferred_check_t));
-		memcpy(&queue[parent], &temp, sizeof(deferred_check_t));
-
-		/* Recursively heapify up */
-		check_queue_heapify_up(queue, parent);
-	}
-}
-
-/* Restore heap property downward */
-static void check_queue_heapify_down(deferred_check_t *queue, int size, int index) {
-	if (!queue || index < 0 || size <= 0 || index >= size) {
-		return;
-	}
-
-	int smallest = index;
-	int left = 2 * index + 1;
-	int right = 2 * index + 2;
-
-	/* First validate that the current entry has a valid path */
-	if (!queue[index].path) {
-		log_message(LOG_LEVEL_WARNING, "Heapify down encountered NULL path at index %d", index);
-		return;
-	}
-
-	/* Check left child with validation */
-	if (left < size) {
-		if (!queue[left].path) {
-			log_message(LOG_LEVEL_WARNING, "Left child at index %d has NULL path", left);
-		} else if (check_queue_compare(&queue[left].next_check,
-		                               &queue[smallest].next_check) < 0) {
-			smallest = left;
-		}
-	}
-
-	/* Check right child with validation */
-	if (right < size) {
-		if (!queue[right].path) {
-			log_message(LOG_LEVEL_WARNING, "Right child at index %d has NULL path", right);
-		} else if (check_queue_compare(&queue[right].next_check,
-		                               &queue[smallest].next_check) < 0) {
-			smallest = right;
-		}
-	}
-
-	if (smallest != index) {
-		/* Swap with smallest child using a temporary copy to properly preserve pointers */
-		deferred_check_t temp;
-		memcpy(&temp, &queue[index], sizeof(deferred_check_t));
-		memcpy(&queue[index], &queue[smallest], sizeof(deferred_check_t));
-		memcpy(&queue[smallest], &temp, sizeof(deferred_check_t));
-
-		/* Recursively heapify down */
-		check_queue_heapify_down(queue, size, smallest);
-	}
-}
-
-/* Find a queue entry by path */
-static int check_queue_find_by_path(monitor_t *monitor, const char *path) {
-	if (!monitor->check_queue) {
-		return -1;
-	}
-
-	/* Special case for handling NULL paths */
-	if (!path) {
-		for (int i = 0; i < monitor->check_queue_size; i++) {
-			if (!monitor->check_queue[i].path) {
-				return i; /* Found a NULL path entry */
-			}
-		}
-		return -1; /* No NULL path entries */
-	}
-
-	/* Normal case - search for a matching path */
-	for (int i = 0; i < monitor->check_queue_size; i++) {
-		/* Skip entries with NULL paths */
-		if (!monitor->check_queue[i].path) {
-			continue;
-		}
-
-		if (strcmp(monitor->check_queue[i].path, path) == 0) {
-			return i;
-		}
-	}
-	return -1; /* Not found */
-}
-
-/* Add or update an entry in the queue */
-static void check_queue_add_or_update(monitor_t *monitor, const char *path,
-                                      watch_entry_t *watch, struct timespec next_check) {
-	if (!monitor->check_queue || !path || !watch) {
-		log_message(LOG_LEVEL_WARNING, "Invalid parameters for check_queue_add_or_update");
-		return;
-	}
-
-	/* Check if entry already exists for this path (regardless of watch) */
-	int index = check_queue_find_by_path(monitor, path);
-
-	if (index >= 0) {
-		/* Entry exists - update it */
-		deferred_check_t *entry = &monitor->check_queue[index];
-
-		/* Add this watch if not already present */
-		if (!check_queue_add_watch(entry, watch)) {
-			log_message(LOG_LEVEL_WARNING,
-			            "Failed to add watch to existing queue entry for %s", path);
-		}
-
-		/* Update check time - always update to the new time */
-		entry->next_check = next_check;
-
-		/* Restore heap property by trying both up and down heapify */
-		check_queue_heapify_up(monitor->check_queue, index);
-		check_queue_heapify_down(monitor->check_queue, monitor->check_queue_size, index);
-
-		log_message(LOG_LEVEL_DEBUG, "Updated check time for %s (new time: %ld.%09ld)",
-		            path, (long) next_check.tv_sec, next_check.tv_nsec);
-		return;
-	}
-
-	/* Entry not found, add new one */
-
-	/* Ensure capacity */
-	if (monitor->check_queue_size >= monitor->check_queue_capacity) {
-		int old_capacity = monitor->check_queue_capacity;
-		int new_capacity = old_capacity == 0 ? 8 : old_capacity * 2;
-		deferred_check_t *new_queue = realloc(monitor->check_queue, new_capacity * sizeof(deferred_check_t));
-		if (!new_queue) {
-			log_message(LOG_LEVEL_ERR, "Failed to resize deferred check queue");
-			return;
-		}
-		monitor->check_queue = new_queue;
-		monitor->check_queue_capacity = new_capacity;
-
-		/* Zero out new memory */
-		if (new_capacity > old_capacity) {
-			memset(&monitor->check_queue[old_capacity], 0, (new_capacity - old_capacity) * sizeof(deferred_check_t));
-		}
-	}
-
-	/* Add new entry */
-	int new_index = monitor->check_queue_size;
-
-	/* Initialize the new entry */
-	char *path_copy = strdup(path);
-	if (!path_copy) {
-		log_message(LOG_LEVEL_ERR, "Failed to duplicate path for queue entry");
-		return;
-	}
-
-	/* Clear the new entry first to avoid garbage data */
-	memset(&monitor->check_queue[new_index], 0, sizeof(deferred_check_t));
-
-	monitor->check_queue[new_index].path = path_copy;
-	monitor->check_queue[new_index].next_check = next_check;
-	monitor->check_queue[new_index].watches = NULL;
-	monitor->check_queue[new_index].watch_count = 0;
-	monitor->check_queue[new_index].watch_capacity = 0;
-
-	/* Add the watch */
-	if (!check_queue_add_watch(&monitor->check_queue[new_index], watch)) {
-		log_message(LOG_LEVEL_ERR, "Failed to add watch to new queue entry");
-		free(monitor->check_queue[new_index].path);
-		monitor->check_queue[new_index].path = NULL;
-		return;
-	}
-
-	monitor->check_queue_size++;
-
-	/* Restore heap property */
-	check_queue_heapify_up(monitor->check_queue, new_index);
-
-	log_message(LOG_LEVEL_DEBUG,
-	            "Added new deferred check for %s (next check at %ld.%09ld)",
-	            path, (long) next_check.tv_sec, next_check.tv_nsec);
-}
-
-/* Remove an entry from the queue */
-static void check_queue_remove(monitor_t *monitor, const char *path) {
-	if (!monitor->check_queue || monitor->check_queue_size <= 0) return;
-
-	int index;
-
-	/* Special case for empty path - handle corrupted queue entry removal */
-	if (!path || path[0] == '\0') {
-		/* Find first entry with NULL path */
-		for (index = 0; index < monitor->check_queue_size; index++) {
-			if (!monitor->check_queue[index].path) {
-				log_message(LOG_LEVEL_WARNING, "Removing corrupted queue entry at index %d", index);
-				break;
-			}
-		}
-		if (index >= monitor->check_queue_size) {
-			/* No corrupted entries found */
-			return;
-		}
-	} else {
-		/* Normal case - find by path */
-		index = check_queue_find_by_path(monitor, path);
-		if (index < 0) return; /* Not found */
-	}
-
-	/* Store a copy of the path for logging if available */
-	char path_copy[PATH_MAX] = "<corrupted>";
-	if (monitor->check_queue[index].path) {
-		strncpy(path_copy, monitor->check_queue[index].path, PATH_MAX - 1);
-		path_copy[PATH_MAX - 1] = '\0';
-	}
-
-	/* Free resources */
-	if (monitor->check_queue[index].path) {
-		free(monitor->check_queue[index].path);
-		monitor->check_queue[index].path = NULL;
-	}
-
-	if (monitor->check_queue[index].watches) {
-		free(monitor->check_queue[index].watches);
-		monitor->check_queue[index].watches = NULL;
-	}
-
-	/* Replace with the last element and restore heap property */
-	monitor->check_queue_size--;
-	if (index < monitor->check_queue_size) {
-		/* Move the last element to the removed position */
-		memcpy(&monitor->check_queue[index],
-		       &monitor->check_queue[monitor->check_queue_size],
-		       sizeof(deferred_check_t));
-
-		/* Clear the last element which was just moved */
-		memset(&monitor->check_queue[monitor->check_queue_size], 0, sizeof(deferred_check_t));
-
-		/* Restore heap property for the moved element */
-		check_queue_heapify_down(monitor->check_queue, monitor->check_queue_size, index);
-	} else {
-		/* Removed the last element, just clear it */
-		memset(&monitor->check_queue[index], 0, sizeof(deferred_check_t));
-	}
-
-	log_message(LOG_LEVEL_DEBUG, "Removed deferred check for %s", path_copy);
-}
 
 /* Create a new file/directory monitor */
 monitor_t *monitor_create(config_t *config) {
@@ -414,7 +54,7 @@ monitor_t *monitor_create(config_t *config) {
 	}
 
 	/* Initialize the deferred check queue */
-	check_queue_init(monitor, 16); /* Initial capacity of 16 */
+	monitor->check_queue = queue_create(16); /* Initial capacity of 16 */
 
 	/* Initialize delayed event queue */
 	monitor->delayed_events = NULL;
@@ -459,7 +99,7 @@ void monitor_destroy(monitor_t *monitor) {
 	free(monitor->config_file);
 
 	/* Clean up the check queue */
-	check_queue_cleanup(monitor);
+	queue_destroy(monitor->check_queue);
 
 	/* Clean up delayed event queue */
 	if (monitor->delayed_events) {
@@ -538,8 +178,7 @@ static bool monitor_add_kqueue_watch(monitor_t *monitor, watch_info_t *info) {
 	EV_SET(&changes[0], info->wd, EVFILT_VNODE, EV_ADD | EV_CLEAR, flags, 0, info);
 
 	if (kevent(monitor->kq, changes, 1, NULL, 0, NULL) == -1) {
-		log_message(LOG_LEVEL_ERR, "Failed to register kqueue events for %s: %s",
-		            info->path, strerror(errno));
+		log_message(LOG_LEVEL_ERR, "Failed to register kqueue events for %s: %s", info->path, strerror(errno));
 		return false;
 	}
 
@@ -987,7 +626,7 @@ void schedule_deferred_check(monitor_t *monitor, entity_state_t *state) {
 	}
 
 	/* Add to queue */
-	check_queue_add_or_update(monitor, root_state->path_state->path, root_state->watch, next_check);
+	queue_upsert(monitor->check_queue, root_state->path_state->path, root_state->watch, next_check);
 
 	/* For the synchronization to work correctly, also perform a synchronize_activity_states call */
 	synchronize_activity_states(root_state->path_state, root_state);
@@ -1009,14 +648,14 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 	}
 
 	/* Loop to process all overdue checks */
-	while (monitor->check_queue_size > 0) {
+	while (monitor->check_queue->size > 0) {
 		/* Get the top entry (earliest scheduled check) */
-		deferred_check_t *entry = &monitor->check_queue[0];
+		deferred_check_t *entry = &monitor->check_queue->items[0];
 
 		/* Validate the top entry before processing */
 		if (!entry->path) {
 			log_message(LOG_LEVEL_WARNING, "Corrupted entry at top of queue, removing");
-			check_queue_remove(monitor, NULL);
+			queue_remove(monitor->check_queue, NULL);
 			continue; /* Process next item */
 		}
 
@@ -1037,7 +676,7 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 		watch_entry_t *primary_watch = entry->watch_count > 0 ? entry->watches[0] : NULL;
 		if (!primary_watch) {
 			log_message(LOG_LEVEL_WARNING, "Deferred check for %s has no watches, removing", entry->path);
-			check_queue_remove(monitor, entry->path);
+			queue_remove(monitor->check_queue, entry->path);
 			continue;
 		}
 
@@ -1045,14 +684,14 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 		entity_state_t *root_state = get_entity_state(entry->path, ENTITY_DIRECTORY, primary_watch);
 		if (!root_state) {
 			log_message(LOG_LEVEL_WARNING, "Cannot find state for %s, removing from queue", entry->path);
-			check_queue_remove(monitor, entry->path);
+			queue_remove(monitor->check_queue, entry->path);
 			continue;
 		}
 
 		/* If the entity is no longer active, just remove from queue */
 		if (!root_state->activity_in_progress) {
 			log_message(LOG_LEVEL_DEBUG, "Directory %s no longer active, removing from queue", entry->path);
-			check_queue_remove(monitor, entry->path);
+			queue_remove(monitor->check_queue, entry->path);
 			continue;
 		}
 
@@ -1109,7 +748,7 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 
 			/* Update the entry in place and restore heap property */
 			entry->next_check = next_check;
-			check_queue_heapify_down(monitor->check_queue, monitor->check_queue_size, 0);
+			heap_down(monitor->check_queue->items, monitor->check_queue->size, 0);
 
 			continue;
 		}
@@ -1143,7 +782,7 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 
 			/* Update entry and restore heap property */
 			entry->next_check = next_check;
-			check_queue_heapify_down(monitor->check_queue, monitor->check_queue_size, 0);
+			heap_down(monitor->check_queue->items, monitor->check_queue->size, 0);
 
 			continue;
 		}
@@ -1189,7 +828,7 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 					synchronize_activity_states(root_state->path_state, root_state);
 
 					/* Remove from queue */
-					check_queue_remove(monitor, entry->path);
+					queue_remove(monitor->check_queue, entry->path);
 					continue;
 				}
 
@@ -1200,7 +839,7 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 
 				/* Update entry */
 				entry->next_check = next_check;
-				check_queue_heapify_down(monitor->check_queue, monitor->check_queue_size, 0);
+				heap_down(monitor->check_queue->items, monitor->check_queue->size, 0);
 				continue;
 			} else {
 				/* Scan failed for other reasons (e.g., temp files) */
@@ -1260,7 +899,7 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 
 			/* Update entry in queue */
 			entry->next_check = next_check;
-			check_queue_heapify_down(monitor->check_queue, monitor->check_queue_size, 0);
+			heap_down(monitor->check_queue->items, monitor->check_queue->size, 0);
 
 			continue;
 		}
@@ -1325,7 +964,7 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 
 			/* Update entry and restore heap property */
 			entry->next_check = next_check;
-			check_queue_heapify_down(monitor->check_queue, monitor->check_queue_size, 0);
+			heap_down(monitor->check_queue->items, monitor->check_queue->size, 0);
 
 			continue;
 		}
@@ -1415,13 +1054,13 @@ static void process_deferred_dir_scans(monitor_t *monitor, struct timespec *curr
 		}
 
 		/* Remove entry from queue after processing all watches */
-		check_queue_remove(monitor, entry->path);
+		queue_remove(monitor->check_queue, entry->path);
 	}
 
 	if (items_processed > 0) {
 		log_message(LOG_LEVEL_DEBUG,
 		            "Finished processing %d overdue deferred checks. Attempted: %d, Executed: %d. Remaining queue size: %d",
-		            items_processed, commands_attempted_total, commands_executed_total, monitor->check_queue_size);
+		            items_processed, commands_attempted_total, commands_executed_total, monitor->check_queue->size);
 	}
 }
 
@@ -1489,15 +1128,15 @@ bool monitor_process_events(monitor_t *monitor) {
 	int delayed_timeout_ms = get_next_delayed_event_timeout(monitor, &now_monotonic);
 
 	/* Check if we have any pending deferred checks */
-	if (monitor->check_queue_size > 0 && monitor->check_queue) {
+	if (monitor->check_queue && monitor->check_queue->size > 0) {
 		/* Debug output for the queue status */
-		if (monitor->check_queue[0].path) {
+		if (monitor->check_queue->items[0].path) {
 			log_message(LOG_LEVEL_DEBUG, "Deferred queue status: %d entries, next check for path %s",
-			            monitor->check_queue_size, monitor->check_queue[0].path);
+			            monitor->check_queue->size, monitor->check_queue->items[0].path);
 		}
 
 		/* Get the earliest check time (top of min-heap) */
-		struct timespec next_check = monitor->check_queue[0].next_check;
+		struct timespec next_check = monitor->check_queue->items[0].next_check;
 
 		/* Calculate relative timeout */
 		if (now_monotonic.tv_sec < next_check.tv_sec ||
@@ -1716,8 +1355,8 @@ bool monitor_reload(monitor_t *monitor) {
 	}
 
 	/* Clear deferred and delayed queues to prevent access to old states */
-	check_queue_cleanup(monitor);
-	check_queue_init(monitor, 16);
+	queue_destroy(monitor->check_queue);
+	monitor->check_queue = queue_create(16);
 
 	/* Also clear delayed events queue that may reference old watches */
 	if (monitor->delayed_events) {

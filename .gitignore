@@ -1,4 +1,5 @@
 /src/main.o
+/src/queue.o
 /src/states.o
 /src/monitor.o
 /src/threads.o
