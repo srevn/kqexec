@@ -73,7 +73,7 @@ bool config_parse_events(const char *events_str, event_type_t *events) {
 		} else if (strcasecmp(trimmed_token, "ALL") == 0) {
 			*events |= EVENT_ALL;
 		} else {
-			log_message(LOG_LEVEL_ERR, "Unknown event type: %s", trimmed_token);
+			log_message(ERROR, "Unknown event type: %s", trimmed_token);
 			free(events_copy);
 			return false;
 		}
@@ -115,13 +115,13 @@ const char *event_type_to_string(event_type_t event) {
 config_t *config_create(void) {
 	config_t *config = calloc(1, sizeof(config_t));
 	if (config == NULL) {
-		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for configuration");
+		log_message(ERROR, "Failed to allocate memory for configuration");
 		return NULL;
 	}
 
 	/* Set default values */
 	config->daemon_mode = false;
-	config->syslog_level = LOG_LEVEL_NOTICE;
+	config->syslog_level = NOTICE;
 	config->watches = NULL;
 	config->watch_count = 0;
 
@@ -164,14 +164,14 @@ static bool config_add_watch(config_t *config, watch_entry_t *watch) {
 	for (int i = 0; i < config->watch_count; i++) {
 		if (config->watches[i] && config->watches[i]->name && watch->name &&
 		    strcmp(config->watches[i]->name, watch->name) == 0) {
-			log_message(LOG_LEVEL_ERR, "Duplicate watch name '%s' found in configuration", watch->name);
+			log_message(ERROR, "Duplicate watch name '%s' found in configuration", watch->name);
 			return false;
 		}
 	}
 
 	new_watches = realloc(config->watches, (config->watch_count + 1) * sizeof(watch_entry_t *));
 	if (new_watches == NULL) {
-		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for watch entry");
+		log_message(ERROR, "Failed to allocate memory for watch entry");
 		return false;
 	}
 
@@ -191,13 +191,13 @@ bool config_parse_file(config_t *config, const char *filename) {
 	int line_number = 0;
 
 	if (config == NULL || filename == NULL) {
-		log_message(LOG_LEVEL_ERR, "Invalid arguments to config_parse_file");
+		log_message(ERROR, "Invalid arguments to config_parse_file");
 		return false;
 	}
 
 	fp = fopen(filename, "r");
 	if (fp == NULL) {
-		log_message(LOG_LEVEL_ERR, "Failed to open config file %s: %s",
+		log_message(ERROR, "Failed to open config file %s: %s",
 		            filename, strerror(errno));
 		return false;
 	}
@@ -261,7 +261,7 @@ bool config_parse_file(config_t *config, const char *filename) {
 				strcat(continued_line, " ");
 				strcat(continued_line, next_str);
 			} else {
-				log_message(LOG_LEVEL_ERR, "Line too long after continuation at line %d", line_number);
+				log_message(ERROR, "Line too long after continuation at line %d", line_number);
 				fclose(fp);
 				return false;
 			}
@@ -274,7 +274,7 @@ bool config_parse_file(config_t *config, const char *filename) {
 		if (*str == '[') {
 			char *end = strchr(str, ']');
 			if (end == NULL) {
-				log_message(LOG_LEVEL_ERR, "Malformed section header at line %d", line_number);
+				log_message(ERROR, "Malformed section header at line %d", line_number);
 				fclose(fp);
 				return false;
 			}
@@ -285,21 +285,21 @@ bool config_parse_file(config_t *config, const char *filename) {
 			if (current_watch != NULL) {
 				/* Validate the previous watch entry */
 				if (current_watch->path == NULL) {
-					log_message(LOG_LEVEL_ERR, "Missing path in section [%s]", current_watch->name);
+					log_message(ERROR, "Missing path in section [%s]", current_watch->name);
 					watch_entry_destroy(current_watch);
 					fclose(fp);
 					return false;
 				}
 
 				if (current_watch->events == EVENT_NONE) {
-					log_message(LOG_LEVEL_ERR, "Missing or invalid events in section [%s]", current_watch->name);
+					log_message(ERROR, "Missing or invalid events in section [%s]", current_watch->name);
 					watch_entry_destroy(current_watch);
 					fclose(fp);
 					return false;
 				}
 
 				if (current_watch->command == NULL) {
-					log_message(LOG_LEVEL_ERR, "Missing command in section [%s]", current_watch->name);
+					log_message(ERROR, "Missing command in section [%s]", current_watch->name);
 					watch_entry_destroy(current_watch);
 					fclose(fp);
 					return false;
@@ -316,7 +316,7 @@ bool config_parse_file(config_t *config, const char *filename) {
 			/* Start a new section */
 			current_watch = calloc(1, sizeof(watch_entry_t));
 			if (current_watch == NULL) {
-				log_message(LOG_LEVEL_ERR, "Failed to allocate memory for watch entry");
+				log_message(ERROR, "Failed to allocate memory for watch entry");
 				fclose(fp);
 				return false;
 			}
@@ -339,7 +339,7 @@ bool config_parse_file(config_t *config, const char *filename) {
 
 			key = strtok(str, "=");
 			if (key == NULL) {
-				log_message(LOG_LEVEL_ERR, "Malformed key-value pair at line %d", line_number);
+				log_message(ERROR, "Malformed key-value pair at line %d", line_number);
 				watch_entry_destroy(current_watch);
 				fclose(fp);
 				return false;
@@ -347,7 +347,7 @@ bool config_parse_file(config_t *config, const char *filename) {
 
 			value = strtok(NULL, "");
 			if (value == NULL) {
-				log_message(LOG_LEVEL_ERR, "Missing value at line %d", line_number);
+				log_message(ERROR, "Missing value at line %d", line_number);
 				watch_entry_destroy(current_watch);
 				fclose(fp);
 				return false;
@@ -364,7 +364,7 @@ bool config_parse_file(config_t *config, const char *filename) {
 				current_watch->path = strdup(value);
 			} else if (strcasecmp(key, "events") == 0) {
 				if (!config_parse_events(value, &current_watch->events)) {
-					log_message(LOG_LEVEL_ERR, "Invalid value for events at line %d: %s",
+					log_message(ERROR, "Invalid value for events at line %d: %s",
 					            line_number, value);
 					watch_entry_destroy(current_watch);
 					fclose(fp);
@@ -378,7 +378,7 @@ bool config_parse_file(config_t *config, const char *filename) {
 				} else if (strcasecmp(value, "false") == 0 || strcmp(value, "0") == 0) {
 					current_watch->log_output = false;
 				} else {
-					log_message(LOG_LEVEL_ERR, "Invalid value for log_output at line %d: %s",
+					log_message(ERROR, "Invalid value for log_output at line %d: %s",
 					            line_number, value);
 					watch_entry_destroy(current_watch);
 					fclose(fp);
@@ -390,7 +390,7 @@ bool config_parse_file(config_t *config, const char *filename) {
 				} else if (strcasecmp(value, "false") == 0 || strcmp(value, "0") == 0) {
 					current_watch->buffer_output = false;
 				} else {
-					log_message(LOG_LEVEL_ERR, "Invalid value for buffer_output at line %d: %s",
+					log_message(ERROR, "Invalid value for buffer_output at line %d: %s",
 					            line_number, value);
 					watch_entry_destroy(current_watch);
 					fclose(fp);
@@ -402,7 +402,7 @@ bool config_parse_file(config_t *config, const char *filename) {
 				} else if (strcasecmp(value, "false") == 0 || strcmp(value, "0") == 0) {
 					current_watch->recursive = false;
 				} else {
-					log_message(LOG_LEVEL_ERR, "Invalid value for recursive at line %d: %s",
+					log_message(ERROR, "Invalid value for recursive at line %d: %s",
 					            line_number, value);
 					watch_entry_destroy(current_watch);
 					fclose(fp);
@@ -414,7 +414,7 @@ bool config_parse_file(config_t *config, const char *filename) {
 				} else if (strcasecmp(value, "false") == 0 || strcmp(value, "0") == 0) {
 					current_watch->hidden = false;
 				} else {
-					log_message(LOG_LEVEL_ERR, "Invalid value for hidden at line %d: %s",
+					log_message(ERROR, "Invalid value for hidden at line %d: %s",
 					            line_number, value);
 					watch_entry_destroy(current_watch);
 					fclose(fp);
@@ -423,7 +423,7 @@ bool config_parse_file(config_t *config, const char *filename) {
 			} else if (strcasecmp(key, "complexity") == 0) {
 				double complexity_value = atof(value);
 				if (complexity_value <= 0) {
-					log_message(LOG_LEVEL_ERR, "Invalid complexity value at line %d: %s (must be > 0)",
+					log_message(ERROR, "Invalid complexity value at line %d: %s (must be > 0)",
 					            line_number, value);
 					watch_entry_destroy(current_watch);
 					fclose(fp);
@@ -434,7 +434,7 @@ bool config_parse_file(config_t *config, const char *filename) {
 			} else if (strcasecmp(key, "delay") == 0 || strcasecmp(key, "processing_delay") == 0) {
 				int delay_value = atoi(value);
 				if (delay_value < 0) {
-					log_message(LOG_LEVEL_ERR, "Invalid processing_delay value at line %d: %s (must be >= 0)",
+					log_message(ERROR, "Invalid processing_delay value at line %d: %s (must be >= 0)",
 					            line_number, value);
 					watch_entry_destroy(current_watch);
 					fclose(fp);
@@ -443,7 +443,7 @@ bool config_parse_file(config_t *config, const char *filename) {
 					current_watch->processing_delay = delay_value;
 				}
 			} else {
-				log_message(LOG_LEVEL_WARNING, "Unknown key at line %d: %s", line_number, key);
+				log_message(WARNING, "Unknown key at line %d: %s", line_number, key);
 			}
 		}
 	}
@@ -452,21 +452,21 @@ bool config_parse_file(config_t *config, const char *filename) {
 	if (current_watch != NULL) {
 		/* Validate the watch entry */
 		if (current_watch->path == NULL) {
-			log_message(LOG_LEVEL_ERR, "Missing path in section [%s]", current_watch->name);
+			log_message(ERROR, "Missing path in section [%s]", current_watch->name);
 			watch_entry_destroy(current_watch);
 			fclose(fp);
 			return false;
 		}
 
 		if (current_watch->events == EVENT_NONE) {
-			log_message(LOG_LEVEL_ERR, "Missing or invalid events in section [%s]", current_watch->name);
+			log_message(ERROR, "Missing or invalid events in section [%s]", current_watch->name);
 			watch_entry_destroy(current_watch);
 			fclose(fp);
 			return false;
 		}
 
 		if (current_watch->command == NULL) {
-			log_message(LOG_LEVEL_ERR, "Missing command in section [%s]", current_watch->name);
+			log_message(ERROR, "Missing command in section [%s]", current_watch->name);
 			watch_entry_destroy(current_watch);
 			fclose(fp);
 			return false;
@@ -484,7 +484,7 @@ bool config_parse_file(config_t *config, const char *filename) {
 
 	/* Check if we have at least one watch entry */
 	if (config->watch_count == 0) {
-		log_message(LOG_LEVEL_ERR, "No valid watch entries found in config file");
+		log_message(ERROR, "No valid watch entries found in config file");
 		return false;
 	}
 

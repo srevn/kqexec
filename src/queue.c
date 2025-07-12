@@ -13,7 +13,7 @@
 /* Add a watch to a queue entry */
 bool queue_watch_add(deferred_check_t *entry, watch_entry_t *watch) {
 	if (!entry || !watch) {
-		log_message(LOG_LEVEL_ERR, "Invalid parameters for queue_watch_add");
+		log_message(ERROR, "Invalid parameters for queue_watch_add");
 		return false;
 	}
 
@@ -29,7 +29,7 @@ bool queue_watch_add(deferred_check_t *entry, watch_entry_t *watch) {
 		int new_capacity = entry->watch_capacity == 0 ? 4 : entry->watch_capacity * 2;
 		watch_entry_t **new_watches = realloc(entry->watches, new_capacity * sizeof(watch_entry_t *));
 		if (!new_watches) {
-			log_message(LOG_LEVEL_ERR, "Failed to resize watches array in queue entry");
+			log_message(ERROR, "Failed to resize watches array in queue entry");
 			return false;
 		}
 		entry->watches = new_watches;
@@ -68,7 +68,7 @@ void queue_destroy(defer_queue_t *queue) {
 	free(queue->items);
 	free(queue);
 
-	log_message(LOG_LEVEL_DEBUG, "Cleaned up deferred check queue");
+	log_message(DEBUG, "Cleaned up deferred check queue");
 }
 
 /* Initialize the priority queue */
@@ -77,21 +77,21 @@ defer_queue_t *queue_create(int initial_capacity) {
 
 	defer_queue_t *queue = calloc(1, sizeof(defer_queue_t));
 	if (!queue) {
-		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for queue structure");
+		log_message(ERROR, "Failed to allocate memory for queue structure");
 		return NULL;
 	}
 
 	/* Allocate memory for the queue items and zero it out */
 	queue->items = calloc(initial_capacity, sizeof(deferred_check_t));
 	if (!queue->items) {
-		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for deferred check queue");
+		log_message(ERROR, "Failed to allocate memory for deferred check queue");
 		free(queue);
 		return NULL;
 	}
 
 	queue->size = 0;
 	queue->capacity = initial_capacity;
-	log_message(LOG_LEVEL_DEBUG, "Initialized deferred check queue with capacity %d", initial_capacity);
+	log_message(DEBUG, "Initialized deferred check queue with capacity %d", initial_capacity);
 	return queue;
 }
 
@@ -114,8 +114,7 @@ void heap_up(deferred_check_t *queue, int index) {
 
 	/* Ensure both queue entries have valid paths to avoid crash */
 	if (!queue[index].path || !queue[parent].path) {
-		log_message(LOG_LEVEL_WARNING, "Heapify up encountered invalid path at index %d or parent %d",
-		            index, parent);
+		log_message(WARNING, "Heapify up encountered invalid path at index %d or parent %d", index, parent);
 		return;
 	}
 
@@ -143,14 +142,14 @@ void heap_down(deferred_check_t *queue, int size, int index) {
 
 	/* First validate that the current entry has a valid path */
 	if (!queue[index].path) {
-		log_message(LOG_LEVEL_WARNING, "Heapify down encountered NULL path at index %d", index);
+		log_message(WARNING, "Heapify down encountered NULL path at index %d", index);
 		return;
 	}
 
 	/* Check left child with validation */
 	if (left < size) {
 		if (!queue[left].path) {
-			log_message(LOG_LEVEL_WARNING, "Left child at index %d has NULL path", left);
+			log_message(WARNING, "Left child at index %d has NULL path", left);
 		} else if (time_compare(&queue[left].next_check, &queue[smallest].next_check) < 0) {
 			smallest = left;
 		}
@@ -159,7 +158,7 @@ void heap_down(deferred_check_t *queue, int size, int index) {
 	/* Check right child with validation */
 	if (right < size) {
 		if (!queue[right].path) {
-			log_message(LOG_LEVEL_WARNING, "Right child at index %d has NULL path", right);
+			log_message(WARNING, "Right child at index %d has NULL path", right);
 		} else if (time_compare(&queue[right].next_check, &queue[smallest].next_check) < 0) {
 			smallest = right;
 		}
@@ -211,7 +210,7 @@ int queue_find(defer_queue_t *queue, const char *path) {
 void queue_upsert(defer_queue_t *queue, const char *path,
                   watch_entry_t *watch, struct timespec next_check) {
 	if (!queue || !queue->items || !path || !watch) {
-		log_message(LOG_LEVEL_WARNING, "Invalid parameters for queue_upsert");
+		log_message(WARNING, "Invalid parameters for queue_upsert");
 		return;
 	}
 
@@ -224,7 +223,7 @@ void queue_upsert(defer_queue_t *queue, const char *path,
 
 		/* Add this watch if not already present */
 		if (!queue_watch_add(entry, watch)) {
-			log_message(LOG_LEVEL_WARNING, "Failed to add watch to existing queue entry for %s", path);
+			log_message(WARNING, "Failed to add watch to existing queue entry for %s", path);
 		}
 
 		/* Update check time - always update to the new time */
@@ -234,8 +233,8 @@ void queue_upsert(defer_queue_t *queue, const char *path,
 		heap_up(queue->items, index);
 		heap_down(queue->items, queue->size, index);
 
-		log_message(LOG_LEVEL_DEBUG, "Updated check time for %s (new time: %ld.%09ld)",
-		            path, (long) next_check.tv_sec, next_check.tv_nsec);
+		log_message(DEBUG, "Updated check time for %s (new time: %ld.%09ld)",
+		        			path, (long) next_check.tv_sec, next_check.tv_nsec);
 		return;
 	}
 
@@ -247,7 +246,7 @@ void queue_upsert(defer_queue_t *queue, const char *path,
 		int new_capacity = old_capacity == 0 ? 8 : old_capacity * 2;
 		deferred_check_t *new_items = realloc(queue->items, new_capacity * sizeof(deferred_check_t));
 		if (!new_items) {
-			log_message(LOG_LEVEL_ERR, "Failed to resize deferred check queue");
+			log_message(ERROR, "Failed to resize deferred check queue");
 			return;
 		}
 		queue->items = new_items;
@@ -265,7 +264,7 @@ void queue_upsert(defer_queue_t *queue, const char *path,
 	/* Initialize the new entry */
 	char *path_copy = strdup(path);
 	if (!path_copy) {
-		log_message(LOG_LEVEL_ERR, "Failed to duplicate path for queue entry");
+		log_message(ERROR, "Failed to duplicate path for queue entry");
 		return;
 	}
 
@@ -280,7 +279,7 @@ void queue_upsert(defer_queue_t *queue, const char *path,
 
 	/* Add the watch */
 	if (!queue_watch_add(&queue->items[new_index], watch)) {
-		log_message(LOG_LEVEL_ERR, "Failed to add watch to new queue entry");
+		log_message(ERROR, "Failed to add watch to new queue entry");
 		free(queue->items[new_index].path);
 		queue->items[new_index].path = NULL;
 		return;
@@ -291,8 +290,8 @@ void queue_upsert(defer_queue_t *queue, const char *path,
 	/* Restore heap property */
 	heap_up(queue->items, new_index);
 
-	log_message(LOG_LEVEL_DEBUG, "Added new deferred check for %s (next check at %ld.%09ld)",
-	            path, (long) next_check.tv_sec, next_check.tv_nsec);
+	log_message(DEBUG, "Added new deferred check for %s (next check at %ld.%09ld)",
+	        			path, (long) next_check.tv_sec, next_check.tv_nsec);
 }
 
 /* Remove an entry from the queue */
@@ -306,7 +305,7 @@ void queue_remove(defer_queue_t *queue, const char *path) {
 		/* Find first entry with NULL path */
 		for (index = 0; index < queue->size; index++) {
 			if (!queue->items[index].path) {
-				log_message(LOG_LEVEL_WARNING, "Removing corrupted queue entry at index %d", index);
+				log_message(WARNING, "Removing corrupted queue entry at index %d", index);
 				break;
 			}
 		}
@@ -354,5 +353,5 @@ void queue_remove(defer_queue_t *queue, const char *path) {
 		memset(&queue->items[index], 0, sizeof(deferred_check_t));
 	}
 
-	log_message(LOG_LEVEL_DEBUG, "Removed deferred check for %s", path_copy);
+	log_message(DEBUG, "Removed deferred check for %s", path_copy);
 }

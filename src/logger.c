@@ -5,7 +5,7 @@
 #include "logger.h"
 
 /* Global log level */
-static log_level_t current_log_level = LOG_LEVEL_NOTICE;
+static log_level_t current_log_level = NOTICE;
 
 /* Flag indicating whether syslog is initialized */
 static int syslog_initialized = 0;
@@ -72,28 +72,28 @@ void log_message(log_level_t level, const char *format, ...) {
 
 		/* Print log level */
 		switch (level) {
-			case LOG_LEVEL_EMERG:
+			case EMERG:
 				fprintf(stderr, "[EMERG] ");
 				break;
-			case LOG_LEVEL_ALERT:
+			case ALERT:
 				fprintf(stderr, "[ALERT] ");
 				break;
-			case LOG_LEVEL_CRIT:
+			case CRITICAL:
 				fprintf(stderr, "[CRIT] ");
 				break;
-			case LOG_LEVEL_ERR:
+			case ERROR:
 				fprintf(stderr, "[ERROR] ");
 				break;
-			case LOG_LEVEL_WARNING:
+			case WARNING:
 				fprintf(stderr, "[WARNING] ");
 				break;
-			case LOG_LEVEL_NOTICE:
+			case NOTICE:
 				fprintf(stderr, "[NOTICE] ");
 				break;
-			case LOG_LEVEL_INFO:
+			case INFO:
 				fprintf(stderr, "[INFO] ");
 				break;
-			case LOG_LEVEL_DEBUG:
+			case DEBUG:
 				fprintf(stderr, "[DEBUG] ");
 				break;
 			default:

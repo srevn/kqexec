@@ -75,13 +75,13 @@ bool command_init(void) {
 	sa.sa_handler = command_sigchld_handler;
 	sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
 	if (sigaction(SIGCHLD, &sa, NULL) == -1) {
-		log_message(LOG_LEVEL_ERR, "Failed to set up SIGCHLD handler: %s", strerror(errno));
+		log_message(ERROR, "Failed to set up SIGCHLD handler: %s", strerror(errno));
 		return false;
 	}
 
 	/* Initialize thread pool */
 	if (!thread_pool_init()) {
-		log_message(LOG_LEVEL_ERR, "Failed to initialize thread pool");
+		log_message(ERROR, "Failed to initialize thread pool");
 		return false;
 	}
 
@@ -134,7 +134,7 @@ bool is_path_affected_by_command(const char *path) {
 
 		/* Check if the command has expired */
 		if (now > command_intents[i].expected_end_time) {
-			log_message(LOG_LEVEL_DEBUG, "Command intent %d expired", i);
+			log_message(DEBUG, "Command intent %d expired", i);
 
 			/* Mark as inactive but don't free memory here to prevent race conditions */
 			command_intents[i].active = false;
@@ -156,7 +156,7 @@ bool is_path_affected_by_command(const char *path) {
 
 			/* Check for exact match */
 			if (strcmp(path, affected_path) == 0) {
-				log_message(LOG_LEVEL_DEBUG, "Path %s is directly affected by command %d",
+				log_message(DEBUG, "Path %s is directly affected by command %d",
 				            path, i);
 				/* Restore signal mask before returning */
 				pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
@@ -167,8 +167,7 @@ bool is_path_affected_by_command(const char *path) {
 			size_t affected_len = strlen(affected_path);
 			if (strncmp(path, affected_path, affected_len) == 0 &&
 			    (path[affected_len] == '/' || path[affected_len] == '\0')) {
-				log_message(LOG_LEVEL_DEBUG, "Path %s is within affected path %s (command %d)",
-				            path, affected_path, i);
+				log_message(DEBUG, "Path %s is within affected path %s (command %d)", path, affected_path, i);
 				/* Restore signal mask before returning */
 				pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
 				return true;
@@ -178,8 +177,7 @@ bool is_path_affected_by_command(const char *path) {
 			size_t path_len = strlen(path);
 			if (strncmp(affected_path, path, path_len) == 0 &&
 			    (affected_path[path_len] == '/' || affected_path[path_len] == '\0')) {
-				log_message(LOG_LEVEL_DEBUG, "Path %s contains affected path %s (command %d)",
-				            path, affected_path, i);
+				log_message(DEBUG, "Path %s contains affected path %s (command %d)", path, affected_path, i);
 				/* Restore signal mask before returning */
 				pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
 				return true;
@@ -252,7 +250,7 @@ command_intent_t *command_intent_create(pid_t pid, const char *command, const ch
 	}
 
 	if (slot == -1) {
-		log_message(LOG_LEVEL_WARNING, "No free slots for command intent tracking");
+		log_message(WARNING, "No free slots for command intent tracking");
 		/* Restore signal mask before returning */
 		pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
 		return NULL;
@@ -270,7 +268,7 @@ command_intent_t *command_intent_create(pid_t pid, const char *command, const ch
 	/* Allocate memory for affected paths */
 	intent->affected_paths = calloc(MAX_AFFECTED_PATHS, sizeof(char *));
 	if (!intent->affected_paths) {
-		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for affected paths");
+		log_message(ERROR, "Failed to allocate memory for affected paths");
 		return NULL;
 	}
 
@@ -282,7 +280,7 @@ command_intent_t *command_intent_create(pid_t pid, const char *command, const ch
 	/* Check for file moves */
 	if (strstr(command, "mv ") || strstr(command, " mv ") ||
 	    strstr(command, "-exec mv") || strstr(command, " move ")) {
-		log_message(LOG_LEVEL_DEBUG, "Command contains file move operation");
+		log_message(DEBUG, "Command contains file move operation");
 
 		/* Find target directories in common move patterns */
 		const char *move_targets[] = {
@@ -324,7 +322,7 @@ command_intent_t *command_intent_create(pid_t pid, const char *command, const ch
 						if (!already_added && intent->affected_path_count < MAX_AFFECTED_PATHS) {
 							intent->affected_paths[intent->affected_path_count] = strdup(path);
 							intent->affected_path_count++;
-							log_message(LOG_LEVEL_DEBUG, "Added target path %s to affected paths", path);
+							log_message(DEBUG, "Added target path %s to affected paths", path);
 						}
 					}
 				}
@@ -335,7 +333,7 @@ command_intent_t *command_intent_create(pid_t pid, const char *command, const ch
 	/* Check for file deletions */
 	if (strstr(command, "rm ") || strstr(command, " rm ") ||
 	    strstr(command, "-delete") || strstr(command, " delete ")) {
-		log_message(LOG_LEVEL_DEBUG, "Command contains file delete operation");
+		log_message(DEBUG, "Command contains file delete operation");
 		/* Delete operations affect the base path and its parents */
 		/* Already added base path, so no additional paths needed */
 	}
@@ -344,8 +342,7 @@ command_intent_t *command_intent_create(pid_t pid, const char *command, const ch
 	intent->active = true;
 	active_intent_count++;
 
-	log_message(LOG_LEVEL_DEBUG, "Created command intent for PID %d with %d affected paths",
-	            pid, intent->affected_path_count);
+	log_message(DEBUG, "Created command intent for PID %d with %d affected paths", pid, intent->affected_path_count);
 
 	/* Restore signal mask before returning */
 	pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
@@ -366,7 +363,7 @@ bool command_intent_mark_complete(pid_t pid) {
 			command_intents[i].active = false;
 			active_intent_count--;
 
-			log_message(LOG_LEVEL_DEBUG, "Marked command intent for PID %d as complete", pid);
+			log_message(DEBUG, "Marked command intent for PID %d as complete", pid);
 
 			/* Free affected paths */
 			if (command_intents[i].affected_paths) {
@@ -396,7 +393,7 @@ bool command_intent_mark_complete(pid_t pid) {
 void command_debounce_time(int milliseconds) {
 	if (milliseconds >= 0) {
 		debounce_time_ms = milliseconds;
-		log_message(LOG_LEVEL_INFO, "Command debounce time set to %d ms", debounce_time_ms);
+		log_message(INFO, "Command debounce time set to %d ms", debounce_time_ms);
 	}
 }
 
@@ -466,7 +463,7 @@ char *command_substitute_placeholders(const watch_entry_t *watch, const char *co
 	/* Allocate memory for the result */
 	result = malloc(MAX_CMD_LEN);
 	if (result == NULL) {
-		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for command");
+		log_message(ERROR, "Failed to allocate memory for command");
 		return NULL;
 	}
 
@@ -593,7 +590,7 @@ static void flush_output_buffer(const watch_entry_t *watch, char **buffer, int c
 
 	for (int i = 0; i < count; i++) {
 		if (buffer[i]) {
-			thread_safe_log(LOG_LEVEL_NOTICE, "[%s]: %s", watch->name, buffer[i]);
+			thread_safe_log(NOTICE, "[%s]: %s", watch->name, buffer[i]);
 		}
 	}
 }
@@ -613,7 +610,7 @@ bool command_execute_sync(const watch_entry_t *watch, const file_event_t *event)
 	int output_capacity = 0;
 
 	if (watch == NULL || event == NULL) {
-		thread_safe_log(LOG_LEVEL_ERR, "Invalid arguments to command_execute_sync_internal");
+		thread_safe_log(ERROR, "Invalid arguments to command_execute_sync_internal");
 		return false;
 	}
 
@@ -632,12 +629,12 @@ bool command_execute_sync(const watch_entry_t *watch, const file_event_t *event)
 		return false;
 	}
 
-	thread_safe_log(LOG_LEVEL_INFO, "Executing command: %s", command);
+	thread_safe_log(INFO, "Executing command: %s", command);
 
 	/* Create pipes for stdout and stderr if configured to capture output */
 	if (capture_output) {
 		if (pipe(stdout_pipe) < 0 || pipe(stderr_pipe) < 0) {
-			thread_safe_log(LOG_LEVEL_ERR, "Failed to create pipes: %s", strerror(errno));
+			thread_safe_log(ERROR, "Failed to create pipes: %s", strerror(errno));
 			free(command);
 			return false;
 		}
@@ -646,7 +643,7 @@ bool command_execute_sync(const watch_entry_t *watch, const file_event_t *event)
 	/* Fork a child process */
 	pid = fork();
 	if (pid == -1) {
-		thread_safe_log(LOG_LEVEL_ERR, "Failed to fork: %s", strerror(errno));
+		thread_safe_log(ERROR, "Failed to fork: %s", strerror(errno));
 		if (capture_output) {
 			close(stdout_pipe[0]);
 			close(stdout_pipe[1]);
@@ -678,7 +675,7 @@ bool command_execute_sync(const watch_entry_t *watch, const file_event_t *event)
 		execl("/bin/sh", "sh", "-c", command, NULL);
 
 		/* If we get here, execl failed */
-		thread_safe_log(LOG_LEVEL_ERR, "Failed to execute command: %s", strerror(errno));
+		thread_safe_log(ERROR, "Failed to execute command: %s", strerror(errno));
 		exit(EXIT_FAILURE);
 	}
 
@@ -712,7 +709,7 @@ bool command_execute_sync(const watch_entry_t *watch, const file_event_t *event)
 
 			if (select_result <= 0) {
 				if (select_result < 0 && errno != EINTR) {
-					thread_safe_log(LOG_LEVEL_WARNING, "select() failed: %s", strerror(errno));
+					thread_safe_log(WARNING, "select() failed: %s", strerror(errno));
 				}
 				continue;
 			}
@@ -733,17 +730,15 @@ bool command_execute_sync(const watch_entry_t *watch, const file_event_t *event)
 							if (line_pos > 0) {
 								if (buffer_output) {
 									/* Add to buffer */
-									if (!add_to_output_buffer(&output_buffer, &output_count, &output_capacity,
-									                          line_buffer)) {
-										thread_safe_log(LOG_LEVEL_WARNING,
-										                "[%s]: Failed to buffer output, switching to real-time",
-										                watch->name);
+									if (!add_to_output_buffer(&output_buffer, &output_count, &output_capacity, line_buffer)) {
+										thread_safe_log(WARNING, "[%s]: Failed to buffer output, switching to real-time",
+										                					watch->name);
 										buffer_output = false;
-										thread_safe_log(LOG_LEVEL_NOTICE, "[%s]: %s", watch->name, line_buffer);
+										thread_safe_log(NOTICE, "[%s]: %s", watch->name, line_buffer);
 									}
 								} else {
 									/* Real-time logging */
-									thread_safe_log(LOG_LEVEL_NOTICE, "[%s]: %s", watch->name, line_buffer);
+									thread_safe_log(NOTICE, "[%s]: %s", watch->name, line_buffer);
 								}
 							}
 							line_pos = 0;
@@ -762,7 +757,7 @@ bool command_execute_sync(const watch_entry_t *watch, const file_event_t *event)
 					stderr_open = false;
 				} else {
 					buffer[bytes_read] = '\0';
-					thread_safe_log(LOG_LEVEL_WARNING, "[%s]: %s", watch->name, buffer);
+					thread_safe_log(WARNING, "[%s]: %s", watch->name, buffer);
 				}
 			}
 		}
@@ -772,10 +767,10 @@ bool command_execute_sync(const watch_entry_t *watch, const file_event_t *event)
 			line_buffer[line_pos] = '\0';
 			if (buffer_output) {
 				if (!add_to_output_buffer(&output_buffer, &output_count, &output_capacity, line_buffer)) {
-					thread_safe_log(LOG_LEVEL_NOTICE, "[%s]: %s", watch->name, line_buffer);
+					thread_safe_log(NOTICE, "[%s]: %s", watch->name, line_buffer);
 				}
 			} else {
-				thread_safe_log(LOG_LEVEL_NOTICE, "[%s]: %s", watch->name, line_buffer);
+				thread_safe_log(NOTICE, "[%s]: %s", watch->name, line_buffer);
 			}
 		}
 
@@ -815,8 +810,8 @@ bool command_execute_sync(const watch_entry_t *watch, const file_event_t *event)
 	}
 
 	/* Log command completion */
-	thread_safe_log(LOG_LEVEL_INFO, "[%s] Finished execution (pid %d, duration: %lds, exit: %d)",
-	                watch->name, pid, end_time - start_time, WEXITSTATUS(status));
+	thread_safe_log(INFO, "[%s] Finished execution (pid %d, duration: %lds, exit: %d)",
+	            					watch->name, pid, end_time - start_time, WEXITSTATUS(status));
 
 	/* Mark the entity state with the command execution */
 	entity_state_t *state = get_entity_state(event->path, ENTITY_UNKNOWN, (watch_entry_t *) watch);

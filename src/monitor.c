@@ -12,11 +12,11 @@
 #include <sys/stat.h>
 
 #include "monitor.h"
+#include "stability.h"
 #include "command.h"
 #include "states.h"
 #include "logger.h"
 #include "queue.h"
-#include "stability.h"
 
 /* Maximum number of events to process at once */
 #define MAX_EVENTS 64
@@ -32,13 +32,13 @@ monitor_t *monitor_create(config_t *config) {
 	monitor_t *monitor;
 
 	if (config == NULL) {
-		log_message(LOG_LEVEL_ERR, "Invalid configuration for monitor");
+		log_message(ERROR, "Invalid configuration for monitor");
 		return NULL;
 	}
 
 	monitor = calloc(1, sizeof(monitor_t));
 	if (monitor == NULL) {
-		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for monitor");
+		log_message(ERROR, "Failed to allocate memory for monitor");
 		return NULL;
 	}
 
@@ -120,8 +120,7 @@ void monitor_destroy(monitor_t *monitor) {
 static bool watch_info_init_stat(watch_info_t *info) {
 	struct stat st;
 	if (fstat(info->wd, &st) == -1) {
-		log_message(LOG_LEVEL_ERR, "Failed to fstat file descriptor %d for %s: %s",
-		            info->wd, info->path, strerror(errno));
+		log_message(ERROR, "Failed to fstat file descriptor %d for %s: %s", info->wd, info->path, strerror(errno));
 		return false;
 	}
 
@@ -137,7 +136,7 @@ static bool monitor_add_watch_info(monitor_t *monitor, watch_info_t *info) {
 
 	new_watches = realloc(monitor->watches, (monitor->watch_count + 1) * sizeof(watch_info_t *));
 	if (new_watches == NULL) {
-		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for watch info");
+		log_message(ERROR, "Failed to allocate memory for watch info");
 		return false;
 	}
 
@@ -179,7 +178,7 @@ static bool monitor_add_kqueue_watch(monitor_t *monitor, watch_info_t *info) {
 	EV_SET(&changes[0], info->wd, EVFILT_VNODE, EV_ADD | EV_CLEAR, flags, 0, info);
 
 	if (kevent(monitor->kq, changes, 1, NULL, 0, NULL) == -1) {
-		log_message(LOG_LEVEL_ERR, "Failed to register kqueue events for %s: %s", info->path, strerror(errno));
+		log_message(ERROR, "Failed to register kqueue events for %s: %s", info->path, strerror(errno));
 		return false;
 	}
 
@@ -209,7 +208,7 @@ bool monitor_add_dir_recursive(monitor_t *monitor, const char *dir_path, watch_e
 
 	/* Skip hidden directories unless hidden is true */
 	if (!watch->hidden && is_hidden_path(dir_path)) {
-		log_message(LOG_LEVEL_DEBUG, "Skipping hidden directory: %s", dir_path);
+		log_message(DEBUG, "Skipping hidden directory: %s", dir_path);
 		return true; /* Not an error, just skipping */
 	}
 
@@ -229,7 +228,7 @@ bool monitor_add_dir_recursive(monitor_t *monitor, const char *dir_path, watch_e
 			int fd = existing_info->wd;
 			watch_info_t *info = calloc(1, sizeof(watch_info_t));
 			if (info == NULL) {
-				log_message(LOG_LEVEL_ERR, "Failed to allocate memory for watch info");
+				log_message(ERROR, "Failed to allocate memory for watch info");
 				return false;
 			}
 
@@ -249,18 +248,18 @@ bool monitor_add_dir_recursive(monitor_t *monitor, const char *dir_path, watch_e
 				return false;
 			}
 
-			log_message(LOG_LEVEL_DEBUG, "Added additional watch for directory: %s (with shared FD)", dir_path);
+			log_message(DEBUG, "Added additional watch for directory: %s (with shared FD)", dir_path);
 		} else {
 			/* Create a new watch with a new file descriptor */
 			int fd = open(dir_path, O_RDONLY);
 			if (fd == -1) {
-				log_message(LOG_LEVEL_ERR, "Failed to open %s: %s", dir_path, strerror(errno));
+				log_message(ERROR, "Failed to open %s: %s", dir_path, strerror(errno));
 				return false;
 			}
 
 			watch_info_t *info = calloc(1, sizeof(watch_info_t));
 			if (info == NULL) {
-				log_message(LOG_LEVEL_ERR, "Failed to allocate memory for watch info");
+				log_message(ERROR, "Failed to allocate memory for watch info");
 				close(fd);
 				return false;
 			}
@@ -286,13 +285,13 @@ bool monitor_add_dir_recursive(monitor_t *monitor, const char *dir_path, watch_e
 				/* The watch_info is already in the monitor's list, so it will be cleaned up on monitor_destroy */
 				return false;
 			}
-			log_message(LOG_LEVEL_DEBUG, "Added new watch for directory: %s", dir_path);
+			log_message(DEBUG, "Added new watch for directory: %s", dir_path);
 		}
 	}
 
 	dir = opendir(dir_path);
 	if (dir == NULL) {
-		log_message(LOG_LEVEL_ERR, "Failed to open directory %s: %s", dir_path, strerror(errno));
+		log_message(ERROR, "Failed to open directory %s: %s", dir_path, strerror(errno));
 		return false;
 	}
 
@@ -308,21 +307,21 @@ bool monitor_add_dir_recursive(monitor_t *monitor, const char *dir_path, watch_e
 
 			/* Skip hidden files/directories unless hidden is true */
 			if (!watch->hidden && entry->d_name[0] == '.') {
-				log_message(LOG_LEVEL_DEBUG, "Skipping hidden file/directory: %s/%s", dir_path, entry->d_name);
+				log_message(DEBUG, "Skipping hidden file/directory: %s/%s", dir_path, entry->d_name);
 				continue;
 			}
 
 			snprintf(path, sizeof(path), "%s/%s", dir_path, entry->d_name);
 
 			if (stat(path, &st) == -1) {
-				log_message(LOG_LEVEL_WARNING, "Failed to stat %s: %s", path, strerror(errno));
+				log_message(WARNING, "Failed to stat %s: %s", path, strerror(errno));
 				continue;
 			}
 
 			if (S_ISDIR(st.st_mode)) {
 				/* Recursively add subdirectory */
 				if (!monitor_add_dir_recursive(monitor, path, watch)) {
-					log_message(LOG_LEVEL_WARNING, "Failed to add recursive watch for %s", path);
+					log_message(WARNING, "Failed to add recursive watch for %s", path);
 					/* Continue with other directories */
 				}
 			}
@@ -338,19 +337,19 @@ bool monitor_add_watch(monitor_t *monitor, watch_entry_t *watch) {
 	struct stat st;
 
 	if (monitor == NULL || watch == NULL) {
-		log_message(LOG_LEVEL_ERR, "Invalid arguments to monitor_add_watch");
+		log_message(ERROR, "Invalid arguments to monitor_add_watch");
 		return false;
 	}
 
 	/* Check if we already have a watch for this path, and reuse the file descriptor if we do */
 	watch_info_t *existing_info = monitor_find_watch_info_by_path(monitor, watch->path);
 	if (existing_info != NULL) {
-		log_message(LOG_LEVEL_INFO, "Adding additional watch for %s (watch: %s)", watch->path, watch->name);
+		log_message(INFO, "Adding additional watch for %s (watch: %s)", watch->path, watch->name);
 
 		/* Create a new watch_info that reuses the file descriptor */
 		watch_info_t *info = calloc(1, sizeof(watch_info_t));
 		if (info == NULL) {
-			log_message(LOG_LEVEL_ERR, "Failed to allocate memory for watch info");
+			log_message(ERROR, "Failed to allocate memory for watch info");
 			return false;
 		}
 
@@ -387,14 +386,14 @@ bool monitor_add_watch(monitor_t *monitor, watch_entry_t *watch) {
 
 	/* Get file/directory stats */
 	if (stat(watch->path, &st) == -1) {
-		log_message(LOG_LEVEL_ERR, "Failed to stat %s: %s", watch->path, strerror(errno));
+		log_message(ERROR, "Failed to stat %s: %s", watch->path, strerror(errno));
 		return false;
 	}
 
 	/* Handle directories (possibly recursively) */
 	if (S_ISDIR(st.st_mode)) {
 		if (watch->type != WATCH_DIRECTORY) {
-			log_message(LOG_LEVEL_WARNING, "%s is a directory but configured as a file", watch->path);
+			log_message(WARNING, "%s is a directory but configured as a file", watch->path);
 			watch->type = WATCH_DIRECTORY;
 		}
 
@@ -403,20 +402,19 @@ bool monitor_add_watch(monitor_t *monitor, watch_entry_t *watch) {
 	/* Handle regular files */
 	else if (S_ISREG(st.st_mode)) {
 		if (watch->type != WATCH_FILE) {
-			log_message(LOG_LEVEL_WARNING, "%s is a file but configured as a directory", watch->path);
+			log_message(WARNING, "%s is a file but configured as a directory", watch->path);
 			watch->type = WATCH_FILE;
 		}
 
 		int fd = open(watch->path, O_RDONLY);
 		if (fd == -1) {
-			log_message(LOG_LEVEL_ERR, "Failed to open %s: %s",
-			            watch->path, strerror(errno));
+			log_message(ERROR, "Failed to open %s: %s", watch->path, strerror(errno));
 			return false;
 		}
 
 		watch_info_t *info = calloc(1, sizeof(watch_info_t));
 		if (info == NULL) {
-			log_message(LOG_LEVEL_ERR, "Failed to allocate memory for watch info");
+			log_message(ERROR, "Failed to allocate memory for watch info");
 			close(fd);
 			return false;
 		}
@@ -441,7 +439,7 @@ bool monitor_add_watch(monitor_t *monitor, watch_entry_t *watch) {
 	}
 	/* Unsupported file type */
 	else {
-		log_message(LOG_LEVEL_ERR, "Unsupported file type for %s", watch->path);
+		log_message(ERROR, "Unsupported file type for %s", watch->path);
 		return false;
 	}
 }
@@ -452,7 +450,7 @@ static watch_entry_t *_create_config_watch(const char *config_file_path) {
 
 	watch_entry_t *config_watch = calloc(1, sizeof(watch_entry_t));
 	if (config_watch == NULL) {
-		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for config file watch");
+		log_message(ERROR, "Failed to allocate memory for config file watch");
 		return NULL;
 	}
 
@@ -470,7 +468,7 @@ static watch_entry_t *_create_config_watch(const char *config_file_path) {
 
 	/* Check for strdup failures, which can return NULL on error */
 	if (!config_watch->name || !config_watch->path || !config_watch->command) {
-		log_message(LOG_LEVEL_ERR, "Failed to allocate strings for config watch");
+		log_message(ERROR, "Failed to allocate strings for config watch");
 		free(config_watch->name);
 		free(config_watch->path);
 		free(config_watch->command);
@@ -484,28 +482,27 @@ static watch_entry_t *_create_config_watch(const char *config_file_path) {
 /* Set up the monitor by creating kqueue and adding watches */
 bool monitor_setup(monitor_t *monitor) {
 	if (monitor == NULL) {
-		log_message(LOG_LEVEL_ERR, "Invalid monitor");
+		log_message(ERROR, "Invalid monitor");
 		return false;
 	}
 
 	/* Create kqueue */
 	monitor->kq = kqueue();
 	if (monitor->kq == -1) {
-		log_message(LOG_LEVEL_ERR, "Failed to create kqueue: %s", strerror(errno));
+		log_message(ERROR, "Failed to create kqueue: %s", strerror(errno));
 		return false;
 	}
 
 	/* Add watches for each entry in the configuration */
 	for (int i = 0; i < monitor->config->watch_count; i++) {
 		if (!monitor_add_watch(monitor, monitor->config->watches[i])) {
-			log_message(LOG_LEVEL_WARNING, "Failed to add watch for %s, skipping",
-			            monitor->config->watches[i]->path);
+			log_message(WARNING, "Failed to add watch for %s, skipping", monitor->config->watches[i]->path);
 		}
 	}
 
 	/* Check if we have at least one active watch */
 	if (monitor->watch_count == 0) {
-		log_message(LOG_LEVEL_ERR, "No valid watches could be set up, aborting");
+		log_message(ERROR, "No valid watches could be set up, aborting");
 		return false;
 	}
 
@@ -514,10 +511,9 @@ bool monitor_setup(monitor_t *monitor) {
 		watch_entry_t *config_watch = _create_config_watch(monitor->config_file);
 		if (config_watch) {
 			/* Add to config structure so it gets managed properly */
-			watch_entry_t **new_watches = realloc(monitor->config->watches,
-			                                      (monitor->config->watch_count + 1) * sizeof(watch_entry_t *));
+			watch_entry_t **new_watches = realloc(monitor->config->watches, (monitor->config->watch_count + 1) * sizeof(watch_entry_t *));
 			if (new_watches == NULL) {
-				log_message(LOG_LEVEL_WARNING, "Failed to add config watch to config structure");
+				log_message(WARNING, "Failed to add config watch to config structure");
 				free(config_watch->name);
 				free(config_watch->path);
 				free(config_watch->command);
@@ -528,11 +524,11 @@ bool monitor_setup(monitor_t *monitor) {
 				monitor->config->watch_count++;
 
 				if (!monitor_add_watch(monitor, config_watch)) {
-					log_message(LOG_LEVEL_WARNING, "Failed to add config file watch for %s", monitor->config_file);
+					log_message(WARNING, "Failed to add config file watch for %s", monitor->config_file);
 					/* Remove from config since it wasn't added to monitor */
 					monitor->config->watch_count--;
 				} else {
-					log_message(LOG_LEVEL_DEBUG, "Added config file watch for %s", monitor->config_file);
+					log_message(DEBUG, "Added config file watch for %s", monitor->config_file);
 				}
 			}
 		}
@@ -566,12 +562,12 @@ static event_type_t flags_to_event_type(uint32_t flags) {
 /* Function to schedule a deferred directory check */
 void schedule_deferred_check(monitor_t *monitor, entity_state_t *state) {
 	if (!monitor || !state) {
-		log_message(LOG_LEVEL_WARNING, "Cannot schedule deferred check - invalid monitor or state");
+		log_message(WARNING, "Cannot schedule deferred check - invalid monitor or state");
 		return;
 	}
 
 	if (!state->path_state || !state->watch) {
-		log_message(LOG_LEVEL_WARNING, "Cannot schedule deferred check - state has null path_state or watch");
+		log_message(WARNING, "Cannot schedule deferred check - state has null path_state or watch");
 		return;
 	}
 
@@ -582,8 +578,7 @@ void schedule_deferred_check(monitor_t *monitor, entity_state_t *state) {
 		if (state->type == ENTITY_DIRECTORY) {
 			root_state = state;
 		} else {
-			log_message(LOG_LEVEL_WARNING,
-			            "Cannot schedule check for %s - no root state found", state->path_state->path);
+			log_message(WARNING, "Cannot schedule check for %s: no root state found", state->path_state->path);
 			return;
 		}
 	}
@@ -595,10 +590,9 @@ void schedule_deferred_check(monitor_t *monitor, entity_state_t *state) {
 	if (!root_state->reference_stats_initialized) {
 		root_state->stable_reference_stats = root_state->dir_stats;
 		root_state->reference_stats_initialized = true;
-		log_message(LOG_LEVEL_DEBUG,
-		            "Initialized reference stats for %s: files=%d, dirs=%d, depth=%d",
-		            root_state->path_state->path, root_state->dir_stats.file_count,
-		            root_state->dir_stats.dir_count, root_state->dir_stats.depth);
+		log_message(DEBUG, "Initialized reference stats for %s: files=%d, dirs=%d, depth=%d",
+		        			root_state->path_state->path, root_state->dir_stats.file_count,
+		            		root_state->dir_stats.dir_count, root_state->dir_stats.depth);
 	}
 
 	/* Calculate check time based on quiet period */
@@ -607,9 +601,7 @@ void schedule_deferred_check(monitor_t *monitor, entity_state_t *state) {
 
 	/* Fix: Ensure we don't use a timestamp in the past */
 	if (root_state->last_activity_in_tree.tv_sec < now.tv_sec - 10) {
-		log_message(LOG_LEVEL_DEBUG,
-		            "Last activity timestamp for %s is too old, using current time",
-		            root_state->path_state->path);
+		log_message(DEBUG, "Last activity timestamp for %s is too old, using current time", root_state->path_state->path);
 		root_state->last_activity_in_tree = now;
 	}
 
@@ -617,8 +609,7 @@ void schedule_deferred_check(monitor_t *monitor, entity_state_t *state) {
 
 	struct timespec next_check;
 	next_check.tv_sec = root_state->last_activity_in_tree.tv_sec + (required_quiet_period_ms / 1000);
-	next_check.tv_nsec = root_state->last_activity_in_tree.tv_nsec +
-	                     ((required_quiet_period_ms % 1000) * 1000000);
+	next_check.tv_nsec = root_state->last_activity_in_tree.tv_nsec + ((required_quiet_period_ms % 1000) * 1000000);
 
 	/* Normalize nsec */
 	if (next_check.tv_nsec >= 1000000000) {
@@ -632,10 +623,9 @@ void schedule_deferred_check(monitor_t *monitor, entity_state_t *state) {
 	/* For the synchronization to work correctly, also perform a synchronize_activity_states call */
 	synchronize_activity_states(root_state->path_state, root_state);
 
-	log_message(LOG_LEVEL_DEBUG,
-	            "Scheduled deferred check for %s: in %ld ms (directory with %d files, %d dirs)",
-	            root_state->path_state->path, required_quiet_period_ms,
-	            root_state->dir_stats.file_count, root_state->dir_stats.dir_count);
+	log_message(DEBUG, "Scheduled deferred check for %s: in %ld ms (directory with %d files, %d dirs)",
+	            		root_state->path_state->path, required_quiet_period_ms,
+	            		root_state->dir_stats.file_count, root_state->dir_stats.dir_count);
 }
 
 
@@ -683,12 +673,12 @@ bool monitor_process_events(monitor_t *monitor) {
 	if (monitor->reload_requested) {
 		monitor->reload_requested = false;
 		if (!monitor_reload(monitor)) {
-			log_message(LOG_LEVEL_ERR, "Failed to reload configuration, continuing with existing config");
+			log_message(ERROR, "Failed to reload configuration, continuing with existing config");
 		}
 	}
 
 	if (!monitor || monitor->kq < 0) {
-		log_message(LOG_LEVEL_ERR, "Invalid monitor state");
+		log_message(ERROR, "Invalid monitor state");
 		return false;
 	}
 
@@ -706,8 +696,8 @@ bool monitor_process_events(monitor_t *monitor) {
 	if (monitor->check_queue && monitor->check_queue->size > 0) {
 		/* Debug output for the queue status */
 		if (monitor->check_queue->items[0].path) {
-			log_message(LOG_LEVEL_DEBUG, "Deferred queue status: %d entries, next check for path %s",
-			            monitor->check_queue->size, monitor->check_queue->items[0].path);
+			log_message(DEBUG, "Deferred queue status: %d entries, next check for path %s",
+			        			monitor->check_queue->size, monitor->check_queue->items[0].path);
 		}
 
 		/* Get the earliest check time (top of min-heap) */
@@ -740,16 +730,16 @@ bool monitor_process_events(monitor_t *monitor) {
 			timeout.tv_sec = 0;
 			timeout.tv_nsec = 10000000; /* 10ms */
 			p_timeout = &timeout;
-			log_message(LOG_LEVEL_DEBUG, "Deferred check overdue, using minimal timeout");
+			log_message(DEBUG, "Deferred check overdue, using minimal timeout");
 		}
 	} else if (delayed_timeout_ms >= 0) {
 		/* No deferred checks, but we have delayed events */
 		timeout.tv_sec = delayed_timeout_ms / 1000;
 		timeout.tv_nsec = (delayed_timeout_ms % 1000) * 1000000;
 		p_timeout = &timeout;
-		log_message(LOG_LEVEL_DEBUG, "No deferred checks, timeout for delayed events: %d ms", delayed_timeout_ms);
+		log_message(DEBUG, "No deferred checks, timeout for delayed events: %d ms", delayed_timeout_ms);
 	} else {
-		log_message(LOG_LEVEL_DEBUG, "No pending directory activity or delayed events, waiting indefinitely");
+		log_message(DEBUG, "No pending directory activity or delayed events, waiting indefinitely");
 		p_timeout = NULL;
 	}
 
@@ -759,7 +749,7 @@ bool monitor_process_events(monitor_t *monitor) {
 		if (delayed_timeout_ms < current_timeout_ms) {
 			timeout.tv_sec = delayed_timeout_ms / 1000;
 			timeout.tv_nsec = (delayed_timeout_ms % 1000) * 1000000;
-			log_message(LOG_LEVEL_DEBUG, "Using shorter delayed event timeout: %d ms", delayed_timeout_ms);
+			log_message(DEBUG, "Using shorter delayed event timeout: %d ms", delayed_timeout_ms);
 		}
 	}
 
@@ -773,16 +763,16 @@ bool monitor_process_events(monitor_t *monitor) {
 	/* Handle kevent result */
 	if (nev == -1) {
 		if (errno == EINTR) {
-			log_message(LOG_LEVEL_DEBUG, "kevent interrupted by signal, returning to main loop");
+			log_message(DEBUG, "kevent interrupted by signal, returning to main loop");
 			return true; /* Return to main loop where running flag will be checked */
 		}
-		log_message(LOG_LEVEL_ERR, "kevent error: %s", strerror(errno));
+		log_message(ERROR, "kevent error: %s", strerror(errno));
 		return false; /* Stop monitoring on error */
 	}
 
 	/* Process new events */
 	if (nev > 0) {
-		log_message(LOG_LEVEL_DEBUG, "Processing %d new kqueue events", nev);
+		log_message(DEBUG, "Processing %d new kqueue events", nev);
 		for (int i = 0; i < nev; i++) {
 		event_loop_start:; /* Label to restart the loop if watches array is modified */
 
@@ -801,12 +791,12 @@ bool monitor_process_events(monitor_t *monitor) {
 
 					entity_type_t entity_type = (info->watch->type == WATCH_FILE) ? ENTITY_FILE : ENTITY_DIRECTORY;
 
-					log_message(LOG_LEVEL_DEBUG, "Event: path=%s, flags=0x%x -> type=%s (watch: %s)",
-					            info->path, events[i].fflags, event_type_to_string(event.type), info->watch->name);
+					log_message(DEBUG, "Event: path=%s, flags=0x%x -> type=%s (watch: %s)",
+					        			info->path, events[i].fflags, event_type_to_string(event.type), info->watch->name);
 
 					/* Proactive validation for directory events on NOTE_WRITE */
 					if (info->watch->type == WATCH_DIRECTORY && (events[i].fflags & NOTE_WRITE)) {
-						log_message(LOG_LEVEL_DEBUG, "Write event on dir %s, validating and re-scanning.", info->path);
+						log_message(DEBUG, "Write event on dir %s, validating and re-scanning.", info->path);
 						if (monitor_validate_and_refresh_path(monitor, info->path)) {
 							/* The watches array was modified, restart the event processing to use the new array */
 							goto event_loop_start;
@@ -827,10 +817,10 @@ bool monitor_process_events(monitor_t *monitor) {
 	} else {
 		/* nev == 0 means timeout occurred */
 		if (p_timeout) {
-			log_message(LOG_LEVEL_DEBUG, "Timeout occurred after %ld.%09ld seconds, checking deferred scans",
-			            p_timeout->tv_sec, p_timeout->tv_nsec);
+			log_message(DEBUG, "Timeout occurred after %ld.%09ld seconds, checking deferred scans",
+			            		p_timeout->tv_sec, p_timeout->tv_nsec);
 		} else {
-			log_message(LOG_LEVEL_DEBUG, "Timeout occurred, checking deferred scans");
+			log_message(DEBUG, "Timeout occurred, checking deferred scans");
 		}
 	}
 
@@ -849,18 +839,18 @@ bool monitor_process_events(monitor_t *monitor) {
 /* Start the monitor and enter the main event loop */
 bool monitor_start(monitor_t *monitor) {
 	if (monitor == NULL) {
-		log_message(LOG_LEVEL_ERR, "Invalid monitor");
+		log_message(ERROR, "Invalid monitor");
 		return false;
 	}
 
 	monitor->running = true;
 
-	log_message(LOG_LEVEL_NOTICE, "Starting file monitor with %d watches", monitor->watch_count);
+	log_message(NOTICE, "Starting file monitor with %d watches", monitor->watch_count);
 
 	/* Main event loop */
 	while (monitor->running) {
 		if (!monitor_process_events(monitor)) {
-			log_message(LOG_LEVEL_ERR, "Error processing events, stopping monitor");
+			log_message(ERROR, "Error processing events, stopping monitor");
 			return false;
 		}
 	}
@@ -872,19 +862,19 @@ bool monitor_start(monitor_t *monitor) {
 void monitor_request_reload(monitor_t *monitor) {
 	if (monitor != NULL) {
 		monitor->reload_requested = true;
-		log_message(LOG_LEVEL_DEBUG, "Configuration reload requested");
+		log_message(DEBUG, "Configuration reload requested");
 	}
 }
 
 /* Process a reload request */
 bool monitor_reload(monitor_t *monitor) {
 	if (monitor == NULL || monitor->config_file == NULL) {
-		log_message(LOG_LEVEL_ERR, "Invalid monitor or missing configuration file for reload");
+		log_message(ERROR, "Invalid monitor or missing configuration file for reload");
 		return false;
 	}
 
-	log_message(LOG_LEVEL_INFO, "Reloading configuration from %s", monitor->config_file);
-	log_message(LOG_LEVEL_DEBUG, "Current configuration has %d watches", monitor->watch_count);
+	log_message(INFO, "Reloading configuration from %s", monitor->config_file);
+	log_message(DEBUG, "Current configuration has %d watches", monitor->watch_count);
 
 	/* Save existing config to compare later */
 	config_t *old_config = monitor->config;
@@ -892,7 +882,7 @@ bool monitor_reload(monitor_t *monitor) {
 	/* Create new configuration */
 	config_t *new_config = config_create();
 	if (!new_config) {
-		log_message(LOG_LEVEL_ERR, "Failed to create new configuration during reload");
+		log_message(ERROR, "Failed to create new configuration during reload");
 		return false;
 	}
 
@@ -902,7 +892,7 @@ bool monitor_reload(monitor_t *monitor) {
 
 	/* Parse configuration file */
 	if (!config_parse_file(new_config, monitor->config_file)) {
-		log_message(LOG_LEVEL_ERR, "Failed to parse new config, keeping old one: %s", monitor->config_file);
+		log_message(ERROR, "Failed to parse new config, keeping old one: %s", monitor->config_file);
 		config_destroy(new_config);
 		/* Re-validate the watch on the config file to detect subsequent changes */
 		monitor_validate_and_refresh_path(monitor, monitor->config_file);
@@ -913,10 +903,9 @@ bool monitor_reload(monitor_t *monitor) {
 	if (monitor->config_file != NULL) {
 		watch_entry_t *config_watch = _create_config_watch(monitor->config_file);
 		if (config_watch) {
-			watch_entry_t **new_watches_in_config = realloc(new_config->watches,
-			                                                (new_config->watch_count + 1) * sizeof(watch_entry_t *));
+			watch_entry_t **new_watches_in_config = realloc(new_config->watches, (new_config->watch_count + 1) * sizeof(watch_entry_t *));
 			if (new_watches_in_config == NULL) {
-				log_message(LOG_LEVEL_WARNING, "Failed to add config watch to new config structure");
+				log_message(WARNING, "Failed to add config watch to new config structure");
 				free(config_watch->name);
 				free(config_watch->path);
 				free(config_watch->command);
@@ -941,7 +930,7 @@ bool monitor_reload(monitor_t *monitor) {
 		free(monitor->delayed_events);
 		monitor->delayed_events = NULL;
 		monitor->delayed_event_count = 0;
-		log_message(LOG_LEVEL_DEBUG, "Cleared %d delayed events during config reload", monitor->delayed_event_count);
+		log_message(DEBUG, "Cleared %d delayed events during config reload", monitor->delayed_event_count);
 		monitor->delayed_event_capacity = 0;
 	}
 
@@ -962,7 +951,7 @@ bool monitor_reload(monitor_t *monitor) {
 	/* Add watches from the new configuration (including the config file watch) */
 	for (int i = 0; i < new_config->watch_count; i++) {
 		if (!monitor_add_watch(monitor, new_config->watches[i])) {
-			log_message(LOG_LEVEL_WARNING, "Failed to add watch for %s", new_config->watches[i]->path);
+			log_message(WARNING, "Failed to add watch for %s", new_config->watches[i]->path);
 		}
 	}
 
@@ -979,7 +968,7 @@ bool monitor_reload(monitor_t *monitor) {
 	/* After reloading, explicitly validate the config file watch to handle editor atomic saves */
 	monitor_validate_and_refresh_path(monitor, monitor->config_file);
 
-	log_message(LOG_LEVEL_INFO, "Configuration reload complete: %d active watches", monitor->watch_count);
+	log_message(INFO, "Configuration reload complete: %d active watches", monitor->watch_count);
 	return true;
 }
 
@@ -1000,7 +989,7 @@ bool monitor_remove_stale_subdirectory_watches(monitor_t *monitor, const char *p
 		if ((int) strlen(info->path) > parent_len &&
 		    strncmp(info->path, parent_path, parent_len) == 0 &&
 		    info->path[parent_len] == '/') {
-			log_message(LOG_LEVEL_DEBUG, "Removing stale subdirectory watch: %s", info->path);
+			log_message(DEBUG, "Removing stale subdirectory watch: %s", info->path);
 
 			/* Destroy the watch info (closes FD if not shared) */
 			watch_info_destroy(info);
@@ -1033,7 +1022,7 @@ bool monitor_validate_and_refresh_path(monitor_t *monitor, const char *path) {
 		if (info && info->path && strcmp(info->path, path) == 0) {
 			if (!path_exists) {
 				/* Path does not exist - it was deleted */
-				log_message(LOG_LEVEL_DEBUG, "Path deleted: %s. Removing watch.", path);
+				log_message(DEBUG, "Path deleted: %s. Removing watch.", path);
 
 				/* If it was a recursive directory, remove all subdirectory watches */
 				if (info->watch->type == WATCH_DIRECTORY && info->watch->recursive) {
@@ -1048,9 +1037,10 @@ bool monitor_validate_and_refresh_path(monitor_t *monitor, const char *path) {
 				monitor->watch_count--;
 				i--; /* Adjust index after removal */
 				list_modified = true;
+
 			} else if (info->inode != st.st_ino || info->device != st.st_dev) {
 				/* Path exists but inode/device changed - it was recreated */
-				log_message(LOG_LEVEL_DEBUG, "Path recreated: %s. Refreshing watch.", path);
+				log_message(DEBUG, "Path recreated: %s. Refreshing watch.", path);
 
 				/* Close old file descriptor if not shared */
 				if (!info->is_shared_fd && info->wd >= 0) {
@@ -1060,7 +1050,7 @@ bool monitor_validate_and_refresh_path(monitor_t *monitor, const char *path) {
 				/* Open new file descriptor */
 				int new_fd = open(path, O_RDONLY);
 				if (new_fd == -1) {
-					log_message(LOG_LEVEL_ERR, "Failed to open recreated path %s: %s", path, strerror(errno));
+					log_message(ERROR, "Failed to open recreated path %s: %s", path, strerror(errno));
 					/* Treat as deleted for now */
 					watch_info_destroy(info);
 					for (int j = i; j < monitor->watch_count - 1; j++) {
@@ -1082,11 +1072,12 @@ bool monitor_validate_and_refresh_path(monitor_t *monitor, const char *path) {
 
 				/* If it was a recursive directory, rescan subdirectories */
 				if (info->watch->type == WATCH_DIRECTORY && info->watch->recursive) {
-					log_message(LOG_LEVEL_DEBUG, "Re-scanning subdirectories for recreated path: %s", path);
+					log_message(DEBUG, "Re-scanning subdirectories for recreated path: %s", path);
 					monitor_remove_stale_subdirectory_watches(monitor, path);
 					monitor_add_dir_recursive(monitor, path, info->watch);
 				}
 				list_modified = true;
+
 			} else {
 				/* Path is valid and unchanged */
 				info->last_validation = time(NULL);
@@ -1108,7 +1099,7 @@ void schedule_delayed_event(monitor_t *monitor, watch_entry_t *watch, file_event
 		int new_capacity = monitor->delayed_event_capacity == 0 ? 16 : monitor->delayed_event_capacity * 2;
 		delayed_event_t *new_events = realloc(monitor->delayed_events, new_capacity * sizeof(delayed_event_t));
 		if (!new_events) {
-			log_message(LOG_LEVEL_ERR, "Failed to allocate memory for delayed events");
+			log_message(ERROR, "Failed to allocate memory for delayed events");
 			return;
 		}
 		monitor->delayed_events = new_events;
@@ -1138,8 +1129,8 @@ void schedule_delayed_event(monitor_t *monitor, watch_entry_t *watch, file_event
 	delayed->entity_type = entity_type;
 	delayed->process_time = process_time;
 
-	log_message(LOG_LEVEL_DEBUG, "Scheduled delayed event for %s (watch: %s) in %d ms",
-	            event->path, watch->name, watch->processing_delay);
+	log_message(DEBUG, "Scheduled delayed event for %s (watch: %s) in %d ms",
+	    				event->path, watch->name, watch->processing_delay);
 }
 
 /* Process delayed events that are ready */
@@ -1158,8 +1149,8 @@ void process_delayed_events(monitor_t *monitor) {
 		/* Check if this event is ready to process */
 		if (now.tv_sec > delayed->process_time.tv_sec ||
 		    (now.tv_sec == delayed->process_time.tv_sec && now.tv_nsec >= delayed->process_time.tv_nsec)) {
-			log_message(LOG_LEVEL_DEBUG, "Processing delayed event for %s (watch: %s)",
-			            delayed->event.path, delayed->watch->name);
+			log_message(DEBUG, "Processing delayed event for %s (watch: %s)",
+			            		delayed->event.path, delayed->watch->name);
 
 			/* Process the event */
 			process_event(monitor, delayed->watch, &delayed->event, delayed->entity_type);
@@ -1180,7 +1171,7 @@ void process_delayed_events(monitor_t *monitor) {
 	}
 
 	if (processed > 0) {
-		log_message(LOG_LEVEL_DEBUG, "Processed %d delayed events", processed);
+		log_message(DEBUG, "Processed %d delayed events", processed);
 	}
 }
 

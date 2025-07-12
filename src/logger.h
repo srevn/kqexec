@@ -6,14 +6,14 @@
 
 /* Log levels (matching syslog levels) */
 typedef enum {
-	LOG_LEVEL_EMERG = LOG_EMERG,     /* System is unusable */
-	LOG_LEVEL_ALERT = LOG_ALERT,     /* Action must be taken immediately */
-	LOG_LEVEL_CRIT = LOG_CRIT,       /* Critical conditions */
-	LOG_LEVEL_ERR = LOG_ERR,         /* Error conditions */
-	LOG_LEVEL_WARNING = LOG_WARNING, /* Warning conditions */
-	LOG_LEVEL_NOTICE = LOG_NOTICE,   /* Normal but significant condition */
-	LOG_LEVEL_INFO = LOG_INFO,       /* Informational */
-	LOG_LEVEL_DEBUG = LOG_DEBUG      /* Debug-level messages */
+	EMERG = LOG_EMERG,       /* System is unusable */
+	ALERT = LOG_ALERT,       /* Action must be taken immediately */
+	CRITICAL = LOG_CRIT,     /* Critical conditions */
+	ERROR = LOG_ERR,         /* Error conditions */
+	WARNING = LOG_WARNING,   /* Warning conditions */
+	NOTICE = LOG_NOTICE,     /* Normal but significant condition */
+	INFO = LOG_INFO,         /* Informational */
+	DEBUG = LOG_DEBUG        /* Debug-level messages */
 } log_level_t;
 
 /* Function prototypes */

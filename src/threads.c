@@ -114,26 +114,26 @@ static void *worker_thread(void *arg) {
 /* Initialize thread pool */
 bool thread_pool_init(void) {
 	if (g_thread_pool != NULL) {
-		thread_safe_log(LOG_LEVEL_WARNING, "Thread pool already initialized");
+		thread_safe_log(WARNING, "Thread pool already initialized");
 		return true;
 	}
 
 	g_thread_pool = calloc(1, sizeof(thread_pool_t));
 	if (!g_thread_pool) {
-		thread_safe_log(LOG_LEVEL_ERR, "Failed to allocate memory for thread pool");
+		thread_safe_log(ERROR, "Failed to allocate memory for thread pool");
 		return false;
 	}
 
 	/* Initialize mutex and condition variables */
 	if (pthread_mutex_init(&g_thread_pool->queue_mutex, NULL) != 0) {
-		thread_safe_log(LOG_LEVEL_ERR, "Failed to initialize queue mutex");
+		thread_safe_log(ERROR, "Failed to initialize queue mutex");
 		free(g_thread_pool);
 		g_thread_pool = NULL;
 		return false;
 	}
 
 	if (pthread_cond_init(&g_thread_pool->work_available, NULL) != 0) {
-		thread_safe_log(LOG_LEVEL_ERR, "Failed to initialize work_available condition");
+		thread_safe_log(ERROR, "Failed to initialize work_available condition");
 		pthread_mutex_destroy(&g_thread_pool->queue_mutex);
 		free(g_thread_pool);
 		g_thread_pool = NULL;
@@ -141,7 +141,7 @@ bool thread_pool_init(void) {
 	}
 
 	if (pthread_cond_init(&g_thread_pool->work_done, NULL) != 0) {
-		thread_safe_log(LOG_LEVEL_ERR, "Failed to initialize work_done condition");
+		thread_safe_log(ERROR, "Failed to initialize work_done condition");
 		pthread_cond_destroy(&g_thread_pool->work_available);
 		pthread_mutex_destroy(&g_thread_pool->queue_mutex);
 		free(g_thread_pool);
@@ -159,14 +159,14 @@ bool thread_pool_init(void) {
 	g_thread_pool->thread_count = MAX_WORKER_THREADS;
 	for (int i = 0; i < MAX_WORKER_THREADS; i++) {
 		if (pthread_create(&g_thread_pool->threads[i], NULL, worker_thread, g_thread_pool) != 0) {
-			thread_safe_log(LOG_LEVEL_ERR, "Failed to create worker thread %d", i);
+			thread_safe_log(ERROR, "Failed to create worker thread %d", i);
 			g_thread_pool->thread_count = i;
 			thread_pool_destroy();
 			return false;
 		}
 	}
 
-	thread_safe_log(LOG_LEVEL_DEBUG, "Thread pool initialized with %d worker threads", MAX_WORKER_THREADS);
+	thread_safe_log(DEBUG, "Thread pool initialized with %d worker threads", MAX_WORKER_THREADS);
 	return true;
 }
 
@@ -203,20 +203,20 @@ void thread_pool_destroy(void) {
 	free(g_thread_pool);
 	g_thread_pool = NULL;
 
-	thread_safe_log(LOG_LEVEL_DEBUG, "Thread pool destroyed");
+	thread_safe_log(DEBUG, "Thread pool destroyed");
 }
 
 /* Submit work to thread pool */
 bool thread_pool_submit(const watch_entry_t *watch, const file_event_t *event) {
 	if (!g_thread_pool || !watch || !event) {
-		thread_safe_log(LOG_LEVEL_ERR, "Invalid parameters for thread_pool_submit");
+		thread_safe_log(ERROR, "Invalid parameters for thread_pool_submit");
 		return false;
 	}
 
 	/* Create work item */
 	work_item_t *item = calloc(1, sizeof(work_item_t));
 	if (!item) {
-		thread_safe_log(LOG_LEVEL_ERR, "Failed to allocate memory for work item");
+		thread_safe_log(ERROR, "Failed to allocate memory for work item");
 		return false;
 	}
 
@@ -225,7 +225,7 @@ bool thread_pool_submit(const watch_entry_t *watch, const file_event_t *event) {
 	item->next = NULL;
 
 	if (!item->watch || !item->event) {
-		thread_safe_log(LOG_LEVEL_ERR, "Failed to copy watch/event data for work item");
+		thread_safe_log(ERROR, "Failed to copy watch/event data for work item");
 		free_watch_entry(item->watch);
 		free_file_event(item->event);
 		free(item);
@@ -237,7 +237,7 @@ bool thread_pool_submit(const watch_entry_t *watch, const file_event_t *event) {
 
 	if (g_thread_pool->queue_size >= MAX_WORK_QUEUE_SIZE) {
 		pthread_mutex_unlock(&g_thread_pool->queue_mutex);
-		thread_safe_log(LOG_LEVEL_WARNING, "Work queue is full, dropping command execution for %s", event->path);
+		thread_safe_log(WARNING, "Work queue is full, dropping command execution for %s", event->path);
 		free_watch_entry(item->watch);
 		free_file_event(item->event);
 		free(item);
@@ -257,7 +257,7 @@ bool thread_pool_submit(const watch_entry_t *watch, const file_event_t *event) {
 	pthread_cond_signal(&g_thread_pool->work_available);
 	pthread_mutex_unlock(&g_thread_pool->queue_mutex);
 
-	thread_safe_log(LOG_LEVEL_DEBUG, "Submitted command execution for %s to thread pool (queue size: %d)",
+	thread_safe_log(DEBUG, "Submitted command execution for %s to thread pool (queue size: %d)",
 	                event->path, g_thread_pool->queue_size);
 
 	return true;

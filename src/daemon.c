@@ -26,20 +26,20 @@ static void signal_handler(int sig) {
 			running = 0;
 			/* Stop the monitor if available */
 			if (g_monitor != NULL) {
-				log_message(LOG_LEVEL_INFO, "Received signal %d, stopping monitor", sig);
+				log_message(INFO, "Received signal %d, stopping monitor", sig);
 				monitor_stop(g_monitor);
 			} else {
-				log_message(LOG_LEVEL_WARNING, "Received signal %d but monitor is not available", sig);
+				log_message(WARNING, "Received signal %d but monitor is not available", sig);
 			}
 			break;
 		case SIGHUP:
 			reload_requested = 1;
 			/* Request reload if monitor is available */
 			if (g_monitor != NULL) {
-				log_message(LOG_LEVEL_INFO, "Received SIGHUP, requesting configuration reload");
+				log_message(INFO, "Received SIGHUP, requesting configuration reload");
 				monitor_request_reload(g_monitor);
 			} else {
-				log_message(LOG_LEVEL_WARNING, "Received SIGHUP but monitor is not available");
+				log_message(WARNING, "Received SIGHUP but monitor is not available");
 			}
 			break;
 		default:
@@ -56,15 +56,15 @@ bool daemon_setup_signals(void) {
 	sa.sa_handler = signal_handler;
 
 	if (sigaction(SIGINT, &sa, NULL) == -1) {
-		log_message(LOG_LEVEL_ERR, "Failed to set up SIGINT handler: %s", strerror(errno));
+		log_message(ERROR, "Failed to set up SIGINT handler: %s", strerror(errno));
 		return false;
 	}
 	if (sigaction(SIGTERM, &sa, NULL) == -1) {
-		log_message(LOG_LEVEL_ERR, "Failed to set up SIGTERM handler: %s", strerror(errno));
+		log_message(ERROR, "Failed to set up SIGTERM handler: %s", strerror(errno));
 		return false;
 	}
 	if (sigaction(SIGHUP, &sa, NULL) == -1) {
-		log_message(LOG_LEVEL_ERR, "Failed to set up SIGHUP handler: %s", strerror(errno));
+		log_message(ERROR, "Failed to set up SIGHUP handler: %s", strerror(errno));
 		return false;
 	}
 
@@ -78,9 +78,9 @@ bool daemon_setup_signals(void) {
 void daemon_set_monitor(monitor_t *monitor) {
 	g_monitor = monitor;
 	if (monitor != NULL) {
-		log_message(LOG_LEVEL_DEBUG, "Daemon: monitor reference updated");
+		log_message(DEBUG, "Daemon: monitor reference updated");
 	} else {
-		log_message(LOG_LEVEL_DEBUG, "Daemon: monitor reference cleared");
+		log_message(DEBUG, "Daemon: monitor reference cleared");
 	}
 }
 
@@ -89,14 +89,14 @@ bool daemon_start(config_t *config) {
 	pid_t pid, sid;
 
 	if (config == NULL) {
-		log_message(LOG_LEVEL_ERR, "Invalid configuration for daemon");
+		log_message(ERROR, "Invalid configuration for daemon");
 		return false;
 	}
 
 	/* Fork the parent process */
 	pid = fork();
 	if (pid < 0) {
-		log_message(LOG_LEVEL_ERR, "Failed to fork: %s", strerror(errno));
+		log_message(ERROR, "Failed to fork: %s", strerror(errno));
 		return false;
 	}
 
@@ -108,13 +108,13 @@ bool daemon_start(config_t *config) {
 	/* Create a new session ID for the child process */
 	sid = setsid();
 	if (sid < 0) {
-		log_message(LOG_LEVEL_ERR, "Failed to create new session: %s", strerror(errno));
+		log_message(ERROR, "Failed to create new session: %s", strerror(errno));
 		return false;
 	}
 
 	/* Change the current working directory to root */
 	if (chdir("/") < 0) {
-		log_message(LOG_LEVEL_ERR, "Failed to change directory: %s", strerror(errno));
+		log_message(ERROR, "Failed to change directory: %s", strerror(errno));
 		return false;
 	}
 
@@ -139,7 +139,7 @@ bool daemon_start(config_t *config) {
 	/* Set file creation mask */
 	umask(0);
 
-	log_message(LOG_LEVEL_INFO, "Started daemon with PID %d", getpid());
+	log_message(INFO, "Started daemon with PID %d", getpid());
 
 	return true;
 }

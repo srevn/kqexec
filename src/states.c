@@ -26,12 +26,12 @@ static bool is_entity_state_corrupted(const entity_state_t *state) {
 	if (!state) return true;
 	
 	if ((uintptr_t)state < 0x1000 || ((uintptr_t)state & 0x7) != 0) {
-		log_message(LOG_LEVEL_WARNING, "Entity state appears to be invalid pointer: %p", state);
+		log_message(WARNING, "Entity state appears to be invalid pointer: %p", state);
 		return true;
 	}
 	
 	if (state->magic != ENTITY_STATE_MAGIC) {
-		log_message(LOG_LEVEL_WARNING, "Entity state corruption detected: magic=0x%x, expected=0x%x",
+		log_message(WARNING, "Entity state corruption detected: magic=0x%x, expected=0x%x",
 					state->magic, ENTITY_STATE_MAGIC);
 		return true;
 	}
@@ -54,7 +54,7 @@ static unsigned int hash_path(const char *path) {
 bool entity_state_init(void) {
 	path_states = calloc(PATH_HASH_SIZE, sizeof(path_state_t *));
 	if (path_states == NULL) {
-		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for path states");
+		log_message(ERROR, "Failed to allocate memory for path states");
 		return false;
 	}
 
@@ -63,14 +63,14 @@ bool entity_state_init(void) {
 	pthread_mutexattr_init(&attr);
 	pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
 	if (pthread_mutex_init(&entity_states_mutex, &attr) != 0) {
-		log_message(LOG_LEVEL_ERR, "Failed to initialize entity states mutex");
+		log_message(ERROR, "Failed to initialize entity states mutex");
 		free(path_states);
 		path_states = NULL;
 		return false;
 	}
 	pthread_mutexattr_destroy(&attr);
 
-	log_message(LOG_LEVEL_DEBUG, "Entity state system initialized");
+	log_message(DEBUG, "Entity state system initialized");
 	return true;
 }
 
@@ -121,7 +121,7 @@ void entity_state_cleanup(void) {
 	pthread_mutex_unlock(&entity_states_mutex);
 	pthread_mutex_destroy(&entity_states_mutex);
 
-	log_message(LOG_LEVEL_DEBUG, "Entity state system cleanup complete");
+	log_message(DEBUG, "Entity state system cleanup complete");
 }
 
 
@@ -157,7 +157,7 @@ void update_cumulative_changes(entity_state_t *state) {
 	   but no depth change reported, infer a depth change */
 	if (new_dir_change < -5 && new_depth_change == 0) {
 		/* Large structure deletion detected but depth unchanged - likely a bug */
-		log_message(LOG_LEVEL_DEBUG,
+		log_message(DEBUG,
 		            "Deletion detected with no depth change for %s - inferring depth reduction",
 		            state->path_state->path);
 
@@ -186,7 +186,7 @@ void update_cumulative_changes(entity_state_t *state) {
 
 	/* Log significant cumulative changes */
 	if (new_file_change != 0 || new_dir_change != 0 || new_depth_change != 0) {
-		log_message(LOG_LEVEL_DEBUG,
+		log_message(DEBUG,
 		            "Updated cumulative changes for %s: files=%+d (%+d), dirs=%+d (%+d), depth=%+d (%+d)",
 		            state->path_state->path,
 		            state->cumulative_file_change, new_file_change,
@@ -211,7 +211,7 @@ bool gather_basic_directory_stats(const char *dir_path, dir_stats_t *stats, int 
 
 	dir = opendir(dir_path);
 	if (!dir) {
-		log_message(LOG_LEVEL_WARNING, "Failed to open directory for stats gathering: %s", dir_path);
+		log_message(WARNING, "Failed to open directory for stats gathering: %s", dir_path);
 		return false;
 	}
 
@@ -295,7 +295,7 @@ bool compare_dir_stats(dir_stats_t *prev, dir_stats_t *current) {
 
 	/* Log depth changes */
 	if (depth_change != 0) {
-		log_message(LOG_LEVEL_DEBUG, "Directory tree depth changed: %d -> %d (%+d levels)",
+		log_message(DEBUG, "Directory tree depth changed: %d -> %d (%+d levels)",
 		            prev->max_depth, current->max_depth, depth_change);
 	}
 
@@ -334,7 +334,7 @@ bool compare_dir_stats(dir_stats_t *prev, dir_stats_t *current) {
 
 	/* Always consider unstable if tree depth changes significantly */
 	if (abs(depth_change) > 1) {
-		log_message(LOG_LEVEL_DEBUG, "Directory unstable: significant tree depth change (%+d levels)",
+		log_message(DEBUG, "Directory unstable: significant tree depth change (%+d levels)",
 		            depth_change);
 		is_stable = false;
 	}
@@ -342,7 +342,7 @@ bool compare_dir_stats(dir_stats_t *prev, dir_stats_t *current) {
 	/* Check if changes are within allowances */
 	if (!((total_change <= max_allowed_change || change_percentage <= max_allowed_percent) &&
 	      (depth_change == 0 || (abs(depth_change) == 1 && prev->max_depth > 2)))) {
-		log_message(LOG_LEVEL_DEBUG,
+		log_message(DEBUG,
 		            "Directory unstable: %d/%d to %d/%d, depth %d to %d (%+d files, %+d dirs, %+d depth, %.1f%% change)",
 		            prev->recursive_file_count, prev->recursive_dir_count,
 		            current->recursive_file_count, current->recursive_dir_count,
@@ -359,20 +359,20 @@ bool compare_dir_stats(dir_stats_t *prev, dir_stats_t *current) {
 		                 1024; /* 1KB for small dirs */
 
 	if (size_diff > threshold) {
-		log_message(LOG_LEVEL_DEBUG, "Directory unstable: size changed by %ld bytes (threshold: %ld)",
+		log_message(DEBUG, "Directory unstable: size changed by %ld bytes (threshold: %ld)",
 		            size_diff, threshold);
 		is_stable = false;
 	}
 
 	/* Check for temporary files */
 	if (current->has_temp_files) {
-		log_message(LOG_LEVEL_DEBUG, "Directory unstable: temporary files detected");
+		log_message(DEBUG, "Directory unstable: temporary files detected");
 		is_stable = false;
 	}
 
 	/* Log if stable despite minor changes */
 	if (is_stable && (total_change > 0 || depth_change != 0)) {
-		log_message(LOG_LEVEL_DEBUG,
+		log_message(DEBUG,
 		            "Directory considered stable despite small changes: %+d files, %+d dirs, %+d depth (%.1f%% change)",
 		            file_change, dir_change, depth_change, change_percentage);
 	}
@@ -397,7 +397,7 @@ bool verify_directory_stability(entity_state_t *context_state, const char *dir_p
 
 	dir = opendir(dir_path);
 	if (!dir) {
-		log_message(LOG_LEVEL_WARNING, "Failed to open directory for stability check: %s", dir_path);
+		log_message(WARNING, "Failed to open directory for stability check: %s", dir_path);
 		return false;
 	}
 
@@ -414,7 +414,7 @@ bool verify_directory_stability(entity_state_t *context_state, const char *dir_p
 
 		if (stat(path, &st) != 0) {
 			/* If a file disappears during scan, the directory is not stable */
-			log_message(LOG_LEVEL_DEBUG, "Directory %s unstable: file disappeared during scan", dir_path);
+			log_message(DEBUG, "Directory %s unstable: file disappeared during scan", dir_path);
 			closedir(dir);
 			return false;
 		}
@@ -431,7 +431,7 @@ bool verify_directory_stability(entity_state_t *context_state, const char *dir_p
 
 			/* Check for very recent file modifications (< 1 seconds) */
 			if (difftime(now, st.st_mtime) < 1.0) {
-				log_message(LOG_LEVEL_DEBUG, "Directory %s unstable: recent file modification (%s, %.1f seconds ago)",
+				log_message(DEBUG, "Directory %s unstable: recent file modification (%s, %.1f seconds ago)",
 				            dir_path, entry->d_name, difftime(now, st.st_mtime));
 				stats->has_temp_files = true;
 				closedir(dir);
@@ -496,7 +496,7 @@ bool verify_directory_stability(entity_state_t *context_state, const char *dir_p
 entity_state_t *find_root_state(entity_state_t *state) {
 	if (!state || !state->watch || !state->watch->path || !state->path_state) {
 		if (state && state->path_state) {
-			log_message(LOG_LEVEL_WARNING, "Invalid watch info for state %s", state->path_state->path);
+			log_message(WARNING, "Invalid watch info for state %s", state->path_state->path);
 		}
 		return NULL;
 	}
@@ -514,7 +514,7 @@ entity_state_t *find_root_state(entity_state_t *state) {
 void synchronize_activity_states(path_state_t *path_state, entity_state_t *trigger_state) {
 	if (!path_state || !trigger_state || is_entity_state_corrupted(trigger_state)) {
 		if (trigger_state && is_entity_state_corrupted(trigger_state)) {
-			log_message(LOG_LEVEL_WARNING, "Skipping synchronization due to corrupted trigger state");
+			log_message(WARNING, "Skipping synchronization due to corrupted trigger state");
 		}
 		return;
 	}
@@ -553,7 +553,7 @@ void synchronize_activity_states(path_state_t *path_state, entity_state_t *trigg
 		if (is_entity_state_corrupted(state)) continue;
 
 		if (state != trigger_state) {
-			log_message(LOG_LEVEL_DEBUG, "Synchronizing state for watch %s", state->watch->name);
+			log_message(DEBUG, "Synchronizing state for watch %s", state->watch->name);
 
 			bool fully_compatible = (state->watch->recursive == trigger_state->watch->recursive &&
 			                         state->watch->events == trigger_state->watch->events &&
@@ -630,7 +630,7 @@ void record_activity(entity_state_t *state, operation_type_t op) {
 					/* Update cumulative changes */
 					update_cumulative_changes(root);
 
-					log_message(LOG_LEVEL_DEBUG,
+					log_message(DEBUG,
 					            "Updated directory stats for %s after change: files=%d, dirs=%d, max_depth=%d (was: files=%d, dirs=%d, max_depth=%d)",
 					            root->path_state->path,
 					            root->dir_stats.recursive_file_count, root->dir_stats.recursive_dir_count,
@@ -703,7 +703,7 @@ void record_activity(entity_state_t *state, operation_type_t op) {
 					/* Update cumulative changes */
 					update_cumulative_changes(state);
 
-					log_message(LOG_LEVEL_DEBUG,
+					log_message(DEBUG,
 					            "Updated directory stats for root %s after change: files=%d, dirs=%d, depth=%d",
 					            state->path_state->path, state->dir_stats.file_count, state->dir_stats.dir_count,
 					            state->dir_stats.depth);
@@ -767,7 +767,7 @@ long get_required_quiet_period(entity_state_t *state) {
 			if (state->stability_lost) {
 				/* We need a more careful check for resumed activity */
 				required_ms = (long) (required_ms * 1.25); /* 25% increase */
-				log_message(LOG_LEVEL_DEBUG, "Stability previously achieved and lost, increasing quiet period by 25%%");
+				log_message(DEBUG, "Stability previously achieved and lost, increasing quiet period by 25%%");
 			}
 
 			/* Tree depth multiplier - less dominant than before */
@@ -802,11 +802,11 @@ long get_required_quiet_period(entity_state_t *state) {
 				}
 
 				required_ms = (long) (required_ms * backoff_factor);
-				log_message(LOG_LEVEL_DEBUG, "Applying instability backoff factor of %.2f, new quiet period: %ld ms",
+				log_message(DEBUG, "Applying instability backoff factor of %.2f, new quiet period: %ld ms",
 				            backoff_factor, required_ms);
 			}
 
-			log_message(LOG_LEVEL_DEBUG,
+			log_message(DEBUG,
 			            "Using operation-centric quiet period for %s: %ld ms (cumulative changes: %+d files, %+d dirs, %+d depth, in dir with %d entries, depth %d)",
 			            state->path_state->path, required_ms, state->cumulative_file_change,
 			            state->cumulative_dir_change, state->cumulative_depth_change,
@@ -817,7 +817,7 @@ long get_required_quiet_period(entity_state_t *state) {
 			int tree_depth = state->dir_stats.max_depth > 0 ? state->dir_stats.max_depth : state->dir_stats.depth;
 			int subdir_count = state->dir_stats.recursive_dir_count;
 
-			log_message(LOG_LEVEL_DEBUG,
+			log_message(DEBUG,
 			            "Using base quiet period for %s: %ld ms (recursive entries: %d, max depth: %d, total subdirs: %d)",
 			            state->path_state->path, required_ms, total_entries, tree_depth, subdir_count);
 		}
@@ -852,7 +852,7 @@ bool is_quiet_period_elapsed(entity_state_t *state, struct timespec *now) {
 			time_source_path = root->path_state->path;
 			state_for_period_calc = root;
 		} else {
-			log_message(LOG_LEVEL_WARNING, "Cannot find root state for %s, falling back to local activity",
+			log_message(WARNING, "Cannot find root state for %s, falling back to local activity",
 			            state->path_state->path);
 			/* Fallback: use local activity if root not found */
 			if (state->activity_sample_count == 0) return true;
@@ -868,7 +868,7 @@ bool is_quiet_period_elapsed(entity_state_t *state, struct timespec *now) {
 
 	/* Check for valid timestamp */
 	if (!last_activity_ts || (last_activity_ts->tv_sec == 0 && last_activity_ts->tv_nsec == 0)) {
-		log_message(LOG_LEVEL_DEBUG, "No valid activity timestamp for %s, quiet period assumed elapsed", state->path_state->path);
+		log_message(DEBUG, "No valid activity timestamp for %s, quiet period assumed elapsed", state->path_state->path);
 		return true;
 	}
 
@@ -893,7 +893,7 @@ bool is_quiet_period_elapsed(entity_state_t *state, struct timespec *now) {
 	long required_quiet_period_ms = get_required_quiet_period(state_for_period_calc);
 
 	if (elapsed_ms < 0) {
-		log_message(LOG_LEVEL_WARNING, "Clock appears to have moved backwards for %s, assuming quiet period elapsed",
+		log_message(WARNING, "Clock appears to have moved backwards for %s, assuming quiet period elapsed",
 		            state->path_state->path);
 		return true;
 	}
@@ -901,10 +901,10 @@ bool is_quiet_period_elapsed(entity_state_t *state, struct timespec *now) {
 	bool elapsed = elapsed_ms >= required_quiet_period_ms;
 
 	if (!elapsed) {
-		log_message(LOG_LEVEL_DEBUG, "Quiet period check for %s: %ld ms elapsed < %ld ms required (using time from %s)",
+		log_message(DEBUG, "Quiet period check for %s: %ld ms elapsed < %ld ms required (using time from %s)",
 		            state->path_state->path, elapsed_ms, required_quiet_period_ms, time_source_path);
 	} else {
-		log_message(LOG_LEVEL_DEBUG, "Quiet period elapsed for %s: %ld ms >= %ld ms required",
+		log_message(DEBUG, "Quiet period elapsed for %s: %ld ms >= %ld ms required",
 		            state->path_state->path, elapsed_ms, required_quiet_period_ms);
 	}
 
@@ -929,13 +929,13 @@ static void _copy_directory_tracking_state(entity_state_t *dest, const entity_st
 /* Get or create an entity state for a given path and watch */
 entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_entry_t *watch) {
 	if (!path || !watch || !path_states) {
-		log_message(LOG_LEVEL_ERR, "Invalid arguments to get_entity_state");
+		log_message(ERROR, "Invalid arguments to get_entity_state");
 		return NULL;
 	}
 
 	/* Additional safety check for watch structure */
 	if (!watch->name) {
-		log_message(LOG_LEVEL_ERR, "Watch has NULL name for path %s", path);
+		log_message(ERROR, "Watch has NULL name for path %s", path);
 		return NULL;
 	}
 
@@ -957,13 +957,13 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 	if (!ps) {
 		ps = calloc(1, sizeof(path_state_t));
 		if (!ps) {
-			log_message(LOG_LEVEL_ERR, "Failed to allocate memory for path_state: %s", path);
+			log_message(ERROR, "Failed to allocate memory for path_state: %s", path);
 			pthread_mutex_unlock(&entity_states_mutex);
 			return NULL;
 		}
 		ps->path = strdup(path);
 		if (!ps->path) {
-			log_message(LOG_LEVEL_ERR, "Failed to duplicate path for path_state: %s", path);
+			log_message(ERROR, "Failed to duplicate path for path_state: %s", path);
 			free(ps);
 			pthread_mutex_unlock(&entity_states_mutex);
 			return NULL;
@@ -991,7 +991,7 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 	/* Create new entity_state */
 	state = calloc(1, sizeof(entity_state_t));
 	if (!state) {
-		log_message(LOG_LEVEL_ERR, "Failed to allocate memory for entity_state: %s", path);
+		log_message(ERROR, "Failed to allocate memory for entity_state: %s", path);
 		/* If the path_state was newly created for this entity, free it to prevent a leak */
 		if (!ps->head_entity_state) {
 			path_states[hash] = ps->next_in_bucket;
@@ -1031,7 +1031,7 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 
 	/* If an existing state for this path was found, copy its stats */
 	if (existing_state_for_path) {
-		log_message(LOG_LEVEL_DEBUG, "Copying stats from existing state for path %s (watch: %s)",
+		log_message(DEBUG, "Copying stats from existing state for path %s (watch: %s)",
 		            path, existing_state_for_path->watch->name);
 		_copy_directory_tracking_state(state, existing_state_for_path);
 	} else {
@@ -1049,12 +1049,12 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 				state->prev_stats = state->dir_stats;
 				state->stable_reference_stats = state->dir_stats;
 				state->reference_stats_initialized = true;
-				log_message(LOG_LEVEL_DEBUG,
+				log_message(DEBUG,
 				            "Initialized directory stats for %s: files=%d, dirs=%d, depth=%d, size=%.2f MB",
 				            path, state->dir_stats.file_count, state->dir_stats.dir_count,
 				            state->dir_stats.depth, state->dir_stats.total_size / (1024.0 * 1024.0));
 			} else {
-				log_message(LOG_LEVEL_WARNING,
+				log_message(WARNING,
 				            "Failed to gather initial stats for directory: %s", path);
 			}
 		}
@@ -1064,7 +1064,7 @@ entity_state_t *get_entity_state(const char *path, entity_type_t type, watch_ent
 	state->next_for_path = ps->head_entity_state;
 	ps->head_entity_state = state;
 
-	log_message(LOG_LEVEL_DEBUG, "Created new state for path=%s, watch=%s", path, watch->name);
+	log_message(DEBUG, "Created new state for path=%s, watch=%s", path, watch->name);
 	
 	pthread_mutex_unlock(&entity_states_mutex);
 	return state;
@@ -1088,12 +1088,12 @@ operation_type_t determine_operation(entity_state_t *state, event_type_t new_eve
 	if (state->exists && !exists_now) {
 		/* Deletion */
 		determined_op = (state->type == ENTITY_FILE) ? OP_FILE_DELETED : OP_DIR_DELETED;
-		log_message(LOG_LEVEL_DEBUG, "Entity %s detected as DELETED", state->path_state->path);
+		log_message(DEBUG, "Entity %s detected as DELETED", state->path_state->path);
 		state->exists = false;
 	} else if (!state->exists && exists_now) {
 		/* Creation */
 		determined_op = (state->type == ENTITY_FILE) ? OP_FILE_CREATED : OP_DIR_CREATED;
-		log_message(LOG_LEVEL_DEBUG, "Entity %s detected as CREATED", state->path_state->path);
+		log_message(DEBUG, "Entity %s detected as CREATED", state->path_state->path);
 		state->exists = true;
 
 		/* Update type if it was unknown */
@@ -1114,22 +1114,22 @@ operation_type_t determine_operation(entity_state_t *state, event_type_t new_eve
 		/* Prioritize which operation to report if multiple flags are set */
 		if (state->type == ENTITY_DIRECTORY && (state->content_changed || state->structure_changed)) {
 			determined_op = OP_DIR_CONTENT_CHANGED;
-			log_message(LOG_LEVEL_DEBUG, "Directory %s structure changed", state->path_state->path);
+			log_message(DEBUG, "Directory %s structure changed", state->path_state->path);
 		} else if (state->type == ENTITY_FILE && state->content_changed) {
 			determined_op = OP_FILE_RENAMED;
-			log_message(LOG_LEVEL_DEBUG, "File %s content changed", state->path_state->path);
+			log_message(DEBUG, "File %s content changed", state->path_state->path);
 		} else if (state->type == ENTITY_FILE && state->structure_changed) {
 			determined_op = OP_FILE_CONTENT_CHANGED;
-			log_message(LOG_LEVEL_DEBUG, "File %s content changed", state->path_state->path);
+			log_message(DEBUG, "File %s content changed", state->path_state->path);
 		} else if (state->metadata_changed) {
 			determined_op = (state->type == ENTITY_FILE) ? OP_FILE_METADATA_CHANGED : OP_DIR_METADATA_CHANGED;
-			log_message(LOG_LEVEL_DEBUG, "Entity %s metadata changed", state->path_state->path);
+			log_message(DEBUG, "Entity %s metadata changed", state->path_state->path);
 		} else {
-			log_message(LOG_LEVEL_DEBUG, "Entity %s exists but no relevant changes detected", state->path_state->path);
+			log_message(DEBUG, "Entity %s exists but no relevant changes detected", state->path_state->path);
 			determined_op = OP_NONE;
 		}
 	} else {
-		log_message(LOG_LEVEL_DEBUG, "Entity %s still does not exist", state->path_state->path);
+		log_message(DEBUG, "Entity %s still does not exist", state->path_state->path);
 		determined_op = OP_NONE;
 	}
 
@@ -1168,7 +1168,7 @@ bool should_execute_command(monitor_t *monitor, entity_state_t *state, operation
 		if (root && monitor) {
 			/* Always trigger a deferred check; queue deduplicates */
 			root->activity_in_progress = true;
-			log_message(LOG_LEVEL_DEBUG, "Directory content change for %s, marked root %s as active - command deferred",
+			log_message(DEBUG, "Directory content change for %s, marked root %s as active - command deferred",
 			            state->path_state->path, root->path_state->path);
 			synchronize_activity_states(root->path_state, root);
 
@@ -1177,7 +1177,7 @@ bool should_execute_command(monitor_t *monitor, entity_state_t *state, operation
 			}
 
 			schedule_deferred_check(monitor, root);
-			log_message(LOG_LEVEL_DEBUG, "Added directory %s to deferred check queue", root->path_state->path);
+			log_message(DEBUG, "Added directory %s to deferred check queue", root->path_state->path);
 		}
 		return false; /* Decision happens later in process_deferred_dir_scans */
 	}
@@ -1202,16 +1202,16 @@ bool should_execute_command(monitor_t *monitor, entity_state_t *state, operation
 	}
 	if (debounce_ms < 0) debounce_ms = 0;
 
-	log_message(LOG_LEVEL_DEBUG, "Debounce check for %s: %ld ms elapsed, %d ms required",
+	log_message(DEBUG, "Debounce check for %s: %ld ms elapsed, %d ms required",
 	            state->path_state->path, elapsed_ms_since_command, debounce_ms);
 
 	/* Check if enough time has passed or if it's the first command */
 	if (elapsed_ms_since_command >= debounce_ms || state->last_command_time == 0) {
-		log_message(LOG_LEVEL_DEBUG, "Debounce check passed for %s, command allowed", state->path_state->path);
+		log_message(DEBUG, "Debounce check passed for %s, command allowed", state->path_state->path);
 		return true;
 	}
 
-	log_message(LOG_LEVEL_DEBUG, "Command execution debounced for %s", state->path_state->path);
+	log_message(DEBUG, "Command execution debounced for %s", state->path_state->path);
 	return false;
 }
 
@@ -1253,17 +1253,17 @@ char *find_most_recent_file_in_dir(const char *dir_path) {
 /* Process an event and potentially execute a command */
 bool process_event(monitor_t *monitor, watch_entry_t *watch, file_event_t *event, entity_type_t entity_type) {
 	if (watch == NULL || event == NULL || event->path == NULL) {
-		log_message(LOG_LEVEL_ERR, "process_event: Received NULL watch, event, or event path");
+		log_message(ERROR, "process_event: Received NULL watch, event, or event path");
 		return false;
 	}
 
 	/* Additional safety checks for watch structure */
 	if (!watch->name || !watch->command) {
-		log_message(LOG_LEVEL_ERR, "process_event: Watch has NULL name or command");
+		log_message(ERROR, "process_event: Watch has NULL name or command");
 		return false;
 	}
 
-	log_message(LOG_LEVEL_DEBUG, "Processing event for %s (watch: %s, type: %s)",
+	log_message(DEBUG, "Processing event for %s (watch: %s, type: %s)",
 	            event->path, watch->name, event_type_to_string(event->type));
 
 	/* Handle config file events specially for hot reload */
@@ -1277,23 +1277,23 @@ bool process_event(monitor_t *monitor, watch_entry_t *watch, file_event_t *event
 		               (now.tv_nsec - last_reload_time.tv_nsec) / 1000000;
 
 		if (diff_ms < 100) {
-			log_message(LOG_LEVEL_DEBUG, "Skipping consecutive events generated by the configuration save operation");
+			log_message(DEBUG, "Skipping consecutive events generated by the configuration save operation");
 			return true;
 		}
 		last_reload_time = now;
 
-		log_message(LOG_LEVEL_NOTICE, "Configuraion changed: %s", event->path);
+		log_message(NOTICE, "Configuraion changed: %s", event->path);
 		if (monitor != NULL) {
 			monitor_request_reload(monitor);
 		} else {
-			log_message(LOG_LEVEL_WARNING, "Config file changed but no monitor available for reload");
+			log_message(WARNING, "Config file changed but no monitor available for reload");
 		}
 		return true;
 	}
 
 	/* Check if this event was caused by one of our commands */
 	if (is_path_affected_by_command(event->path)) {
-		log_message(LOG_LEVEL_DEBUG, "Ignoring event for %s - caused by our command execution",
+		log_message(DEBUG, "Ignoring event for %s - caused by our command execution",
 		            event->path);
 		return false;
 	}
@@ -1314,12 +1314,12 @@ bool process_event(monitor_t *monitor, watch_entry_t *watch, file_event_t *event
 		return false; /* No relevant change detected */
 	}
 
-	log_message(LOG_LEVEL_DEBUG, "Determined operation type %d for %s", op, state->path_state->path);
+	log_message(DEBUG, "Determined operation type %d for %s", op, state->path_state->path);
 
 	/* Check if operation is included in watch mask */
 	event_type_t event_type_for_mask = operation_to_event_type(op);
 	if ((watch->events & event_type_for_mask) == 0) {
-		log_message(LOG_LEVEL_DEBUG, "Operation maps to event type %s, which is not in watch mask for %s",
+		log_message(DEBUG, "Operation maps to event type %s, which is not in watch mask for %s",
 		            event_type_to_string(event_type_for_mask), watch->name);
 		return false;
 	}
@@ -1335,11 +1335,11 @@ bool process_event(monitor_t *monitor, watch_entry_t *watch, file_event_t *event
 			.user_id = event->user_id
 		};
 
-		log_message(LOG_LEVEL_INFO, "Executing command for %s (watch: %s, operation: %d)",
+		log_message(INFO, "Executing command for %s (watch: %s, operation: %d)",
 		            state->path_state->path, watch->name, op);
 
 		if (command_execute(watch, &synthetic_event)) {
-			log_message(LOG_LEVEL_INFO, "Command execution successful for %s", state->path_state->path);
+			log_message(INFO, "Command execution successful for %s", state->path_state->path);
 
 			/* Update last command time and reset change flags */
 			state->last_command_time = state->last_update.tv_sec;
@@ -1349,11 +1349,11 @@ bool process_event(monitor_t *monitor, watch_entry_t *watch, file_event_t *event
 
 			return true;
 		} else {
-			log_message(LOG_LEVEL_WARNING, "Command execution failed for %s", state->path_state->path);
+			log_message(WARNING, "Command execution failed for %s", state->path_state->path);
 			return false;
 		}
 	} else {
-		log_message(LOG_LEVEL_DEBUG, "Command for %s (op %d) deferred or debounced", state->path_state->path, op);
+		log_message(DEBUG, "Command for %s (op %d) deferred or debounced", state->path_state->path, op);
 		return false;
 	}
 }
@@ -1366,7 +1366,7 @@ void update_entity_states_after_reload(config_t *new_config) {
 
 	pthread_mutex_lock(&entity_states_mutex);
 
-	log_message(LOG_LEVEL_DEBUG, "Updating all entity states after reload");
+	log_message(DEBUG, "Updating all entity states after reload");
 
 	/* Iterate through all path states and update entity state pointers by name comparison */
 	for (int i = 0; i < PATH_HASH_SIZE; i++) {
@@ -1385,7 +1385,7 @@ void update_entity_states_after_reload(config_t *new_config) {
 					}
 				}
 				if (!found_new_watch) {
-					log_message(LOG_LEVEL_DEBUG, "Could not find new watch for state: %s", state->path_state->path);
+					log_message(DEBUG, "Could not find new watch for state: %s", state->path_state->path);
 				}
 				state = state->next_for_path;
 			}
@@ -1405,7 +1405,7 @@ void cleanup_orphaned_entity_states(config_t *new_config) {
 
 	pthread_mutex_lock(&entity_states_mutex);
 
-	log_message(LOG_LEVEL_DEBUG, "Cleaning up orphaned entity states");
+	log_message(DEBUG, "Cleaning up orphaned entity states");
 
 	for (int i = 0; i < PATH_HASH_SIZE; i++) {
 		path_state_t *ps = path_states[i];
@@ -1426,7 +1426,7 @@ void cleanup_orphaned_entity_states(config_t *new_config) {
 				}
 
 				if (is_orphaned) {
-					log_message(LOG_LEVEL_DEBUG, "Removing orphaned state for path %s (watch %s)",
+					log_message(DEBUG, "Removing orphaned state for path %s (watch %s)",
 					            state->path_state->path, state->watch ? state->watch->name : "<unknown>");
 
 					entity_state_t *to_free = state;
@@ -1445,7 +1445,7 @@ void cleanup_orphaned_entity_states(config_t *new_config) {
 
 			/* If this path state has no more entity states, remove it */
 			if (!ps->head_entity_state) {
-				log_message(LOG_LEVEL_DEBUG, "Removing empty path state for path %s", ps->path);
+				log_message(DEBUG, "Removing empty path state for path %s", ps->path);
 				
 				path_state_t *to_free_ps = ps;
 				if (prev_ps) {

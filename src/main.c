@@ -37,7 +37,7 @@ int main(int argc, char *argv[]) {
 	monitor_t *monitor;
 	int c;
 	int option_index = 0;
-	int log_level = LOG_LEVEL_NOTICE;
+	int log_level = NOTICE;
 	char *config_file = NULL;
 	int daemon_mode = 0;
 
@@ -51,7 +51,7 @@ int main(int argc, char *argv[]) {
 
 	/* Set up signal handlers */
 	if (!daemon_setup_signals()) {
-		log_message(LOG_LEVEL_ERR, "Failed to set up signal handlers");
+		log_message(ERROR, "Failed to set up signal handlers");
 		log_close();
 		return EXIT_FAILURE;
 	}
@@ -106,7 +106,7 @@ int main(int argc, char *argv[]) {
 	/* Create configuration */
 	config = config_create();
 	if (config == NULL) {
-		log_message(LOG_LEVEL_ERR, "Failed to create configuration");
+		log_message(ERROR, "Failed to create configuration");
 		log_close();
 		return EXIT_FAILURE;
 	}
@@ -117,7 +117,7 @@ int main(int argc, char *argv[]) {
 
 	/* Parse configuration file */
 	if (!config_parse_file(config, config_file)) {
-		log_message(LOG_LEVEL_ERR, "Failed to parse configuration file: %s", config_file);
+		log_message(ERROR, "Failed to parse configuration file: %s", config_file);
 		config_destroy(config);
 		log_close();
 		return EXIT_FAILURE;
@@ -126,7 +126,7 @@ int main(int argc, char *argv[]) {
 	/* Start daemon if requested */
 	if (config->daemon_mode) {
 		if (!daemon_start(config)) {
-			log_message(LOG_LEVEL_ERR, "Failed to start daemon");
+			log_message(ERROR, "Failed to start daemon");
 			config_destroy(config);
 			log_close();
 			return EXIT_FAILURE;
@@ -139,7 +139,7 @@ int main(int argc, char *argv[]) {
 
 	/* Initialize command subsystem */
 	if (!command_init()) {
-		log_message(LOG_LEVEL_ERR, "Failed to initialize command subsystem");
+		log_message(ERROR, "Failed to initialize command subsystem");
 		config_destroy(config);
 		log_close();
 		return EXIT_FAILURE;
@@ -147,7 +147,7 @@ int main(int argc, char *argv[]) {
 
 	/* Initialize entity states */
 	if (!entity_state_init()) {
-		log_message(LOG_LEVEL_ERR, "Failed to initialize entity states");
+		log_message(ERROR, "Failed to initialize entity states");
 		command_cleanup();
 		config_destroy(config);
 		log_close();
@@ -157,7 +157,7 @@ int main(int argc, char *argv[]) {
 	/* Create monitor */
 	monitor = monitor_create(config);
 	if (monitor == NULL) {
-		log_message(LOG_LEVEL_ERR, "Failed to create monitor");
+		log_message(ERROR, "Failed to create monitor");
 		entity_state_cleanup();
 		command_cleanup();
 		config_destroy(config);
@@ -167,7 +167,7 @@ int main(int argc, char *argv[]) {
 
 	/* Set up monitor */
 	if (!monitor_setup(monitor)) {
-		log_message(LOG_LEVEL_ERR, "Failed to set up monitor");
+		log_message(ERROR, "Failed to set up monitor");
 		monitor_destroy(monitor);
 		entity_state_cleanup();
 		command_cleanup();
@@ -183,7 +183,7 @@ int main(int argc, char *argv[]) {
 
 	/* Start monitor */
 	if (!monitor_start(monitor)) {
-		log_message(LOG_LEVEL_ERR, "Failed to start monitor");
+		log_message(ERROR, "Failed to start monitor");
 		monitor_destroy(monitor);
 		entity_state_cleanup();
 		command_cleanup();

@@ -2,6 +2,7 @@
 #define STABILITY_H
 
 #include <stdbool.h>
+
 #include "monitor.h"
 #include "states.h"
 #include "queue.h"
