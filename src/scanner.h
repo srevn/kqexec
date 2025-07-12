@@ -4,11 +4,8 @@
 #include <stdbool.h>
 #include <sys/types.h>
 
+#include "monitor.h"
 #include "events.h"
-
-/* Forward declarations */
-struct monitor;
-typedef struct monitor monitor_t;
 
 /* Forward declarations */
 typedef struct entity_state entity_state_t;
@@ -35,8 +32,8 @@ typedef struct {
 } dir_stats_t;
 
 /* Directory statistics and scanning */
-bool scanner_scan(const char *dir_path, dir_stats_t *stats, int recursion_depth);
-bool scanner_stable(entity_state_t *context_state, const char *dir_path, dir_stats_t *stats, int recursion_depth);
+bool scanner_scan(const char *dir_path, dir_stats_t *stats);
+bool scanner_stable(entity_state_t *context_state, const char *dir_path, dir_stats_t *stats);
 bool scanner_compare(dir_stats_t *prev, dir_stats_t *current);
 char *scanner_newest(const char *dir_path);
 void scanner_update(entity_state_t *state);

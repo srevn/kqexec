@@ -72,7 +72,7 @@ void scanner_update(entity_state_t *state) {
 }
 
 /* Gather basic directory statistics */
-bool scanner_scan(const char *dir_path, dir_stats_t *stats, int recursion_depth) {
+bool scanner_scan(const char *dir_path, dir_stats_t *stats) {
 	DIR *dir;
 	struct dirent *entry;
 	struct stat st;
@@ -119,7 +119,7 @@ bool scanner_scan(const char *dir_path, dir_stats_t *stats, int recursion_depth)
 			stats->dir_count++;
 
 			dir_stats_t subdir_stats;
-			if (scanner_scan(path, &subdir_stats, recursion_depth + 1)) {
+			if (scanner_scan(path, &subdir_stats)) {
 				/* Update maximum tree depth based on subdirectory scan results */
 				if (subdir_stats.depth + 1 > stats->depth) {
 					stats->depth = subdir_stats.depth + 1;
@@ -253,7 +253,7 @@ bool scanner_compare(dir_stats_t *prev, dir_stats_t *current) {
 }
 
 /* Collect statistics about a directory and its contents */
-bool scanner_stable(entity_state_t *context_state, const char *dir_path, dir_stats_t *stats, int recursion_depth) {
+bool scanner_stable(entity_state_t *context_state, const char *dir_path, dir_stats_t *stats) {
 	DIR *dir;
 	struct dirent *entry;
 	struct stat st;
@@ -317,7 +317,7 @@ bool scanner_stable(entity_state_t *context_state, const char *dir_path, dir_sta
 			}
 
 			dir_stats_t subdir_stats;
-			if (!scanner_stable(context_state, path, &subdir_stats, recursion_depth + 1)) {
+			if (!scanner_stable(context_state, path, &subdir_stats)) {
 				closedir(dir);
 				return false;
 			}
@@ -460,7 +460,7 @@ static void scanner_record(entity_state_t *state, operation_type_t op) {
 static void scanner_update_stats(entity_state_t *state, operation_type_t op) {
 	if (op == OP_DIR_CONTENT_CHANGED && state->type == ENTITY_DIRECTORY) {
 		dir_stats_t new_stats;
-		if (scanner_scan(state->path_state->path, &new_stats, 0)) {
+		if (scanner_scan(state->path_state->path, &new_stats)) {
 			/* Save previous stats for comparison */
 			state->prev_stats = state->dir_stats;
 			/* Update with new stats */
@@ -505,7 +505,7 @@ static void scanner_propagate(entity_state_t *state, entity_state_t *root, opera
 				/* Update directory stats for parent if this is a content change */
 				if (op == OP_DIR_CONTENT_CHANGED && parent_state->type == ENTITY_DIRECTORY) {
 					dir_stats_t parent_new_stats;
-					if (scanner_scan(parent_state->path_state->path, &parent_new_stats, 0)) {
+					if (scanner_scan(parent_state->path_state->path, &parent_new_stats)) {
 						parent_state->prev_stats = parent_state->dir_stats;
 						parent_state->dir_stats = parent_new_stats;
 
@@ -559,7 +559,7 @@ static void scanner_handle_root(entity_state_t *state, operation_type_t op) {
 	/* Update directory stats immediately for content changes to root */
 	if (op == OP_DIR_CONTENT_CHANGED && state->type == ENTITY_DIRECTORY) {
 		dir_stats_t new_stats;
-		if (scanner_scan(state->path_state->path, &new_stats, 0)) {
+		if (scanner_scan(state->path_state->path, &new_stats)) {
 			/* Save previous stats for comparison */
 			state->prev_stats = state->dir_stats;
 			/* Update with new stats */
@@ -568,10 +568,9 @@ static void scanner_handle_root(entity_state_t *state, operation_type_t op) {
 			/* Update cumulative changes */
 			scanner_update(state);
 
-			log_message(DEBUG,
-			            "Updated directory stats for root %s after change: files=%d, dirs=%d, depth=%d",
-			            state->path_state->path, state->dir_stats.file_count, state->dir_stats.dir_count,
-			            state->dir_stats.depth);
+			log_message(DEBUG, "Updated directory stats for root %s after change: files=%d, dirs=%d, depth=%d",
+			        			state->path_state->path, state->dir_stats.file_count, state->dir_stats.dir_count,
+			            		state->dir_stats.depth);
 		}
 	}
 
@@ -684,8 +683,7 @@ static long scanner_backoff(entity_state_t *state, long required_ms) {
 	}
 
 	long adjusted_ms = (long) (required_ms * backoff_factor);
-	log_message(DEBUG, "Applying instability backoff factor of %.2f, new quiet period: %ld ms",
-	            backoff_factor, adjusted_ms);
+	log_message(DEBUG, "Applying instability backoff factor of %.2f, new quiet period: %ld ms", backoff_factor, adjusted_ms);
 
 	return adjusted_ms;
 }
@@ -730,20 +728,17 @@ long scanner_delay(entity_state_t *state) {
 			/* Apply exponential backoff for consecutive instability */
 			required_ms = scanner_backoff(state, required_ms);
 
-			log_message(DEBUG,
-			            "Using operation-centric quiet period for %s: %ld ms (cumulative changes: %+d files, %+d dirs, %+d depth, in dir with %d entries, depth %d)",
-			            state->path_state->path, required_ms, state->cumulative_file,
-			            state->cumulative_dir, state->cumulative_depth,
-			            total_entries, tree_depth);
+			log_message(DEBUG, "Quiet period for %s: %ld ms (cumulative changes: %+d files, %+d dirs, %+d depth, in dir with %d entries, depth %d)",
+			        			state->path_state->path, required_ms, state->cumulative_file,
+			        			state->cumulative_dir, state->cumulative_depth, total_entries, tree_depth);
 		} else {
 			/* For inactive directories, just log the base period with recursive stats */
 			int total_entries = state->dir_stats.tree_files + state->dir_stats.tree_dirs;
 			int tree_depth = state->dir_stats.max_depth > 0 ? state->dir_stats.max_depth : state->dir_stats.depth;
 			int subdir_count = state->dir_stats.tree_dirs;
 
-			log_message(DEBUG,
-			            "Using base quiet period for %s: %ld ms (recursive entries: %d, max depth: %d, total subdirs: %d)",
-			            state->path_state->path, required_ms, total_entries, tree_depth, subdir_count);
+			log_message(DEBUG, "Using base quiet period for %s: %ld ms (recursive entries: %d, max depth: %d, total subdirs: %d)",
+			            		state->path_state->path, required_ms, total_entries, tree_depth, subdir_count);
 		}
 	}
 
@@ -768,8 +763,7 @@ bool scanner_ready(entity_state_t *state, struct timespec *now) {
 			time_source_path = root->path_state->path;
 			state_for_period_calc = root;
 		} else {
-			log_message(WARNING, "Cannot find root state for %s, falling back to local activity",
-			            state->path_state->path);
+			log_message(WARNING, "Cannot find root state for %s, falling back to local activity", state->path_state->path);
 			/* Fallback: use local activity if root not found */
 			if (state->activity_count == 0) return true;
 			int latest_idx = (state->activity_index + MAX_ACTIVITY_SAMPLES - 1) % MAX_ACTIVITY_SAMPLES;
@@ -810,7 +804,7 @@ bool scanner_ready(entity_state_t *state, struct timespec *now) {
 
 	if (elapsed_ms < 0) {
 		log_message(WARNING, "Clock appears to have moved backwards for %s, assuming quiet period elapsed",
-		            state->path_state->path);
+		            		  state->path_state->path);
 		return true;
 	}
 
@@ -818,10 +812,10 @@ bool scanner_ready(entity_state_t *state, struct timespec *now) {
 
 	if (!elapsed) {
 		log_message(DEBUG, "Quiet period check for %s: %ld ms elapsed < %ld ms required (using time from %s)",
-		            state->path_state->path, elapsed_ms, required_quiet_period_ms, time_source_path);
+		            		state->path_state->path, elapsed_ms, required_quiet_period_ms, time_source_path);
 	} else {
 		log_message(DEBUG, "Quiet period elapsed for %s: %ld ms >= %ld ms required",
-		            state->path_state->path, elapsed_ms, required_quiet_period_ms);
+		        			state->path_state->path, elapsed_ms, required_quiet_period_ms);
 	}
 
 	return elapsed;

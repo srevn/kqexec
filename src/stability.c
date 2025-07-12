@@ -279,7 +279,7 @@ bool stability_scan(entity_state_t *root_state, const char *path, dir_stats_t *c
 	}
 
 	/* Perform recursive stability verification */
-	bool scan_completed = scanner_stable(root_state, path, current_stats_out, 0);
+	bool scan_completed = scanner_stable(root_state, path, current_stats_out);
 
 	/* Only update directory stats if the scan was fully completed */
 	if (scan_completed) {

@@ -6,9 +6,6 @@
 #include "config.h"
 #include "logger.h"
 
-/* Forward declaration */
-struct monitor;
-
 /* Deferred directory check queue entry */
 typedef struct {
 	char *path;                      /* Path to the watched directory (unique key) */

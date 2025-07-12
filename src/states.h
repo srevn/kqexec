@@ -8,14 +8,8 @@
 
 #include "config.h"
 #include "scanner.h"
-
-/* Forward declaration for monitor_t */
-struct monitor;
-typedef struct monitor monitor_t;
-
-/* Forward declaration for file_event_t */
-struct file_event;
-typedef struct file_event file_event_t;
+#include "events.h"
+#include "monitor.h"
 
 /* Hash table size for storing path states */
 #define PATH_HASH_SIZE 1024

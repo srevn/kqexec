@@ -273,7 +273,7 @@ entity_state_t *states_get(const char *path, entity_type_t type, watch_entry_t *
 		state->check_pending = false;
 
 		if (state->type == ENTITY_DIRECTORY && state->exists) {
-			if (scanner_scan(path, &state->dir_stats, 0)) {
+			if (scanner_scan(path, &state->dir_stats)) {
 				state->prev_stats = state->dir_stats;
 				state->reference_stats = state->dir_stats;
 				state->reference_init = true;

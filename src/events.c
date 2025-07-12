@@ -365,7 +365,7 @@ operation_type_t determine_operation(entity_state_t *state, event_type_t new_eve
 
 		/* For directory creation, gather initial stats */
 		if (state->type == ENTITY_DIRECTORY) {
-			scanner_scan(state->path_state->path, &state->dir_stats, 0);
+			scanner_scan(state->path_state->path, &state->dir_stats);
 			state->prev_stats = state->dir_stats;
 		}
 	} else if (exists_now) {
