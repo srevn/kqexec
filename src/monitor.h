@@ -37,8 +37,8 @@ typedef struct monitor {
 
 	/* Queue for delayed events */
 	struct delayed_event *delayed_events;  /* Array of delayed events */
-	int delayed_event_count;               /* Current number of delayed events */
-	int delayed_event_capacity;            /* Allocated capacity */
+	int delayed_count;                     /* Current number of delayed events */
+	int delayed_capacity;                  /* Allocated capacity */
 } monitor_t;
 
 /* Function prototypes */

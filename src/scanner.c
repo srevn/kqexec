@@ -31,8 +31,7 @@ void scanner_update(entity_state_t *state) {
 	int new_dir_change = state->dir_stats.tree_dirs - state->prev_stats.tree_dirs;
 	int new_depth_change = state->dir_stats.max_depth - state->prev_stats.max_depth;
 
-	/* Fix for deletion depth tracking: If significant directory deletion
-	   but no depth change reported, infer a depth change */
+	/* If significant directory deletion but no depth change reported, infer a depth change */
 	if (new_dir_change < -5 && new_depth_change == 0) {
 		/* Large structure deletion detected but depth unchanged - likely a bug */
 		log_message(DEBUG, "Deletion detected with no depth change for %s - inferring depth reduction",
@@ -64,10 +63,8 @@ void scanner_update(entity_state_t *state) {
 	/* Log significant cumulative changes */
 	if (new_file_change != 0 || new_dir_change != 0 || new_depth_change != 0) {
 		log_message(DEBUG, "Updated cumulative changes for %s: files=%+d (%+d), dirs=%+d (%+d), depth=%+d (%+d)",
-		            		state->path_state->path,
-		            		state->cumulative_file, new_file_change,
-		            		state->cumulative_dir, new_dir_change,
-		            		state->cumulative_depth, new_depth_change);
+		            		state->path_state->path, state->cumulative_file, new_file_change,
+		            		state->cumulative_dir, new_dir_change, state->cumulative_depth, new_depth_change);
 	}
 }
 
@@ -218,10 +215,8 @@ bool scanner_compare(dir_stats_t *prev, dir_stats_t *current) {
 	if (!((total_change <= max_allowed_change || change_percentage <= max_allowed_percent) &&
 	      (depth_change == 0 || (abs(depth_change) == 1 && prev->max_depth > 2)))) {
 		log_message(DEBUG, "Directory unstable: %d/%d to %d/%d, depth %d to %d (%+d files, %+d dirs, %+d depth, %.1f%% change)",
-		            		prev->tree_files, prev->tree_dirs,
-		            		current->tree_files, current->tree_dirs,
-		            		prev->max_depth, current->max_depth,
-		            		file_change, dir_change, depth_change, change_percentage);
+		            		prev->tree_files, prev->tree_dirs, current->tree_files, current->tree_dirs,
+		            		prev->max_depth, current->max_depth, file_change, dir_change, depth_change, change_percentage);
 		is_stable = false;
 	}
 
@@ -469,11 +464,9 @@ static void scanner_update_stats(entity_state_t *state, operation_type_t op) {
 			/* Update cumulative changes */
 			scanner_update(state);
 
-			log_message(DEBUG, "Directory stats for %s after change: files=%d, dirs=%d, max_depth=%d (was: files=%d, dirs=%d, max_depth=%d)",
-			            		state->path_state->path,
-			            		state->dir_stats.tree_files, state->dir_stats.tree_dirs,
-			            		state->dir_stats.max_depth,
-			            		state->prev_stats.tree_files, state->prev_stats.tree_dirs,
+			log_message(DEBUG, "Directory stats for %s: files=%d, dirs=%d, max_depth=%d (was: files=%d, dirs=%d, max_depth=%d)",
+			            		state->path_state->path, state->dir_stats.tree_files, state->dir_stats.tree_dirs,
+			            		state->dir_stats.max_depth, state->prev_stats.tree_files, state->prev_stats.tree_dirs,
 			            		state->prev_stats.max_depth);
 		}
 	}
@@ -683,7 +676,8 @@ static long scanner_backoff(entity_state_t *state, long required_ms) {
 	}
 
 	long adjusted_ms = (long) (required_ms * backoff_factor);
-	log_message(DEBUG, "Applying instability backoff factor of %.2f, new quiet period: %ld ms", backoff_factor, adjusted_ms);
+	log_message(DEBUG, "Applying instability backoff factor of %.2f, new quiet period: %ld ms",
+						backoff_factor, adjusted_ms);
 
 	return adjusted_ms;
 }
@@ -728,16 +722,16 @@ long scanner_delay(entity_state_t *state) {
 			/* Apply exponential backoff for consecutive instability */
 			required_ms = scanner_backoff(state, required_ms);
 
-			log_message(DEBUG, "Quiet period for %s: %ld ms (cumulative changes: %+d files, %+d dirs, %+d depth, in dir with %d entries, depth %d)",
-			        			state->path_state->path, required_ms, state->cumulative_file,
-			        			state->cumulative_dir, state->cumulative_depth, total_entries, tree_depth);
+			log_message(DEBUG, "Quiet period for %s: %ld ms (changes: %+d files, %+d dirs, %+d depth, total: %d entries, depth %d)",
+			        			state->path_state->path, required_ms, state->cumulative_file, state->cumulative_dir,
+								state->cumulative_depth, total_entries, tree_depth);
 		} else {
 			/* For inactive directories, just log the base period with recursive stats */
 			int total_entries = state->dir_stats.tree_files + state->dir_stats.tree_dirs;
 			int tree_depth = state->dir_stats.max_depth > 0 ? state->dir_stats.max_depth : state->dir_stats.depth;
 			int subdir_count = state->dir_stats.tree_dirs;
 
-			log_message(DEBUG, "Using base quiet period for %s: %ld ms (recursive entries: %d, max depth: %d, total subdirs: %d)",
+			log_message(DEBUG, "Using base quiet period for %s: %ld ms (recursive entries: %d, depth: %d, subdirs: %d)",
 			            		state->path_state->path, required_ms, total_entries, tree_depth, subdir_count);
 		}
 	}
@@ -827,7 +821,7 @@ char *scanner_newest(const char *dir_path) {
 	struct dirent *entry;
 	struct stat st;
 	char path[PATH_MAX];
-	char *newest_file_path = NULL;
+	char *newest_file = NULL;
 	time_t newest_time = 0;
 
 	dir = opendir(dir_path);
@@ -846,12 +840,12 @@ char *scanner_newest(const char *dir_path) {
 			time_t latest_time = (st.st_mtime > st.st_ctime) ? st.st_mtime : st.st_ctime;
 			if (latest_time > newest_time) {
 				newest_time = latest_time;
-				free(newest_file_path);
-				newest_file_path = strdup(path);
+				free(newest_file);
+				newest_file = strdup(path);
 			}
 		}
 	}
 
 	closedir(dir);
-	return newest_file_path;
+	return newest_file;
 }

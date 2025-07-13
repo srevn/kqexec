@@ -24,28 +24,11 @@
 
 /* Global array of active command intents */
 #define MAX_COMMAND_INTENTS 10
-static int active_intent_count = 0;
+static int intent_count = 0;
 static command_intent_t command_intents[MAX_COMMAND_INTENTS];
 
 /* Debounce time in milliseconds */
 static int debounce_time_ms = DEFAULT_DEBOUNCE_TIME_MS;
-
-/* Thread-safe logging wrapper */
-void thread_safe_log(int level, const char *format, ...) {
-	static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
-	va_list args;
-
-	pthread_mutex_lock(&log_mutex);
-	va_start(args, format);
-
-	/* Use a buffer for thread-safe logging */
-	char buffer[2048];
-	vsnprintf(buffer, sizeof(buffer), format, args);
-	log_message(level, "%s", buffer);
-
-	va_end(args);
-	pthread_mutex_unlock(&log_mutex);
-}
 
 /* SIGCHLD handler to reap child processes and mark command intents as complete */
 static void command_sigchld(int sig) {
@@ -88,7 +71,7 @@ bool command_init(void) {
 
 	/* Initialize command intent tracking */
 	memset(command_intents, 0, sizeof(command_intents));
-	active_intent_count = 0;
+	intent_count = 0;
 
 	return true;
 }
@@ -112,7 +95,7 @@ void command_intent_cleanup(void) {
 		}
 	}
 	memset(command_intents, 0, sizeof(command_intents));
-	active_intent_count = 0;
+	intent_count = 0;
 
 	/* Restore previous signal mask */
 	sigprocmask(SIG_SETMASK, &oldmask, NULL);
@@ -139,7 +122,7 @@ bool command_affects(const char *path) {
 
 			/* Mark as inactive but don't free memory here to prevent race conditions */
 			command_intents[i].active = false;
-			active_intent_count--;
+			intent_count--;
 			continue;
 		}
 
@@ -223,7 +206,7 @@ void command_intent_expire(void) {
 			/* Mark as inactive if not already */
 			if (command_intents[i].active) {
 				command_intents[i].active = false;
-				active_intent_count--;
+				intent_count--;
 			}
 		}
 	}
@@ -341,7 +324,7 @@ command_intent_t *command_intent_create(pid_t pid, const char *command, const ch
 
 	/* Mark the intent as active */
 	intent->active = true;
-	active_intent_count++;
+	intent_count++;
 
 	log_message(DEBUG, "Created command intent for PID %d with %d affected paths", pid, intent->affected_path_count);
 
@@ -362,7 +345,7 @@ bool command_intent_complete(pid_t pid) {
 	for (int i = 0; i < MAX_COMMAND_INTENTS; i++) {
 		if (command_intents[i].active && command_intents[i].command_pid == pid) {
 			command_intents[i].active = false;
-			active_intent_count--;
+			intent_count--;
 
 			log_message(DEBUG, "Marked command intent for PID %d as complete", pid);
 
@@ -566,7 +549,7 @@ char *command_placeholders(const watch_entry_t *watch, const char *command, cons
 }
 
 /* Add line to output buffer */
-static bool add_to_output_buffer(char ***buffer, int *count, int *capacity, const char *line) {
+static bool buffer_append(char ***buffer, int *count, int *capacity, const char *line) {
 	if (*count >= *capacity) {
 		int new_capacity = *capacity == 0 ? 16 : *capacity * 2;
 		char **new_buffer = realloc(*buffer, new_capacity * sizeof(char *));
@@ -586,12 +569,12 @@ static bool add_to_output_buffer(char ***buffer, int *count, int *capacity, cons
 }
 
 /* Flush buffered output */
-static void flush_output_buffer(const watch_entry_t *watch, char **buffer, int count) {
+static void buffer_flush(const watch_entry_t *watch, char **buffer, int count) {
 	if (count == 0) return;
 
 	for (int i = 0; i < count; i++) {
 		if (buffer[i]) {
-			thread_safe_log(NOTICE, "[%s]: %s", watch->name, buffer[i]);
+			log_message(NOTICE, "[%s]: %s", watch->name, buffer[i]);
 		}
 	}
 }
@@ -599,7 +582,7 @@ static void flush_output_buffer(const watch_entry_t *watch, char **buffer, int c
 /* Command execution synchronous or asynchronous */
 bool command_execute(const watch_entry_t *watch, const file_event_t *event, bool synchronous) {
 	if (watch == NULL || event == NULL) {
-		thread_safe_log(ERROR, "Invalid arguments to command_execute");
+		log_message(ERROR, "Invalid arguments to command_execute");
 		return false;
 	}
 
@@ -636,12 +619,12 @@ bool command_execute(const watch_entry_t *watch, const file_event_t *event, bool
 		return false;
 	}
 
-	thread_safe_log(INFO, "Executing command: %s", command);
+	log_message(INFO, "Executing command: %s", command);
 
 	/* Create pipes for stdout and stderr if configured to capture output */
 	if (capture_output) {
 		if (pipe(stdout_pipe) < 0 || pipe(stderr_pipe) < 0) {
-			thread_safe_log(ERROR, "Failed to create pipes: %s", strerror(errno));
+			log_message(ERROR, "Failed to create pipes: %s", strerror(errno));
 			free(command);
 			return false;
 		}
@@ -650,7 +633,7 @@ bool command_execute(const watch_entry_t *watch, const file_event_t *event, bool
 	/* Fork a child process */
 	pid = fork();
 	if (pid == -1) {
-		thread_safe_log(ERROR, "Failed to fork: %s", strerror(errno));
+		log_message(ERROR, "Failed to fork: %s", strerror(errno));
 		if (capture_output) {
 			close(stdout_pipe[0]);
 			close(stdout_pipe[1]);
@@ -682,7 +665,7 @@ bool command_execute(const watch_entry_t *watch, const file_event_t *event, bool
 		execl("/bin/sh", "sh", "-c", command, NULL);
 
 		/* If we get here, execl failed */
-		thread_safe_log(ERROR, "Failed to execute command: %s", strerror(errno));
+		log_message(ERROR, "Failed to execute command: %s", strerror(errno));
 		exit(EXIT_FAILURE);
 	}
 
@@ -716,7 +699,7 @@ bool command_execute(const watch_entry_t *watch, const file_event_t *event, bool
 
 			if (select_result <= 0) {
 				if (select_result < 0 && errno != EINTR) {
-					thread_safe_log(WARNING, "select() failed: %s", strerror(errno));
+					log_message(WARNING, "select() failed: %s", strerror(errno));
 				}
 				continue;
 			}
@@ -737,15 +720,15 @@ bool command_execute(const watch_entry_t *watch, const file_event_t *event, bool
 							if (line_pos > 0) {
 								if (buffer_output) {
 									/* Add to buffer */
-									if (!add_to_output_buffer(&output_buffer, &output_count, &output_capacity, line_buffer)) {
-										thread_safe_log(WARNING, "[%s]: Failed to buffer output, switching to real-time",
-										                					watch->name);
+									if (!buffer_append(&output_buffer, &output_count, &output_capacity, line_buffer)) {
+										log_message(WARNING, "[%s]: Failed to buffer output, switching to real-time",
+															  watch->name);
 										buffer_output = false;
-										thread_safe_log(NOTICE, "[%s]: %s", watch->name, line_buffer);
+										log_message(NOTICE, "[%s]: %s", watch->name, line_buffer);
 									}
 								} else {
 									/* Real-time logging */
-									thread_safe_log(NOTICE, "[%s]: %s", watch->name, line_buffer);
+									log_message(NOTICE, "[%s]: %s", watch->name, line_buffer);
 								}
 							}
 							line_pos = 0;
@@ -764,7 +747,7 @@ bool command_execute(const watch_entry_t *watch, const file_event_t *event, bool
 					stderr_open = false;
 				} else {
 					buffer[bytes_read] = '\0';
-					thread_safe_log(WARNING, "[%s]: %s", watch->name, buffer);
+					log_message(WARNING, "[%s]: %s", watch->name, buffer);
 				}
 			}
 		}
@@ -773,11 +756,11 @@ bool command_execute(const watch_entry_t *watch, const file_event_t *event, bool
 		if (line_pos > 0) {
 			line_buffer[line_pos] = '\0';
 			if (buffer_output) {
-				if (!add_to_output_buffer(&output_buffer, &output_count, &output_capacity, line_buffer)) {
-					thread_safe_log(NOTICE, "[%s]: %s", watch->name, line_buffer);
+				if (!buffer_append(&output_buffer, &output_count, &output_capacity, line_buffer)) {
+					log_message(NOTICE, "[%s]: %s", watch->name, line_buffer);
 				}
 			} else {
-				thread_safe_log(NOTICE, "[%s]: %s", watch->name, line_buffer);
+				log_message(NOTICE, "[%s]: %s", watch->name, line_buffer);
 			}
 		}
 
@@ -807,7 +790,7 @@ bool command_execute(const watch_entry_t *watch, const file_event_t *event, bool
 
 	/* Flush buffered output if buffering was enabled */
 	if (capture_output && buffer_output && output_buffer) {
-		flush_output_buffer(watch, output_buffer, output_count);
+		buffer_flush(watch, output_buffer, output_count);
 
 		/* Clean up buffer */
 		for (int i = 0; i < output_count; i++) {
@@ -817,8 +800,8 @@ bool command_execute(const watch_entry_t *watch, const file_event_t *event, bool
 	}
 
 	/* Log command completion */
-	thread_safe_log(INFO, "[%s] Finished execution (pid %d, duration: %lds, exit: %d)",
-	        			   watch->name, pid, end_time - start_time, WEXITSTATUS(status));
+	log_message(INFO, "[%s] Finished execution (pid %d, duration: %lds, exit: %d)",
+	        		   watch->name, pid, end_time - start_time, WEXITSTATUS(status));
 
 	/* Mark the entity state with the command execution */
 	entity_state_t *state = states_get(event->path, ENTITY_UNKNOWN, (watch_entry_t *) watch);

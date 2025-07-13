@@ -61,8 +61,8 @@ monitor_t *monitor_create(config_t *config) {
 
 	/* Initialize delayed event queue */
 	monitor->delayed_events = NULL;
-	monitor->delayed_event_count = 0;
-	monitor->delayed_event_capacity = 0;
+	monitor->delayed_count = 0;
+	monitor->delayed_capacity = 0;
 
 	return monitor;
 }
@@ -106,7 +106,7 @@ void monitor_destroy(monitor_t *monitor) {
 
 	/* Clean up delayed event queue */
 	if (monitor->delayed_events) {
-		for (int i = 0; i < monitor->delayed_event_count; i++) {
+		for (int i = 0; i < monitor->delayed_count; i++) {
 			free(monitor->delayed_events[i].event.path);
 		}
 		free(monitor->delayed_events);
@@ -705,14 +705,14 @@ bool monitor_reload(monitor_t *monitor) {
 
 	/* Also clear delayed events queue that may reference old watches */
 	if (monitor->delayed_events) {
-		for (int i = 0; i < monitor->delayed_event_count; i++) {
+		for (int i = 0; i < monitor->delayed_count; i++) {
 			free(monitor->delayed_events[i].event.path);
 		}
 		free(monitor->delayed_events);
 		monitor->delayed_events = NULL;
-		monitor->delayed_event_count = 0;
-		log_message(DEBUG, "Cleared %d delayed events during config reload", monitor->delayed_event_count);
-		monitor->delayed_event_capacity = 0;
+		monitor->delayed_count = 0;
+		log_message(DEBUG, "Cleared %d delayed events during config reload", monitor->delayed_count);
+		monitor->delayed_capacity = 0;
 	}
 
 	/* Update entity states to point to new watch entries */

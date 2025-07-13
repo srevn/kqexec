@@ -5,8 +5,8 @@
 #include <sys/stat.h>
 
 #include "monitor.h"
-#include "scanner.h"
 #include "stability.h"
+#include "scanner.h"
 #include "states.h"
 #include "logger.h"
 #include "command.h"
@@ -50,7 +50,7 @@ bool stability_ready(monitor_t *monitor, entity_state_t *state, operation_type_t
 			/* Always trigger a deferred check; queue deduplicates */
 			root->activity_active = true;
 			log_message(DEBUG, "Directory content change for %s, marked root %s as active - command deferred",
-			            state->path_state->path, root->path_state->path);
+			        			state->path_state->path, root->path_state->path);
 			scanner_sync(root->path_state, root);
 
 			if (!root) {
@@ -84,7 +84,7 @@ bool stability_ready(monitor_t *monitor, entity_state_t *state, operation_type_t
 	if (debounce_ms < 0) debounce_ms = 0;
 
 	log_message(DEBUG, "Debounce check for %s: %ld ms elapsed, %d ms required",
-	            state->path_state->path, elapsed_ms_since_command, debounce_ms);
+	        			state->path_state->path, elapsed_ms_since_command, debounce_ms);
 
 	/* Check if enough time has passed or if it's the first command */
 	if (elapsed_ms_since_command >= debounce_ms || state->command_time == 0) {
@@ -222,9 +222,8 @@ bool stability_quiet(entity_state_t *root_state, struct timespec *current_time, 
 	long required_quiet_period_ms = scanner_delay(root_state);
 
 	log_message(DEBUG, "Path %s: %ld ms elapsed of %ld ms quiet period, direct_entries=%d+%d, recursive_entries=%d+%d, depth=%d",
-	        			root_state->path_state->path, elapsed_ms, required_quiet_period_ms,
-	        			root_state->dir_stats.file_count, root_state->dir_stats.dir_count,
-	        			root_state->dir_stats.tree_files, root_state->dir_stats.tree_dirs,
+	        			root_state->path_state->path, elapsed_ms, required_quiet_period_ms, root_state->dir_stats.file_count,
+						root_state->dir_stats.dir_count, root_state->dir_stats.tree_files, root_state->dir_stats.tree_dirs,
 	        			root_state->dir_stats.depth);
 
 	return scanner_ready(root_state, current_time);
@@ -296,7 +295,7 @@ bool stability_scan(entity_state_t *root_state, const char *path, dir_stats_t *c
 		/* Set previous stats to current for the next cycle's comparison */
 		root_state->prev_stats = *current_stats_out;
 
-		log_message(DEBUG, "Stability scan for %s: files=%d, dirs=%d, size=%.2f MB, recursive_files=%d, recursive_dirs=%d, max_depth=%d, stable=yes",
+		log_message(DEBUG, "Stability scan for %s: files=%d, dirs=%d, size=%.2f MB, recursive_files=%d, recursive_dirs=%d, max_depth=%d",
 		    				path, current_stats_out->file_count, current_stats_out->dir_count, current_stats_out->total_size / (1024.0 * 1024.0),
 		        			current_stats_out->tree_files, current_stats_out->tree_dirs, current_stats_out->max_depth);
 	}
@@ -305,7 +304,7 @@ bool stability_scan(entity_state_t *root_state, const char *path, dir_stats_t *c
 }
 
 /* Handle scan failure cases */
-scan_failure_type_t stability_fail(monitor_t *monitor, deferred_check_t *entry, entity_state_t *root_state, struct timespec *current_time) {
+failure_type_t stability_fail(monitor_t *monitor, deferred_check_t *entry, entity_state_t *root_state, struct timespec *current_time) {
 	if (!monitor || !entry || !root_state || !current_time) {
 		return SCAN_FAILURE_TEMPORARY_ERROR;
 	}
@@ -318,7 +317,8 @@ scan_failure_type_t stability_fail(monitor_t *monitor, deferred_check_t *entry, 
 
 		/* After multiple consecutive failures, consider it permanently deleted */
 		if (root_state->checks_failed >= MAX_FAILED_CHECKS) {
-			log_message(INFO, "Directory %s confirmed deleted after %d failed checks, cleaning up", entry->path, root_state->checks_failed);
+			log_message(INFO, "Directory %s confirmed deleted after %d failed checks, cleaning up",
+							   entry->path, root_state->checks_failed);
 
 			/* Mark as not active for all watches */
 			root_state->activity_active = false;
@@ -412,8 +412,8 @@ void stability_reset(entity_state_t *root_state) {
 	root_state->cumulative_file = 0;
 	root_state->cumulative_dir = 0;
 	root_state->cumulative_depth = 0;
-	root_state->stability_lost = false;
 	root_state->instability_count = 0;
+	root_state->stability_lost = false;
 
 	/* Propagate the reset state to all related states for this path */
 	scanner_sync(root_state->path_state, root_state);
@@ -467,12 +467,14 @@ bool stability_execute(monitor_t *monitor, deferred_check_t *entry, entity_state
 		/* Get or create state for this specific watch */
 		entity_state_t *watch_state = states_get(entry->path, ENTITY_DIRECTORY, watch);
 		if (!watch_state) {
-			log_message(WARNING, "Unable to get state for %s with watch %s during command execution", entry->path, watch->name);
+			log_message(WARNING, "Unable to get state for %s with watch %s during command execution",
+								  entry->path, watch->name);
 			continue;
 		}
 
 		/* Execute command */
-		log_message(INFO, "Executing deferred command for %s (watch: %s)", entry->path, watch->name);
+		log_message(INFO, "Executing deferred command for %s (watch: %s)",
+						   entry->path, watch->name);
 
 		if (command_execute(watch, &synthetic_event, false)) {
 			commands_executed++;
@@ -480,9 +482,11 @@ bool stability_execute(monitor_t *monitor, deferred_check_t *entry, entity_state
 			/* Update last command time for this specific watch */
 			watch_state->command_time = current_time->tv_sec;
 
-			log_message(DEBUG, "Command execution successful for %s (watch: %s), updated last command time", entry->path, watch->name);
+			log_message(DEBUG, "Command execution successful for %s (watch: %s), updated last command time",
+								entry->path, watch->name);
 		} else {
-			log_message(WARNING, "Command execution failed for %s (watch: %s)", entry->path, watch->name);
+			log_message(WARNING, "Command execution failed for %s (watch: %s)",
+								  entry->path, watch->name);
 		}
 	}
 
@@ -493,7 +497,7 @@ bool stability_execute(monitor_t *monitor, deferred_check_t *entry, entity_state
 	return commands_executed > 0;
 }
 
-/* Main stability processing function - coordinator that replaces process_deferred_dir_scans */
+/* Main stability processing function */
 void stability_process(monitor_t *monitor, struct timespec *current_time) {
 	int commands_attempted_total = 0;
 	int commands_executed_total = 0;
@@ -586,7 +590,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 
 		/* Handle scan failure */
 		if (!scan_completed) {
-			scan_failure_type_t failure_type = stability_fail(monitor, entry, root_state, current_time);
+			failure_type_t failure_type = stability_fail(monitor, entry, root_state, current_time);
 
 			if (failure_type == SCAN_FAILURE_MAX_ATTEMPTS_REACHED) {
 				/* Remove from queue */
@@ -633,10 +637,9 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 		/* Calculate required checks based on complexity factors */
 		int required_checks = stability_require(root_state, &current_stats);
 
-		log_message(DEBUG, "Stability check %d/%d for %s: cumulative changes (%+d files, %+d dirs, %+d depth) in dir with %d entries, depth %d",
-		    				root_state->checks_count, required_checks, root_state->path_state->path,
-		            		root_state->cumulative_file, root_state->cumulative_dir, root_state->cumulative_depth,
-		            		current_stats.tree_files + current_stats.tree_dirs,
+		log_message(DEBUG, "Stability check %d/%d for %s: changes (%+d files, %+d dirs, %+d depth) total (%d entries, depth %d)",
+		    				root_state->checks_count, required_checks, root_state->path_state->path, root_state->cumulative_file, 
+							root_state->cumulative_dir, root_state->cumulative_depth, current_stats.tree_files + current_stats.tree_dirs,
 		            		current_stats.max_depth > 0 ? current_stats.max_depth : current_stats.depth);
 
 		/* Check if we have enough consecutive stable checks */

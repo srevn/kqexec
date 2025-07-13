@@ -11,7 +11,7 @@ typedef enum {
     SCAN_FAILURE_DIRECTORY_DELETED,        /* Directory was deleted during scan */
     SCAN_FAILURE_TEMPORARY_ERROR,          /* Scan failed for other reasons (e.g., temp files) */
     SCAN_FAILURE_MAX_ATTEMPTS_REACHED      /* Maximum attempts reached without success */
-} scan_failure_type_t;
+} failure_type_t;
 
 /* Main stability processing function */
 void stability_process(monitor_t *monitor, struct timespec *current_time);
@@ -28,7 +28,7 @@ bool stability_ready(monitor_t *monitor, entity_state_t *state, operation_type_t
 /* Directory stability verification */
 bool stability_scan(entity_state_t *root_state, const char *path, dir_stats_t *current_stats_out);
 bool stability_new(monitor_t *monitor, deferred_check_t *entry);
-scan_failure_type_t stability_fail(monitor_t *monitor, deferred_check_t *entry, entity_state_t *root_state, struct timespec *current_time);
+failure_type_t stability_fail(monitor_t *monitor, deferred_check_t *entry, entity_state_t *root_state, struct timespec *current_time);
 
 /* Stability calculation */
 int stability_require(entity_state_t *root_state, const dir_stats_t *current_stats);

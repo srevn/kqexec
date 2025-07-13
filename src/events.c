@@ -112,15 +112,15 @@ void events_schedule(monitor_t *monitor, watch_entry_t *watch, file_event_t *eve
 	}
 
 	/* Expand delayed events array if needed */
-	if (monitor->delayed_event_count >= monitor->delayed_event_capacity) {
-		int new_capacity = monitor->delayed_event_capacity == 0 ? 16 : monitor->delayed_event_capacity * 2;
+	if (monitor->delayed_count >= monitor->delayed_capacity) {
+		int new_capacity = monitor->delayed_capacity == 0 ? 16 : monitor->delayed_capacity * 2;
 		delayed_event_t *new_events = realloc(monitor->delayed_events, new_capacity * sizeof(delayed_event_t));
 		if (!new_events) {
 			log_message(ERROR, "Failed to allocate memory for delayed events");
 			return;
 		}
 		monitor->delayed_events = new_events;
-		monitor->delayed_event_capacity = new_capacity;
+		monitor->delayed_capacity = new_capacity;
 	}
 
 	/* Calculate process time */
@@ -136,7 +136,7 @@ void events_schedule(monitor_t *monitor, watch_entry_t *watch, file_event_t *eve
 	}
 
 	/* Store the delayed event */
-	delayed_event_t *delayed = &monitor->delayed_events[monitor->delayed_event_count++];
+	delayed_event_t *delayed = &monitor->delayed_events[monitor->delayed_count++];
 	delayed->event.path = strdup(event->path);
 	delayed->event.type = event->type;
 	delayed->event.time = event->time;
@@ -152,7 +152,7 @@ void events_schedule(monitor_t *monitor, watch_entry_t *watch, file_event_t *eve
 
 /* Process delayed events that are ready */
 void events_delayed(monitor_t *monitor) {
-	if (!monitor || !monitor->delayed_events || monitor->delayed_event_count == 0) {
+	if (!monitor || !monitor->delayed_events || monitor->delayed_count == 0) {
 		return;
 	}
 
@@ -160,7 +160,7 @@ void events_delayed(monitor_t *monitor) {
 	clock_gettime(CLOCK_MONOTONIC, &now);
 
 	int processed = 0;
-	for (int i = 0; i < monitor->delayed_event_count; i++) {
+	for (int i = 0; i < monitor->delayed_count; i++) {
 		delayed_event_t *delayed = &monitor->delayed_events[i];
 
 		/* Check if this event is ready to process */
@@ -179,11 +179,11 @@ void events_delayed(monitor_t *monitor) {
 			processed++;
 
 			/* Move the last event to this position to avoid gaps */
-			if (i < monitor->delayed_event_count - 1) {
-				monitor->delayed_events[i] = monitor->delayed_events[monitor->delayed_event_count - 1];
+			if (i < monitor->delayed_count - 1) {
+				monitor->delayed_events[i] = monitor->delayed_events[monitor->delayed_count - 1];
 				i--; /* Reprocess this position */
 			}
-			monitor->delayed_event_count--;
+			monitor->delayed_count--;
 		}
 	}
 
@@ -194,12 +194,12 @@ void events_delayed(monitor_t *monitor) {
 
 /* Calculate timeout for the next delayed event */
 int events_timeout(monitor_t *monitor, struct timespec *now) {
-	if (!monitor || !monitor->delayed_events || monitor->delayed_event_count == 0) {
+	if (!monitor || !monitor->delayed_events || monitor->delayed_count == 0) {
 		return -1; /* No timeout needed */
 	}
 
 	struct timespec earliest = monitor->delayed_events[0].process_time;
-	for (int i = 1; i < monitor->delayed_event_count; i++) {
+	for (int i = 1; i < monitor->delayed_count; i++) {
 		if (monitor->delayed_events[i].process_time.tv_sec < earliest.tv_sec ||
 		    (monitor->delayed_events[i].process_time.tv_sec == earliest.tv_sec &&
 		     monitor->delayed_events[i].process_time.tv_nsec < earliest.tv_nsec)) {
@@ -314,7 +314,7 @@ struct timespec* timeout_calculate(monitor_t *monitor, struct timespec *timeout,
 		/* Debug output for the queue status */
 		if (monitor->check_queue->items[0].path) {
 			log_message(DEBUG, "Deferred queue status: %d entries, next check for path %s",
-			            monitor->check_queue->size, monitor->check_queue->items[0].path);
+			        			monitor->check_queue->size, monitor->check_queue->items[0].path);
 		}
 
 		/* Get the earliest check time (top of min-heap) */
