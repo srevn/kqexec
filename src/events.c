@@ -256,11 +256,20 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int count, struct 
 
 	/* Process new events */
 	for (int i = 0; i < count; i++) {
-		/* Find all watches that use this file descriptor */
+		/* Get the watch_info directly from udata for O(1) access */
+		watch_info_t *primary_info = (watch_info_t*)events[i].udata;
+		if (!primary_info) {
+			log_message(WARNING, "Received kevent with NULL udata, skipping");
+			continue;
+		}
+
+		int fd = (int)events[i].ident;
+
+		/* Find all watches that share this file descriptor */
 		for (int j = 0; j < monitor->watch_count; j++) {
 			watch_info_t *info = monitor->watches[j];
 
-			if ((uintptr_t) info->wd == events[i].ident) {
+			if (info->wd == fd) {
 				file_event_t event;
 				memset(&event, 0, sizeof(event));
 				event.path = info->path;
