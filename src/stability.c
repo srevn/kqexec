@@ -555,6 +555,9 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 			log_message(DEBUG, "Quiet period not yet elapsed for %s (watch: %s), rescheduling",
 			        			root_state->path_state->path, primary_watch ? primary_watch->name : "unknown");
 
+			/* Increment instability counter */
+			root_state->unstable_count++; 
+
 			stability_delay(monitor, entry, root_state, current_time);
 			continue;
 		}
@@ -567,6 +570,9 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 
 			/* Synchronize state after adding watches but before rescheduling */
 			scanner_sync(root_state->path_state, root_state);
+
+			/* Increment instability counter */
+			root_state->unstable_count++;
 
 			/* Reschedule with a shorter interval for quick follow-up */
 			struct timespec next_check;
