@@ -658,7 +658,7 @@ static long scanner_adjust(entity_state_t *state, long base_ms) {
 
 /* Apply exponential backoff for consecutive instability */
 static long scanner_backoff(entity_state_t *state, long required_ms) {
-	if (state->unstable_count <= 2) {  /* Only apply backoff after 3 consecutive unstable counts */
+	if (state->unstable_count < 3) {  /* Only apply backoff after 3 consecutive unstable counts */
 		return required_ms;
 	}
 
@@ -666,7 +666,7 @@ static long scanner_backoff(entity_state_t *state, long required_ms) {
 	double backoff_factor = 1.0;
 
 	/* Increase backoff factor for repeated instability after 3 consecutive unstable counts */
-	for (int i = 3; i < state->unstable_count; i++) {
+	for (int i = 3; i <= state->unstable_count; i++) {
 		backoff_factor *= 1.25;
 	}
 
