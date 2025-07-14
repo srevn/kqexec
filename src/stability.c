@@ -144,6 +144,13 @@ void stability_defer(monitor_t *monitor, entity_state_t *state) {
 
 	long required_quiet = scanner_delay(root_state);
 
+	/* Log complexity multiplier effect when scheduling */
+	if (root_state->watch && root_state->watch->complexity > 0) {
+		long pre_multiplier = (long) (required_quiet / root_state->watch->complexity);
+		log_message(DEBUG, "Applied complexity multiplier %.2f to %s: %ld ms -> %ld ms",
+		        			root_state->watch->complexity, root_state->path_state->path, pre_multiplier, required_quiet);
+	}
+
 	struct timespec next_check;
 	next_check.tv_sec = root_state->tree_activity.tv_sec + (required_quiet / 1000);
 	next_check.tv_nsec = root_state->tree_activity.tv_nsec + ((required_quiet % 1000) * 1000000);
