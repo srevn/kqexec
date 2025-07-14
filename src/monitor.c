@@ -596,7 +596,7 @@ bool monitor_poll(monitor_t *monitor) {
 		if (sync_request.count > 0) {
 			log_message(DEBUG, "Processing %d sync requests", sync_request.count);
 			for (int i = 0; i < sync_request.count; i++) {
-				log_message(DEBUG, "Syncing path: %s", sync_request.paths[i]);
+				log_message(DEBUG, "Validating watch for path: %s", sync_request.paths[i]);
 				monitor_sync(monitor, sync_request.paths[i]);
 			}
 		}
