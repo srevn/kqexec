@@ -833,6 +833,11 @@ char *scanner_newest(const char *dir_path) {
 		if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
 			continue;
 		}
+		
+		/* Skip .DS_Store files created by macOS */
+		if (strcmp(entry->d_name, ".DS_Store") == 0) {
+			continue;
+		}
 
 		snprintf(path, sizeof(path), "%s/%s", dir_path, entry->d_name);
 		if (stat(path, &st) == 0) {
@@ -879,6 +884,11 @@ char *scanner_modified(const char *base_path, time_t since_time, bool recursive,
 
 	while ((entry = readdir(dir))) {
 		if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+			continue;
+		}
+		
+		/* Skip .DS_Store files created by macOS */
+		if (strcmp(entry->d_name, ".DS_Store") == 0) {
 			continue;
 		}
 
