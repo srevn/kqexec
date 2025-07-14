@@ -36,6 +36,7 @@ bool scanner_scan(const char *dir_path, dir_stats_t *stats);
 bool scanner_stable(entity_state_t *context_state, const char *dir_path, dir_stats_t *stats);
 bool scanner_compare(dir_stats_t *prev, dir_stats_t *current);
 char *scanner_newest(const char *dir_path);
+char *scanner_modified(const char *base_path, time_t since_time, bool recursive, bool basename);
 void scanner_update(entity_state_t *state);
 
 /* Activity tracking and timing */

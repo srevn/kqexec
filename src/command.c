@@ -18,6 +18,7 @@
 #include "states.h"
 #include "stability.h"
 #include "logger.h"
+#include "scanner.h"
 
 /* Maximum length of command */
 #define MAX_CMD_LEN 4096
@@ -423,6 +424,8 @@ static const char *human_readable_size(size_t size, char *buf, size_t buf_size) 
  * %r: Event path relative to the watch path
  * %f: The file that triggered a directory event (most recent)
  * %F: The basename of the file that triggered a directory event (most recent)
+ * %l: List of filenames (without paths) modified within one second of current event
+ * %L: List of files modified within one second of current event (newline-separated)
  * %s: Size of the file in bytes (recursive for directories)
  * %S: Human-readable size (e.g., 1.2M, 512K)
  * %t: Time of the event (format: YYYY-MM-DD HH:MM:SS)
@@ -508,6 +511,32 @@ char *command_placeholders(const watch_entry_t *watch, const char *command, cons
 				command_substitute(result, "%F", basename(path_copy));
 				free(path_copy);
 			}
+		}
+	}
+
+	/* Substitute %l with list of filenames (without paths) modified since processing began */
+	if (strstr(result, "%l")) {
+		/* Use current event time with 1-second buffer to catch files modified around this event */
+		time_t since_time = event->wall_time.tv_sec - 1;
+		char *modified_files = scanner_modified(watch->path, since_time, watch->recursive, true);
+		if (modified_files) {
+			command_substitute(result, "%l", modified_files);
+			free(modified_files);
+		} else {
+			command_substitute(result, "%l", "");
+		}
+	}
+
+	/* Substitute %L with list of files modified since processing began */
+	if (strstr(result, "%L")) {
+		/* Use current event time with 1-second buffer to catch files modified around this event */
+		time_t since_time = event->wall_time.tv_sec - 1;
+		char *modified_files = scanner_modified(watch->path, since_time, watch->recursive, false);
+		if (modified_files) {
+			command_substitute(result, "%L", modified_files);
+			free(modified_files);
+		} else {
+			command_substitute(result, "%L", "");
 		}
 	}
 

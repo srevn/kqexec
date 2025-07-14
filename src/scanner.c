@@ -849,3 +849,101 @@ char *scanner_newest(const char *dir_path) {
 	closedir(dir);
 	return newest_file;
 }
+
+/* Find all files modified since a specific time */
+char *scanner_modified(const char *base_path, time_t since_time, bool recursive, bool basename) {
+	DIR *dir;
+	struct dirent *entry;
+	struct stat st;
+	char path[PATH_MAX];
+	char *result = NULL;
+	size_t result_size = 0;
+	size_t result_capacity = 1024;
+
+	if (!base_path) {
+		return NULL;
+	}
+
+	/* Allocate initial buffer */
+	result = malloc(result_capacity);
+	if (!result) {
+		return NULL;
+	}
+	result[0] = '\0';
+
+	dir = opendir(base_path);
+	if (!dir) {
+		free(result);
+		return NULL;
+	}
+
+	while ((entry = readdir(dir))) {
+		if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+			continue;
+		}
+
+		snprintf(path, sizeof(path), "%s/%s", base_path, entry->d_name);
+		if (stat(path, &st) != 0) {
+			continue;
+		}
+
+		if (S_ISREG(st.st_mode)) {
+			/* Consider both modification time and change time */
+			time_t latest_time = (st.st_mtime > st.st_ctime) ? st.st_mtime : st.st_ctime;
+			if (latest_time > since_time) {
+				/* Add this file to the result */
+				const char *output_name = basename ? entry->d_name : path;
+				size_t name_len = strlen(output_name);
+				size_t needed = result_size + name_len + 2; /* +2 for newline and null terminator */
+				
+				if (needed > result_capacity) {
+					result_capacity = needed * 2;
+					char *new_result = realloc(result, result_capacity);
+					if (!new_result) {
+						free(result);
+						closedir(dir);
+						return NULL;
+					}
+					result = new_result;
+				}
+				
+				if (result_size > 0) {
+					result[result_size] = '\n';
+					result_size++;
+				}
+				strcpy(result + result_size, output_name);
+				result_size += name_len;
+			}
+		} else if (S_ISDIR(st.st_mode) && recursive) {
+			/* Recursively scan subdirectory */
+			char *subdir_result = scanner_modified(path, since_time, recursive, basename);
+			if (subdir_result && strlen(subdir_result) > 0) {
+				size_t subdir_len = strlen(subdir_result);
+				size_t needed = result_size + subdir_len + 2; /* +2 for newline and null terminator */
+				
+				if (needed > result_capacity) {
+					result_capacity = needed * 2;
+					char *new_result = realloc(result, result_capacity);
+					if (!new_result) {
+						free(result);
+						free(subdir_result);
+						closedir(dir);
+						return NULL;
+					}
+					result = new_result;
+				}
+				
+				if (result_size > 0) {
+					result[result_size] = '\n';
+					result_size++;
+				}
+				strcpy(result + result_size, subdir_result);
+				result_size += subdir_len;
+			}
+			free(subdir_result);
+		}
+	}
+
+	closedir(dir);
+	return result;
+}
