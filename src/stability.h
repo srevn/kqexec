@@ -2,6 +2,7 @@
 #define STABILITY_H
 
 #include <stdbool.h>
+#include <time.h>
 
 #include "states.h"
 #include "queue.h"
@@ -26,7 +27,7 @@ bool stability_quiet(entity_state_t *root_state, struct timespec *current_time, 
 bool stability_ready(monitor_t *monitor, entity_state_t *state, operation_type_t op, int debounce_ms);
 
 /* Directory stability verification */
-bool stability_scan(entity_state_t *root_state, const char *path, dir_stats_t *current_stats_out);
+bool stability_scan(entity_state_t *root_state, const char *path, dir_stats_t *stats_out);
 bool stability_new(monitor_t *monitor, deferred_check_t *entry);
 failure_type_t stability_fail(monitor_t *monitor, deferred_check_t *entry, entity_state_t *root_state, struct timespec *current_time);
 

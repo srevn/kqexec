@@ -2,6 +2,7 @@
 #define EVENTS_H
 
 #include <stdbool.h>
+#include <time.h>
 #include <sys/event.h>
 
 #include "config.h"
@@ -11,7 +12,7 @@ typedef struct monitor monitor_t;
 typedef struct entity_state entity_state_t;
 
 /* Activity window size for detecting quiet periods (in milliseconds) */
-#define MAX_ACTIVITY_SAMPLES 5             /* Number of recent events to track for activity analysis */
+#define MAX_SAMPLES 5             /* Number of recent events to track for activity analysis */
 
 /* Logical operation types */
 typedef enum {

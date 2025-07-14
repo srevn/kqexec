@@ -38,7 +38,7 @@ typedef struct entity_state {
 	time_t command_time;                   /* When a command was last triggered */
 
 	/* Activity tracking for coalescing events */
-	activity_sample_t recent_activity[MAX_ACTIVITY_SAMPLES];
+	activity_sample_t recent_activity[MAX_SAMPLES];
 	bool activity_active;                  /* Flag indicating a burst of activity */
 	int activity_count;                    /* Number of activity samples */
 	int activity_index;                    /* Circular buffer index */
@@ -48,13 +48,13 @@ typedef struct entity_state {
 	dir_stats_t prev_stats;                /* Previous stats for comparison */
 	int checks_count;                      /* Number of stability checks */
 	int checks_failed;                     /* Number of consecutive failed stability checks */
-	int instability_count;                 /* Number of times found unstable in a row */
+	int unstable_count;                    /* Number of times found unstable in a row */
 
 	/* Stable reference state tracking */
 	dir_stats_t reference_stats;           /* Last known stable state statistics */
 	bool reference_init;                   /* Whether reference stats are initialized */
 	int cumulative_file;                   /* Running total of file changes since stability */
-	int cumulative_dir;                    /* Running total of directory changes */
+	int cumulative_dirs;                   /* Running total of directory changes */
 	int cumulative_depth;                  /* Running total of depth changes */
 
 	bool check_pending;                    /* Flag indicating a deferred check is scheduled */

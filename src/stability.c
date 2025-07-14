@@ -142,11 +142,11 @@ void stability_defer(monitor_t *monitor, entity_state_t *state) {
 		root_state->tree_activity = now;
 	}
 
-	long required_quiet_period_ms = scanner_delay(root_state);
+	long required_quiet = scanner_delay(root_state);
 
 	struct timespec next_check;
-	next_check.tv_sec = root_state->tree_activity.tv_sec + (required_quiet_period_ms / 1000);
-	next_check.tv_nsec = root_state->tree_activity.tv_nsec + ((required_quiet_period_ms % 1000) * 1000000);
+	next_check.tv_sec = root_state->tree_activity.tv_sec + (required_quiet / 1000);
+	next_check.tv_nsec = root_state->tree_activity.tv_nsec + ((required_quiet % 1000) * 1000000);
 
 	/* Normalize nsec */
 	if (next_check.tv_nsec >= 1000000000) {
@@ -161,8 +161,8 @@ void stability_defer(monitor_t *monitor, entity_state_t *state) {
 	scanner_sync(root_state->path_state, root_state);
 
 	log_message(DEBUG, "Scheduled deferred check for %s: in %ld ms (directory with %d files, %d dirs)",
-	            		root_state->path_state->path, required_quiet_period_ms,
-	            		root_state->dir_stats.file_count, root_state->dir_stats.dir_count);
+	            		root_state->path_state->path, required_quiet, root_state->dir_stats.file_count,
+						root_state->dir_stats.dir_count);
 }
 
 /* Get the primary watch from a deferred check entry */
@@ -219,10 +219,10 @@ bool stability_quiet(entity_state_t *root_state, struct timespec *current_time, 
 		*elapsed_ms_out = elapsed_ms;
 	}
 
-	long required_quiet_period_ms = scanner_delay(root_state);
+	long required_quiet = scanner_delay(root_state);
 
 	log_message(DEBUG, "Path %s: %ld ms elapsed of %ld ms quiet period, direct_entries=%d+%d, recursive_entries=%d+%d, depth=%d",
-	        			root_state->path_state->path, elapsed_ms, required_quiet_period_ms, root_state->dir_stats.file_count,
+	        			root_state->path_state->path, elapsed_ms, required_quiet, root_state->dir_stats.file_count,
 						root_state->dir_stats.dir_count, root_state->dir_stats.tree_files, root_state->dir_stats.tree_dirs,
 	        			root_state->dir_stats.depth);
 
@@ -235,12 +235,12 @@ void stability_delay(monitor_t *monitor, deferred_check_t *entry, entity_state_t
 		return;
 	}
 
-	long required_quiet_period_ms = scanner_delay(root_state);
+	long required_quiet = scanner_delay(root_state);
 
 	/* Update next check time based on latest activity */
 	struct timespec next_check;
-	next_check.tv_sec = root_state->tree_activity.tv_sec + (required_quiet_period_ms / 1000);
-	next_check.tv_nsec = root_state->tree_activity.tv_nsec + ((required_quiet_period_ms % 1000) * 1000000);
+	next_check.tv_sec = root_state->tree_activity.tv_sec + (required_quiet / 1000);
+	next_check.tv_nsec = root_state->tree_activity.tv_nsec + ((required_quiet % 1000) * 1000000);
 
 	/* Normalize timestamp */
 	if (next_check.tv_nsec >= 1000000000) {
@@ -272,32 +272,32 @@ bool stability_new(monitor_t *monitor, deferred_check_t *entry) {
 }
 
 /* Perform directory stability verification */
-bool stability_scan(entity_state_t *root_state, const char *path, dir_stats_t *current_stats_out) {
-	if (!root_state || !path || !current_stats_out) {
+bool stability_scan(entity_state_t *root_state, const char *path, dir_stats_t *stats_out) {
+	if (!root_state || !path || !stats_out) {
 		return false;
 	}
 
 	/* Perform recursive stability verification */
-	bool scan_completed = scanner_stable(root_state, path, current_stats_out);
+	bool scan_completed = scanner_stable(root_state, path, stats_out);
 
 	/* Only update directory stats if the scan was fully completed */
 	if (scan_completed) {
 		root_state->checks_failed = 0; /* Reset failed checks on success */
 
 		/* Save previous stats for comparison before overwriting */
-		dir_stats_t temp_prev_stats = root_state->dir_stats;
-		root_state->dir_stats = *current_stats_out;
+		dir_stats_t temp_stats = root_state->dir_stats;
+		root_state->dir_stats = *stats_out;
 
 		/* Update cumulative changes based on the difference */
-		root_state->prev_stats = temp_prev_stats;
+		root_state->prev_stats = temp_stats;
 		scanner_update(root_state);
 
 		/* Set previous stats to current for the next cycle's comparison */
-		root_state->prev_stats = *current_stats_out;
+		root_state->prev_stats = *stats_out;
 
 		log_message(DEBUG, "Stability scan for %s: files=%d, dirs=%d, size=%.2f MB, recursive_files=%d, recursive_dirs=%d, max_depth=%d",
-		    				path, current_stats_out->file_count, current_stats_out->dir_count, current_stats_out->total_size / (1024.0 * 1024.0),
-		        			current_stats_out->tree_files, current_stats_out->tree_dirs, current_stats_out->max_depth);
+		    				path, stats_out->file_count, stats_out->dir_count, stats_out->total_size / (1024.0 * 1024.0),
+		        			stats_out->tree_files, stats_out->tree_dirs, stats_out->max_depth);
 	}
 
 	return scan_completed;
@@ -347,7 +347,7 @@ int stability_require(entity_state_t *root_state, const dir_stats_t *current_sta
 
 	/* Use cumulative changes for adapting stability requirements */
 	int abs_file_change = abs(root_state->cumulative_file);
-	int abs_dir_change = abs(root_state->cumulative_dir);
+	int abs_dir_change = abs(root_state->cumulative_dirs);
 	int abs_depth_change = abs(root_state->cumulative_depth);
 	int abs_change = abs_file_change + abs_dir_change;
 
@@ -410,9 +410,9 @@ void stability_reset(entity_state_t *root_state) {
 	root_state->reference_stats = root_state->dir_stats;
 	root_state->reference_init = true;
 	root_state->cumulative_file = 0;
-	root_state->cumulative_dir = 0;
+	root_state->cumulative_dirs = 0;
 	root_state->cumulative_depth = 0;
-	root_state->instability_count = 0;
+	root_state->unstable_count = 0;
 	root_state->stability_lost = false;
 
 	/* Propagate the reset state to all related states for this path */
@@ -618,14 +618,14 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 		if (!is_stable) {
 			/* Directory is unstable - reset counter and reschedule */
 			root_state->checks_count = 0;
-			root_state->instability_count++; /* Increment instability counter */
+			root_state->unstable_count++; /* Increment instability counter */
 
 			/* Update activity timestamp */
 			root_state->tree_activity = *current_time;
 			scanner_sync(root_state->path_state, root_state);
 
 			log_message(DEBUG, "Directory %s is still unstable (instability count: %d), rescheduling",
-			            		entry->path, root_state->instability_count);
+			            		entry->path, root_state->unstable_count);
 
 			stability_delay(monitor, entry, root_state, current_time);
 			continue;
@@ -639,7 +639,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 
 		log_message(DEBUG, "Stability check %d/%d for %s: changes (%+d files, %+d dirs, %+d depth) total (%d entries, depth %d)",
 		    				root_state->checks_count, required_checks, root_state->path_state->path, root_state->cumulative_file, 
-							root_state->cumulative_dir, root_state->cumulative_depth, current_stats.tree_files + current_stats.tree_dirs,
+							root_state->cumulative_dirs, root_state->cumulative_depth, current_stats.tree_files + current_stats.tree_dirs,
 		            		current_stats.max_depth > 0 ? current_stats.max_depth : current_stats.depth);
 
 		/* Check if we have enough consecutive stable checks */

@@ -51,7 +51,7 @@ int main(int argc, char *argv[]) {
 
 	/* Set up signal handlers */
 	if (!daemon_setup_signals()) {
-		log_message(ERROR, "Failed to set up signal handlers");
+		log_message(CRITICAL, "Failed to set up signal handlers");
 		log_close();
 		return EXIT_FAILURE;
 	}
@@ -126,7 +126,7 @@ int main(int argc, char *argv[]) {
 	/* Start daemon if requested */
 	if (config->daemon_mode) {
 		if (!daemon_start(config)) {
-			log_message(ERROR, "Failed to start daemon");
+			log_message(CRITICAL, "Failed to start daemon");
 			config_destroy(config);
 			log_close();
 			return EXIT_FAILURE;
@@ -139,7 +139,7 @@ int main(int argc, char *argv[]) {
 
 	/* Initialize command subsystem */
 	if (!command_init()) {
-		log_message(ERROR, "Failed to initialize command subsystem");
+		log_message(CRITICAL, "Failed to initialize command subsystem");
 		config_destroy(config);
 		log_close();
 		return EXIT_FAILURE;
@@ -147,7 +147,7 @@ int main(int argc, char *argv[]) {
 
 	/* Initialize entity states */
 	if (!states_init()) {
-		log_message(ERROR, "Failed to initialize entity states");
+		log_message(CRITICAL, "Failed to initialize entity states");
 		command_cleanup();
 		config_destroy(config);
 		log_close();
@@ -157,7 +157,7 @@ int main(int argc, char *argv[]) {
 	/* Create monitor */
 	monitor = monitor_create(config);
 	if (monitor == NULL) {
-		log_message(ERROR, "Failed to create monitor");
+		log_message(CRITICAL, "Failed to create monitor");
 		states_cleanup();
 		command_cleanup();
 		config_destroy(config);
@@ -167,7 +167,7 @@ int main(int argc, char *argv[]) {
 
 	/* Set up monitor */
 	if (!monitor_setup(monitor)) {
-		log_message(ERROR, "Failed to set up monitor");
+		log_message(CRITICAL, "Failed to set up monitor");
 		monitor_destroy(monitor);
 		states_cleanup();
 		command_cleanup();
@@ -183,7 +183,7 @@ int main(int argc, char *argv[]) {
 
 	/* Start monitor */
 	if (!monitor_start(monitor)) {
-		log_message(ERROR, "Failed to start monitor");
+		log_message(CRITICAL, "Failed to start monitor");
 		monitor_destroy(monitor);
 		states_cleanup();
 		command_cleanup();

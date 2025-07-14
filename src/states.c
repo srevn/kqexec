@@ -10,12 +10,12 @@
 #include <dirent.h>
 #include <pthread.h>
 
+#include "monitor.h"
 #include "states.h"
 #include "scanner.h"
-#include "command.h"
 #include "stability.h"
+#include "command.h"
 #include "logger.h"
-#include "monitor.h"
 
 /* Hash table of path states */
 static path_state_t **path_states = NULL;
@@ -119,7 +119,7 @@ void states_cleanup(void) {
 	free(path_states);
 	path_states = NULL;
 
-	/* Unlock mutex after search */
+	/* Unlock mutex after cleanup */
 	pthread_mutex_unlock(&states_mutex);
 	pthread_mutex_destroy(&states_mutex);
 
@@ -148,10 +148,10 @@ static void copy_state(entity_state_t *dest, const entity_state_t *src) {
 	dest->reference_stats = src->reference_stats;
 	dest->reference_init = src->reference_init;
 	dest->cumulative_file = src->cumulative_file;
-	dest->cumulative_dir = src->cumulative_dir;
+	dest->cumulative_dirs = src->cumulative_dirs;
 	dest->cumulative_depth = src->cumulative_depth;
 	dest->stability_lost = src->stability_lost;
-	dest->instability_count = src->instability_count;
+	dest->unstable_count = src->unstable_count;
 }
 
 /* Get or create an entity state for a given path and watch */
@@ -169,6 +169,7 @@ entity_state_t *states_get(const char *path, entity_type_t type, watch_entry_t *
 
 	unsigned int hash = hash_path(path);
 	
+	/* Lock the mutex*/
 	pthread_mutex_lock(&states_mutex);
 	
 	path_state_t *ps = path_states[hash];
@@ -264,10 +265,10 @@ entity_state_t *states_get(const char *path, entity_type_t type, watch_entry_t *
 		copy_state(state, existing_state_for_path);
 	} else {
 		/* This is the first state for this path, initialize stats from scratch */
-		state->instability_count = 0;
+		state->unstable_count = 0;
 		state->reference_init = false;
 		state->cumulative_file = 0;
-		state->cumulative_dir = 0;
+		state->cumulative_dirs = 0;
 		state->cumulative_depth = 0;
 		state->stability_lost = false;
 		state->check_pending = false;
@@ -292,6 +293,7 @@ entity_state_t *states_get(const char *path, entity_type_t type, watch_entry_t *
 
 	log_message(DEBUG, "Created new state for path=%s, watch=%s", path, watch->name);
 	
+	/* Unlock mutex */
 	pthread_mutex_unlock(&states_mutex);
 	return state;
 }
@@ -302,6 +304,7 @@ void states_update(config_t *new_config) {
 		return;
 	}
 
+	/* Lock mutex to ensure thread safety during update */
 	pthread_mutex_lock(&states_mutex);
 
 	log_message(DEBUG, "Updating all entity states after reload");
@@ -341,6 +344,7 @@ void states_prune(config_t *new_config) {
 		return;
 	}
 
+	/* Lock mutex to ensure thread safety during prune */
 	pthread_mutex_lock(&states_mutex);
 
 	log_message(DEBUG, "Cleaning up orphaned entity states");

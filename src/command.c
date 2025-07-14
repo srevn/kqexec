@@ -23,9 +23,9 @@
 #define MAX_CMD_LEN 4096
 
 /* Global array of active command intents */
-#define MAX_COMMAND_INTENTS 10
+#define MAX_INTENTS 10
 static int intent_count = 0;
-static command_intent_t command_intents[MAX_COMMAND_INTENTS];
+static command_intent_t command_intents[MAX_INTENTS];
 
 /* Debounce time in milliseconds */
 static int debounce_time_ms = DEFAULT_DEBOUNCE_TIME_MS;
@@ -85,7 +85,7 @@ void command_intent_cleanup(void) {
 	sigaddset(&mask, SIGCHLD);
 	sigprocmask(SIG_BLOCK, &mask, &oldmask);
 
-	for (int i = 0; i < MAX_COMMAND_INTENTS; i++) {
+	for (int i = 0; i < MAX_INTENTS; i++) {
 		if (command_intents[i].active && command_intents[i].affected_paths) {
 			for (int j = 0; j < command_intents[i].affected_path_count; j++) {
 				free(command_intents[i].affected_paths[j]);
@@ -113,7 +113,7 @@ bool command_affects(const char *path) {
 	pthread_sigmask(SIG_BLOCK, &mask, &oldmask);
 
 	/* Iterate through all active command intents */
-	for (int i = 0; i < MAX_COMMAND_INTENTS; i++) {
+	for (int i = 0; i < MAX_INTENTS; i++) {
 		if (!command_intents[i].active) continue;
 
 		/* Check if the command has expired */
@@ -185,7 +185,7 @@ void command_intent_expire(void) {
 	sigaddset(&mask, SIGCHLD);
 	sigprocmask(SIG_BLOCK, &mask, &oldmask);
 
-	for (int i = 0; i < MAX_COMMAND_INTENTS; i++) {
+	for (int i = 0; i < MAX_INTENTS; i++) {
 		if (!command_intents[i].active) continue;
 
 		/* Check if the command has expired */
@@ -226,7 +226,7 @@ command_intent_t *command_intent_create(pid_t pid, const char *command, const ch
 
 	/* Find a free slot in the command_intents array */
 	int slot = -1;
-	for (int i = 0; i < MAX_COMMAND_INTENTS; i++) {
+	for (int i = 0; i < MAX_INTENTS; i++) {
 		if (!command_intents[i].active) {
 			slot = i;
 			break;
@@ -342,7 +342,7 @@ bool command_intent_complete(pid_t pid) {
 	sigaddset(&mask, SIGCHLD);
 	pthread_sigmask(SIG_BLOCK, &mask, &oldmask);
 
-	for (int i = 0; i < MAX_COMMAND_INTENTS; i++) {
+	for (int i = 0; i < MAX_INTENTS; i++) {
 		if (command_intents[i].active && command_intents[i].command_pid == pid) {
 			command_intents[i].active = false;
 			intent_count--;

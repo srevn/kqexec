@@ -51,7 +51,7 @@ void scanner_update(entity_state_t *state) {
 
 	/* Accumulate changes */
 	state->cumulative_file += new_file_change;
-	state->cumulative_dir += new_dir_change;
+	state->cumulative_dirs += new_dir_change;
 	state->cumulative_depth += new_depth_change;
 
 	/* Set flag indicating stability was lost if we're detecting new changes
@@ -64,7 +64,7 @@ void scanner_update(entity_state_t *state) {
 	if (new_file_change != 0 || new_dir_change != 0 || new_depth_change != 0) {
 		log_message(DEBUG, "Updated cumulative changes for %s: files=%+d (%+d), dirs=%+d (%+d), depth=%+d (%+d)",
 		            		state->path_state->path, state->cumulative_file, new_file_change,
-		            		state->cumulative_dir, new_dir_change, state->cumulative_depth, new_depth_change);
+		            		state->cumulative_dirs, new_dir_change, state->cumulative_depth, new_depth_change);
 	}
 }
 
@@ -215,8 +215,8 @@ bool scanner_compare(dir_stats_t *prev, dir_stats_t *current) {
 	if (!((total_change <= max_allowed_change || change_percentage <= max_allowed_percent) &&
 	      (depth_change == 0 || (abs(depth_change) == 1 && prev->max_depth > 2)))) {
 		log_message(DEBUG, "Directory unstable: %d/%d to %d/%d, depth %d to %d (%+d files, %+d dirs, %+d depth, %.1f%% change)",
-		            		prev->tree_files, prev->tree_dirs, current->tree_files, current->tree_dirs,
-		            		prev->max_depth, current->max_depth, file_change, dir_change, depth_change, change_percentage);
+		            		prev->tree_files, prev->tree_dirs, current->tree_files, current->tree_dirs, prev->max_depth,
+							current->max_depth, file_change, dir_change, depth_change, change_percentage);
 		is_stable = false;
 	}
 
@@ -369,32 +369,32 @@ void scanner_sync(path_state_t *path_state, entity_state_t *trigger_state) {
 
 	pthread_mutex_lock(&states_mutex);
 
-	struct timespec latest_activity_time = trigger_state->tree_activity;
-	bool any_watch_active = trigger_state->activity_active;
-	int max_instability_count = trigger_state->instability_count;
+	struct timespec sync_time = trigger_state->tree_activity;
+	bool watch_active = trigger_state->activity_active;
+	int max_unstable_count = trigger_state->unstable_count;
 
 	/* First pass: Find the most recent activity time and active status */
 	for (entity_state_t *state = path_state->entity_head; state; state = state->path_next) {
 		if (states_corrupted(state) || state == trigger_state) continue;
 
-		if (state->tree_activity.tv_sec > latest_activity_time.tv_sec ||
-		    (state->tree_activity.tv_sec == latest_activity_time.tv_sec &&
-		     state->tree_activity.tv_nsec > latest_activity_time.tv_nsec)) {
-			latest_activity_time = state->tree_activity;
+		if (state->tree_activity.tv_sec > sync_time.tv_sec ||
+		    (state->tree_activity.tv_sec == sync_time.tv_sec &&
+		     state->tree_activity.tv_nsec > sync_time.tv_nsec)) {
+			sync_time = state->tree_activity;
 		}
 
 		/* If trigger state is active, merge values from other states.
 		 * Otherwise, we are resetting, so we don't merge. */
 		if (trigger_state->activity_active) {
-			any_watch_active = any_watch_active || state->activity_active;
-			if (state->instability_count > max_instability_count) {
-				max_instability_count = state->instability_count;
+			watch_active = watch_active || state->activity_active;
+			if (state->unstable_count > max_unstable_count) {
+				max_unstable_count = state->unstable_count;
 			}
 		}
 	}
 
 	/* Also update the trigger state's instability count to the max value */
-	trigger_state->instability_count = max_instability_count;
+	trigger_state->unstable_count = max_unstable_count;
 
 	/* Second pass: Update all states with consistent values */
 	for (entity_state_t *state = path_state->entity_head; state; state = state->path_next) {
@@ -410,19 +410,19 @@ void scanner_sync(path_state_t *path_state, entity_state_t *trigger_state) {
 			state->exists = trigger_state->exists;
 			state->last_update = trigger_state->last_update;
 			state->wall_time = trigger_state->wall_time;
-			state->tree_activity = latest_activity_time;
-			state->activity_active = any_watch_active;
+			state->tree_activity = sync_time;
+			state->activity_active = watch_active;
 
 			if (fully_compatible && state->type == ENTITY_DIRECTORY && trigger_state->type == ENTITY_DIRECTORY) {
 				state->dir_stats = trigger_state->dir_stats;
 				state->prev_stats = trigger_state->prev_stats;
 				state->checks_count = trigger_state->checks_count;
 				state->checks_failed = trigger_state->checks_failed;
-				state->instability_count = max_instability_count;
 				state->cumulative_file = trigger_state->cumulative_file;
-				state->cumulative_dir = trigger_state->cumulative_dir;
+				state->cumulative_dirs = trigger_state->cumulative_dirs;
 				state->cumulative_depth = trigger_state->cumulative_depth;
 				state->stability_lost = trigger_state->stability_lost;
+				state->unstable_count = max_unstable_count;
 			}
 		}
 	}
@@ -435,8 +435,8 @@ static void scanner_record(entity_state_t *state, operation_type_t op) {
 	/* Store in circular buffer */
 	state->recent_activity[state->activity_index].timestamp = state->last_update;
 	state->recent_activity[state->activity_index].operation = op;
-	state->activity_index = (state->activity_index + 1) % MAX_ACTIVITY_SAMPLES;
-	if (state->activity_count < MAX_ACTIVITY_SAMPLES) {
+	state->activity_index = (state->activity_index + 1) % MAX_SAMPLES;
+	if (state->activity_count < MAX_SAMPLES) {
 		state->activity_count++;
 	}
 
@@ -596,7 +596,7 @@ void scanner_track(entity_state_t *state, operation_type_t op) {
 static long scanner_base_period(entity_state_t *state) {
 	/* Use cumulative change counters instead of just prev/current comparison */
 	int abs_file_change = abs(state->cumulative_file);
-	int abs_dir_change = abs(state->cumulative_dir);
+	int abs_dir_change = abs(state->cumulative_dirs);
 	int abs_depth_change = abs(state->cumulative_depth);
 	int total_change = abs_file_change + abs_dir_change;
 
@@ -628,7 +628,7 @@ static long scanner_adjust(entity_state_t *state, long base_ms) {
 	long required_ms = base_ms;
 	int total_entries = state->dir_stats.tree_files + state->dir_stats.tree_dirs;
 	int tree_depth = state->dir_stats.max_depth > 0 ? state->dir_stats.max_depth : state->dir_stats.depth;
-	int total_change = abs(state->cumulative_file) + abs(state->cumulative_dir);
+	int total_change = abs(state->cumulative_file) + abs(state->cumulative_dirs);
 
 	/* If stability was previously achieved and then lost, increase quiet period */
 	if (state->stability_lost) {
@@ -658,7 +658,7 @@ static long scanner_adjust(entity_state_t *state, long base_ms) {
 
 /* Apply exponential backoff for consecutive instability */
 static long scanner_backoff(entity_state_t *state, long required_ms) {
-	if (state->instability_count <= 0) {
+	if (state->unstable_count <= 0) {
 		return required_ms;
 	}
 
@@ -666,7 +666,7 @@ static long scanner_backoff(entity_state_t *state, long required_ms) {
 	double backoff_factor = 1.0;
 
 	/* Increase backoff factor for repeated instability */
-	for (int i = 1; i < state->instability_count; i++) {
+	for (int i = 1; i < state->unstable_count; i++) {
 		backoff_factor *= 1.25;
 	}
 
@@ -722,8 +722,8 @@ long scanner_delay(entity_state_t *state) {
 			/* Apply exponential backoff for consecutive instability */
 			required_ms = scanner_backoff(state, required_ms);
 
-			log_message(DEBUG, "Quiet period for %s: %ld ms (changes: %+d files, %+d dirs, %+d depth, total: %d entries, depth %d)",
-			        			state->path_state->path, required_ms, state->cumulative_file, state->cumulative_dir,
+			log_message(DEBUG, "Quiet period for %s: %ld ms (changes: %+d files, %+d dirs, %+d depth, total: entries %d, depth %d)",
+			        			state->path_state->path, required_ms, state->cumulative_file, state->cumulative_dirs,
 								state->cumulative_depth, total_entries, tree_depth);
 		} else {
 			/* For inactive directories, just log the base period with recursive stats */
@@ -744,57 +744,57 @@ long scanner_delay(entity_state_t *state) {
 bool scanner_ready(entity_state_t *state, struct timespec *now) {
 	if (!state || !now) return true; /* Cannot check, assume elapsed */
 
-	struct timespec *last_activity_ts = NULL;
-	const char *time_source_path = state->path_state->path;
-	entity_state_t *state_for_period_calc = state;
+	struct timespec *activity_time = NULL;
+	const char *source_path = state->path_state->path;
+	entity_state_t *calc_state = state;
 
 	/* Determine which timestamp to check against */
 	if (state->type == ENTITY_DIRECTORY && state->watch && state->watch->recursive) {
 		/* For recursive directory watches, always check the root's tree time */
 		entity_state_t *root = stability_root(state);
 		if (root) {
-			last_activity_ts = &root->tree_activity;
-			time_source_path = root->path_state->path;
-			state_for_period_calc = root;
+			activity_time = &root->tree_activity;
+			source_path = root->path_state->path;
+			calc_state = root;
 		} else {
 			log_message(WARNING, "Cannot find root state for %s, falling back to local activity", state->path_state->path);
 			/* Fallback: use local activity if root not found */
 			if (state->activity_count == 0) return true;
-			int latest_idx = (state->activity_index + MAX_ACTIVITY_SAMPLES - 1) % MAX_ACTIVITY_SAMPLES;
-			last_activity_ts = &state->recent_activity[latest_idx].timestamp;
+			int latest_idx = (state->activity_index + MAX_SAMPLES - 1) % MAX_SAMPLES;
+			activity_time = &state->recent_activity[latest_idx].timestamp;
 		}
 	} else {
 		/* For files or non-recursive dirs, use local activity time */
 		if (state->activity_count == 0) return true;
-		int latest_idx = (state->activity_index + MAX_ACTIVITY_SAMPLES - 1) % MAX_ACTIVITY_SAMPLES;
-		last_activity_ts = &state->recent_activity[latest_idx].timestamp;
+		int latest_idx = (state->activity_index + MAX_SAMPLES - 1) % MAX_SAMPLES;
+		activity_time = &state->recent_activity[latest_idx].timestamp;
 	}
 
 	/* Check for valid timestamp */
-	if (!last_activity_ts || (last_activity_ts->tv_sec == 0 && last_activity_ts->tv_nsec == 0)) {
+	if (!activity_time || (activity_time->tv_sec == 0 && activity_time->tv_nsec == 0)) {
 		log_message(DEBUG, "No valid activity timestamp for %s, quiet period assumed elapsed", state->path_state->path);
 		return true;
 	}
 
 	/* Calculate elapsed time */
 	long elapsed_ms;
-	if (now->tv_sec < last_activity_ts->tv_sec ||
-	    (now->tv_sec == last_activity_ts->tv_sec && now->tv_nsec < last_activity_ts->tv_nsec)) {
+	if (now->tv_sec < activity_time->tv_sec ||
+	    (now->tv_sec == activity_time->tv_sec && now->tv_nsec < activity_time->tv_nsec)) {
 		elapsed_ms = -1; /* Clock went backwards */
 	} else {
 		struct timespec diff;
-		diff.tv_sec = now->tv_sec - last_activity_ts->tv_sec;
-		if (now->tv_nsec >= last_activity_ts->tv_nsec) {
-			diff.tv_nsec = now->tv_nsec - last_activity_ts->tv_nsec;
+		diff.tv_sec = now->tv_sec - activity_time->tv_sec;
+		if (now->tv_nsec >= activity_time->tv_nsec) {
+			diff.tv_nsec = now->tv_nsec - activity_time->tv_nsec;
 		} else {
 			diff.tv_sec--;
-			diff.tv_nsec = 1000000000 + now->tv_nsec - last_activity_ts->tv_nsec;
+			diff.tv_nsec = 1000000000 + now->tv_nsec - activity_time->tv_nsec;
 		}
 		elapsed_ms = diff.tv_sec * 1000 + diff.tv_nsec / 1000000;
 	}
 
 	/* Get the required period */
-	long required_quiet_period_ms = scanner_delay(state_for_period_calc);
+	long required_quiet = scanner_delay(calc_state);
 
 	if (elapsed_ms < 0) {
 		log_message(WARNING, "Clock appears to have moved backwards for %s, assuming quiet period elapsed",
@@ -802,14 +802,14 @@ bool scanner_ready(entity_state_t *state, struct timespec *now) {
 		return true;
 	}
 
-	bool elapsed = elapsed_ms >= required_quiet_period_ms;
+	bool elapsed = elapsed_ms >= required_quiet;
 
 	if (!elapsed) {
 		log_message(DEBUG, "Quiet period check for %s: %ld ms elapsed < %ld ms required (using time from %s)",
-		            		state->path_state->path, elapsed_ms, required_quiet_period_ms, time_source_path);
+		            		state->path_state->path, elapsed_ms, required_quiet, source_path);
 	} else {
 		log_message(DEBUG, "Quiet period elapsed for %s: %ld ms >= %ld ms required",
-		        			state->path_state->path, elapsed_ms, required_quiet_period_ms);
+		        			state->path_state->path, elapsed_ms, required_quiet);
 	}
 
 	return elapsed;

@@ -508,7 +508,7 @@ bool events_process(monitor_t *monitor, watch_entry_t *watch, file_event_t *even
 
 	/* Check if this event was caused by one of our commands */
 	if (command_affects(event->path)) {
-		log_message(DEBUG, "Ignoring event for %s - caused by our command execution", event->path);
+		log_message(DEBUG, "Ignoring event for %s, it was caused by our command execution", event->path);
 		return false;
 	}
 

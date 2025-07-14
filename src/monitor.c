@@ -684,15 +684,15 @@ bool monitor_reload(monitor_t *monitor) {
 	if (monitor->config_file != NULL) {
 		watch_entry_t *config_watch = config_entry(monitor->config_file);
 		if (config_watch) {
-			watch_entry_t **new_watches_in_config = realloc(new_config->watches, (new_config->watch_count + 1) * sizeof(watch_entry_t *));
-			if (new_watches_in_config == NULL) {
+			watch_entry_t **new_entries = realloc(new_config->watches, (new_config->watch_count + 1) * sizeof(watch_entry_t *));
+			if (new_entries == NULL) {
 				log_message(WARNING, "Failed to add config watch to new config structure");
 				free(config_watch->name);
 				free(config_watch->path);
 				free(config_watch->command);
 				free(config_watch);
 			} else {
-				new_config->watches = new_watches_in_config;
+				new_config->watches = new_entries;
 				new_config->watches[new_config->watch_count] = config_watch;
 				new_config->watch_count++;
 			}
