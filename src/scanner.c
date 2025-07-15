@@ -22,7 +22,8 @@ void scanner_update(entity_state_t *state) {
 
 	/* Skip if we don't have previous stats yet */
 	if (state->prev_stats.file_count == 0 && state->prev_stats.dir_count == 0 &&
-	    state->prev_stats.tree_files == 0 && state->prev_stats.tree_dirs == 0) {
+	    state->prev_stats.tree_files == 0 && state->prev_stats.tree_dirs == 0 &&
+	    state->prev_stats.tree_size == 0) {
 		return;
 	}
 
@@ -30,11 +31,12 @@ void scanner_update(entity_state_t *state) {
 	int new_file_change = state->dir_stats.tree_files - state->prev_stats.tree_files;
 	int new_dir_change = state->dir_stats.tree_dirs - state->prev_stats.tree_dirs;
 	int new_depth_change = state->dir_stats.max_depth - state->prev_stats.max_depth;
+	ssize_t new_size_change = (ssize_t)state->dir_stats.tree_size - (ssize_t)state->prev_stats.tree_size;
 
 	/* If significant directory deletion but no depth change reported, infer a depth change */
 	if (new_dir_change < -5 && new_depth_change == 0) {
 		/* Large structure deletion detected but depth unchanged - likely a bug */
-		log_message(DEBUG, "Deletion detected with no depth change for %s - inferring depth reduction",
+		log_message(DEBUG, "Deletion detected with no depth change for %s, inferring depth reduction",
 		            		state->path_state->path);
 
 		/* Calculate inferred depth change proportional to directory removal */
@@ -53,18 +55,19 @@ void scanner_update(entity_state_t *state) {
 	state->cumulative_file += new_file_change;
 	state->cumulative_dirs += new_dir_change;
 	state->cumulative_depth += new_depth_change;
+	state->cumulative_size += new_size_change;
 
-	/* Set flag indicating stability was lost if we're detecting new changes
-	   after activity was previously not in progress */
-	if (!state->activity_active && (new_file_change != 0 || new_dir_change != 0 || new_depth_change != 0)) {
+	/* Set flag indicating stability was lost if we're detecting new changes */
+	if (!state->activity_active && (new_file_change != 0 || new_dir_change != 0 || new_depth_change != 0 || new_size_change != 0)) {
 		state->stability_lost = true;
 	}
 
 	/* Log significant cumulative changes */
-	if (new_file_change != 0 || new_dir_change != 0 || new_depth_change != 0) {
-		log_message(DEBUG, "Updated cumulative changes for %s: files=%+d (%+d), dirs=%+d (%+d), depth=%+d (%+d)",
-		            		state->path_state->path, state->cumulative_file, new_file_change,
-		            		state->cumulative_dirs, new_dir_change, state->cumulative_depth, new_depth_change);
+	if (new_file_change != 0 || new_dir_change != 0 || new_depth_change != 0 || new_size_change != 0) {
+		log_message(DEBUG, "Updated cumulative changes for %s: files=%+d (%+d), dirs=%+d (%+d), depth=%+d (%+d), size=%s (%s)",
+		            		state->path_state->path, state->cumulative_file, new_file_change, state->cumulative_dirs,
+							new_dir_change, state->cumulative_depth, new_depth_change, format_size(state->cumulative_size, true),
+							format_size(new_size_change, true));
 	}
 }
 
@@ -106,7 +109,7 @@ bool scanner_scan(const char *dir_path, dir_stats_t *stats) {
 
 		if (S_ISREG(st.st_mode)) {
 			stats->file_count++;
-			stats->total_size += st.st_size;
+			stats->direct_size += st.st_size;
 
 			/* Update latest modification time */
 			if (st.st_mtime > stats->last_mtime) {
@@ -121,9 +124,6 @@ bool scanner_scan(const char *dir_path, dir_stats_t *stats) {
 				if (subdir_stats.depth + 1 > stats->depth) {
 					stats->depth = subdir_stats.depth + 1;
 				}
-
-				/* Incorporate subdirectory size */
-				stats->total_size += subdir_stats.total_size;
 
 				/* Calculate and update recursive stats by summing up from subdirectories */
 				stats->tree_files += subdir_stats.tree_files;
@@ -145,7 +145,7 @@ bool scanner_scan(const char *dir_path, dir_stats_t *stats) {
 	/* Ensure recursive stats include direct stats at this level */
 	stats->tree_files += stats->file_count;
 	stats->tree_dirs += stats->dir_count;
-	stats->tree_size += stats->total_size;
+	stats->tree_size += stats->direct_size;
 
 	/* If max_depth is not set, use depth */
 	if (stats->max_depth == 0 && stats->depth > 0) {
@@ -288,7 +288,7 @@ bool scanner_stable(entity_state_t *context_state, const char *dir_path, dir_sta
 		/* Look for temporary files or recent changes */
 		if (S_ISREG(st.st_mode)) {
 			stats->file_count++;
-			stats->total_size += st.st_size;
+			stats->direct_size += st.st_size;
 
 			/* Update latest modification time */
 			if (st.st_mtime > stats->last_mtime) {
@@ -322,9 +322,6 @@ bool scanner_stable(entity_state_t *context_state, const char *dir_path, dir_sta
 				stats->depth = subdir_stats.depth + 1;
 			}
 
-			/* Incorporate subdirectory size */
-			stats->total_size += subdir_stats.total_size;
-
 			/* Check for temp files */
 			stats->has_temps |= subdir_stats.has_temps;
 
@@ -347,7 +344,7 @@ bool scanner_stable(entity_state_t *context_state, const char *dir_path, dir_sta
 	/* Ensure recursive stats include direct stats at this level */
 	stats->tree_files += stats->file_count;
 	stats->tree_dirs += stats->dir_count;
-	stats->tree_size += stats->total_size;
+	stats->tree_size += stats->direct_size;
 
 	/* If max_depth is not set, use depth */
 	if (stats->max_depth == 0 && stats->depth > 0) {
@@ -421,6 +418,7 @@ void scanner_sync(path_state_t *path_state, entity_state_t *trigger_state) {
 				state->cumulative_file = trigger_state->cumulative_file;
 				state->cumulative_dirs = trigger_state->cumulative_dirs;
 				state->cumulative_depth = trigger_state->cumulative_depth;
+				state->cumulative_size = trigger_state->cumulative_size;
 				state->stability_lost = trigger_state->stability_lost;
 				state->unstable_count = max_unstable_count;
 			}
@@ -598,22 +596,24 @@ static long scanner_base_period(entity_state_t *state) {
 	int abs_file_change = abs(state->cumulative_file);
 	int abs_dir_change = abs(state->cumulative_dirs);
 	int abs_depth_change = abs(state->cumulative_depth);
+	ssize_t abs_size_change = state->cumulative_size < 0 ? -state->cumulative_size : state->cumulative_size;
 	int total_change = abs_file_change + abs_dir_change;
 
 	/* Prioritize operation complexity */
 	/* Start with a base quiet period based primarily on change magnitude */
-	if (total_change == 0 && abs_depth_change == 0) {
+	if (total_change == 0 && abs_depth_change == 0 && abs_size_change == 0) {
 		/* No change - minimal quiet period */
 		return 250;
-	} else if (total_change < 5 && abs_depth_change == 0) {
-		/* Few files change with no structural changes - short quiet period */
+	} else if (total_change < 5 && abs_depth_change == 0 && abs_size_change < 1024 * 1024) {
+		/* Few files change with no structural changes and small size changes - short quiet period */
 		return 500;
-	} else if (total_change < 10 && abs_depth_change == 0) {
-		/* Several files changed, no structural changes - modest quiet period */
+	} else if (total_change < 10 && abs_depth_change == 0 && abs_size_change < 10 * 1024 * 1024) {
+		/* Several files changed, no structural changes, moderate size changes - modest quiet period */
 		return 1000;
-	} else if (abs_depth_change > 0) {
-		/* Structural depth changes - significant quiet period */
-		return 1500 + (abs_depth_change * 500);
+	} else if (abs_depth_change > 0 || abs_size_change > 100 * 1024 * 1024) {
+		/* Structural depth changes or large size changes - significant quiet period */
+		int size_factor = (abs_size_change > 100 * 1024 * 1024) ? (abs_size_change / (100 * 1024 * 1024)) : 0;
+		return 1500 + (abs_depth_change * 500) + (size_factor * 250);
 	} else if (total_change < 10) {
 		/* Moderate changes - medium quiet period */
 		return 1200;
@@ -722,9 +722,9 @@ long scanner_delay(entity_state_t *state) {
 			/* Apply exponential backoff for consecutive instability */
 			required_ms = scanner_backoff(state, required_ms);
 
-			log_message(DEBUG, "Quiet period for %s: %ld ms (changes: %+d files, %+d dirs, %+d depth, total: entries %d, depth %d)",
+			log_message(DEBUG, "Quiet period for %s: %ld ms (changes: %+d files, %+d dirs, %+d depth, %s size, total: entries %d, depth %d)",
 			        			state->path_state->path, required_ms, state->cumulative_file, state->cumulative_dirs,
-								state->cumulative_depth, total_entries, tree_depth);
+								state->cumulative_depth, format_size(state->cumulative_size, true), total_entries, tree_depth);
 		} else {
 			/* For inactive directories, just log the base period with recursive stats */
 			int total_entries = state->dir_stats.tree_files + state->dir_stats.tree_dirs;
@@ -732,7 +732,7 @@ long scanner_delay(entity_state_t *state) {
 			int subdir_count = state->dir_stats.tree_dirs;
 
 			log_message(DEBUG, "Using base quiet period for %s: %ld ms (recursive entries: %d, depth: %d, subdirs: %d)",
-			            		state->path_state->path, required_ms, total_entries, tree_depth, subdir_count);
+			    				state->path_state->path, required_ms, total_entries, tree_depth, subdir_count);
 		}
 	}
 

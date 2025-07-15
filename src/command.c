@@ -400,21 +400,6 @@ static void command_substitute(char *result, const char *placeholder, const char
 	}
 }
 
-/* Helper function to format size in a human-readable way */
-static const char *human_readable_size(size_t size, char *buf, size_t buf_size) {
-	const char *suffixes[] = {"B", "K", "M", "G", "T"};
-	int i = 0;
-	double d_size = (double) size;
-
-	while (d_size >= 1024 && i < 4) {
-		d_size /= 1024;
-		i++;
-	}
-
-	snprintf(buf, buf_size, "%.1f%s", d_size, suffixes[i]);
-	return buf;
-}
-
 /* Substitutes placeholders in the command string:
  * %p: Path where the event occurred
  * %n: Filename (for files) or subdirectory name (for directories) which triggered the event
@@ -437,7 +422,6 @@ char *command_placeholders(const watch_entry_t *watch, const char *command, cons
 	char time_str[64];
 	char user_str[64];
 	char size_str[32];
-	char human_size_str[32];
 	char *event_str;
 	struct passwd *pwd;
 	struct tm tm;
@@ -551,9 +535,7 @@ char *command_placeholders(const watch_entry_t *watch, const char *command, cons
 
 		snprintf(size_str, sizeof(size_str), "%zu", size);
 		command_substitute(result, "%s", size_str);
-
-		human_readable_size(size, human_size_str, sizeof(human_size_str));
-		command_substitute(result, "%S", human_size_str);
+		command_substitute(result, "%S", format_size((ssize_t)size, false));
 	}
 
 	/* Substitute %t with the time */

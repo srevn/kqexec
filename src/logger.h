@@ -2,6 +2,7 @@
 #define LOGGER_H
 
 #include <syslog.h>
+#include <string.h>
 #include <sys/select.h>
 
 /* Log levels (matching syslog levels) */
@@ -20,5 +21,6 @@ typedef enum {
 void log_init(const char *ident, int facility, log_level_t level, int use_console);
 void log_close(void);
 void log_message(log_level_t level, const char *format, ...);
+const char *format_size(ssize_t size, bool show_sign);
 
 #endif /* LOGGER_H */

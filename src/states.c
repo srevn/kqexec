@@ -150,6 +150,7 @@ static void copy_state(entity_state_t *dest, const entity_state_t *src) {
 	dest->cumulative_file = src->cumulative_file;
 	dest->cumulative_dirs = src->cumulative_dirs;
 	dest->cumulative_depth = src->cumulative_depth;
+	dest->cumulative_size = src->cumulative_size;
 	dest->stability_lost = src->stability_lost;
 	dest->unstable_count = src->unstable_count;
 }
@@ -270,6 +271,7 @@ entity_state_t *states_get(const char *path, entity_type_t type, watch_entry_t *
 		state->cumulative_file = 0;
 		state->cumulative_dirs = 0;
 		state->cumulative_depth = 0;
+		state->cumulative_size = 0;
 		state->stability_lost = false;
 		state->check_pending = false;
 
@@ -278,9 +280,9 @@ entity_state_t *states_get(const char *path, entity_type_t type, watch_entry_t *
 				state->prev_stats = state->dir_stats;
 				state->reference_stats = state->dir_stats;
 				state->reference_init = true;
-				log_message(DEBUG, "Initialized directory stats for %s: files=%d, dirs=%d, depth=%d, size=%.2f MB",
+				log_message(DEBUG, "Initialized directory stats for %s: files=%d, dirs=%d, depth=%d, size=%s",
 				        			path, state->dir_stats.file_count, state->dir_stats.dir_count,
-				        			state->dir_stats.depth, state->dir_stats.total_size / (1024.0 * 1024.0));
+				        			state->dir_stats.depth, format_size((ssize_t)state->dir_stats.tree_size, false));
 			} else {
 				log_message(WARNING, "Failed to gather initial stats for directory: %s", path);
 			}

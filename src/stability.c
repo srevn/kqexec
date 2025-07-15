@@ -49,7 +49,7 @@ bool stability_ready(monitor_t *monitor, entity_state_t *state, operation_type_t
 		if (root && monitor) {
 			/* Always trigger a deferred check; queue deduplicates */
 			root->activity_active = true;
-			log_message(DEBUG, "Directory content change for %s, marked root %s as active - command deferred",
+			log_message(DEBUG, "Directory content change for %s, marked root %s as active, command deferred",
 			        			state->path_state->path, root->path_state->path);
 			scanner_sync(root->path_state, root);
 
@@ -302,8 +302,8 @@ bool stability_scan(entity_state_t *root_state, const char *path, dir_stats_t *s
 		/* Set previous stats to current for the next cycle's comparison */
 		root_state->prev_stats = *stats_out;
 
-		log_message(DEBUG, "Stability scan for %s: files=%d, dirs=%d, size=%.2f MB, recursive_files=%d, recursive_dirs=%d, max_depth=%d",
-		    				path, stats_out->file_count, stats_out->dir_count, stats_out->total_size / (1024.0 * 1024.0),
+		log_message(DEBUG, "Stability scan for %s: files=%d, dirs=%d, size=%s, recursive_files=%d, recursive_dirs=%d, max_depth=%d",
+		    				path, stats_out->file_count, stats_out->dir_count, format_size((ssize_t)stats_out->tree_size, false),
 		        			stats_out->tree_files, stats_out->tree_dirs, stats_out->max_depth);
 	}
 
@@ -419,6 +419,7 @@ void stability_reset(entity_state_t *root_state) {
 	root_state->cumulative_file = 0;
 	root_state->cumulative_dirs = 0;
 	root_state->cumulative_depth = 0;
+	root_state->cumulative_size = 0;
 	root_state->unstable_count = 0;
 	root_state->stability_lost = false;
 

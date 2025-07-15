@@ -56,6 +56,7 @@ typedef struct entity_state {
 	int cumulative_file;                   /* Running total of file changes since stability */
 	int cumulative_dirs;                   /* Running total of directory changes */
 	int cumulative_depth;                  /* Running total of depth changes */
+	ssize_t cumulative_size;               /* Running total of size changes since stability */
 
 	bool check_pending;                    /* Flag indicating a deferred check is scheduled */
 	bool stability_lost;                   /* Flag indicating stability was previously achieved and lost */

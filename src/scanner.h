@@ -20,7 +20,7 @@ typedef struct {
 	int depth;                             /* Directory tree depth */
 	int file_count;                        /* Number of files in the directory */
 	int dir_count;                         /* Number of subdirectories */
-	size_t total_size;                     /* Total size of files in the directory */
+	size_t direct_size;                    /* Total size of files in the directory */
 	time_t last_mtime;                     /* Latest modification time */
 	bool has_temps;                        /* Flag for temporary files */
 
