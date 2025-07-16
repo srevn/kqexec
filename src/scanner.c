@@ -758,12 +758,11 @@ long scanner_delay(entity_state_t *state) {
 }
 
 /* Check if enough quiet time has passed since the last activity */
-bool scanner_ready(entity_state_t *state, struct timespec *now) {
+bool scanner_ready(entity_state_t *state, struct timespec *now, long required_quiet) {
 	if (!state || !now) return true; /* Cannot check, assume elapsed */
 
 	struct timespec *activity_time = NULL;
 	const char *source_path = state->path_state->path;
-	entity_state_t *calc_state = state;
 
 	/* Determine which timestamp to check against */
 	if (state->type == ENTITY_DIRECTORY && state->watch && state->watch->recursive) {
@@ -772,7 +771,6 @@ bool scanner_ready(entity_state_t *state, struct timespec *now) {
 		if (root) {
 			activity_time = &root->tree_activity;
 			source_path = root->path_state->path;
-			calc_state = root;
 		} else {
 			log_message(WARNING, "Cannot find root state for %s, falling back to local activity", state->path_state->path);
 			/* Fallback: use local activity if root not found */
@@ -809,9 +807,6 @@ bool scanner_ready(entity_state_t *state, struct timespec *now) {
 		}
 		elapsed_ms = diff.tv_sec * 1000 + diff.tv_nsec / 1000000;
 	}
-
-	/* Get the required period */
-	long required_quiet = scanner_delay(calc_state);
 
 	if (elapsed_ms < 0) {
 		log_message(WARNING, "Clock appears to have moved backwards for %s, assuming quiet period elapsed",

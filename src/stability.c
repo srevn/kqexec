@@ -198,7 +198,7 @@ entity_state_t *stability_entry(deferred_check_t *entry) {
 }
 
 /* Check if quiet period has elapsed for a directory */
-bool stability_quiet(entity_state_t *root_state, struct timespec *current_time, long *elapsed_ms_out) {
+bool stability_quiet(entity_state_t *root_state, struct timespec *current_time, long *elapsed_ms_out, long required_quiet) {
 	if (!root_state || !current_time) {
 		return false;
 	}
@@ -226,23 +226,19 @@ bool stability_quiet(entity_state_t *root_state, struct timespec *current_time, 
 		*elapsed_ms_out = elapsed_ms;
 	}
 
-	long required_quiet = scanner_delay(root_state);
-
 	log_message(DEBUG, "Path %s: %ld ms elapsed of %ld ms quiet period, direct_entries=%d+%d, recursive_entries=%d+%d, depth=%d",
 	        			root_state->path_state->path, elapsed_ms, required_quiet, root_state->dir_stats.file_count,
 						root_state->dir_stats.dir_count, root_state->dir_stats.tree_files, root_state->dir_stats.tree_dirs,
 	        			root_state->dir_stats.depth);
 
-	return scanner_ready(root_state, current_time);
+	return scanner_ready(root_state, current_time, required_quiet);
 }
 
 /* Reschedule a deferred check */
-void stability_delay(monitor_t *monitor, deferred_check_t *entry, entity_state_t *root_state, struct timespec *current_time) {
+void stability_delay(monitor_t *monitor, deferred_check_t *entry, entity_state_t *root_state, struct timespec *current_time, long required_quiet) {
 	if (!monitor || !entry || !root_state || !current_time) {
 		return;
 	}
-
-	long required_quiet = scanner_delay(root_state);
 
 	/* Update next check time based on latest activity */
 	struct timespec next_check;
@@ -553,9 +549,12 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 			continue;
 		}
 
+		/* Calculate required quiet period once to avoid redundant computation */
+		long required_quiet = scanner_delay(root_state);
+		
 		/* Verify if the quiet period has truly elapsed */
 		long elapsed_ms;
-		bool quiet_period_has_elapsed = stability_quiet(root_state, current_time, &elapsed_ms);
+		bool quiet_period_has_elapsed = stability_quiet(root_state, current_time, &elapsed_ms, required_quiet);
 
 		if (!quiet_period_has_elapsed) {
 			/* Quiet period not yet elapsed, reschedule */
@@ -566,7 +565,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 			/* Increment instability counter */
 			root_state->unstable_count++; 
 
-			stability_delay(monitor, entry, root_state, current_time);
+			stability_delay(monitor, entry, root_state, current_time, required_quiet);
 			continue;
 		}
 
@@ -641,7 +640,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 			log_message(DEBUG, "Directory %s is still unstable (instability count: %d), rescheduling",
 			            		entry->path, root_state->unstable_count);
 
-			stability_delay(monitor, entry, root_state, current_time);
+			stability_delay(monitor, entry, root_state, current_time, required_quiet);
 			continue;
 		}
 

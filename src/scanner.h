@@ -43,6 +43,6 @@ void scanner_update(entity_state_t *state);
 void scanner_track(entity_state_t *state, operation_type_t op);
 void scanner_sync(path_state_t *path_state, entity_state_t *trigger_state);
 long scanner_delay(entity_state_t *state);
-bool scanner_ready(entity_state_t *state, struct timespec *now);
+bool scanner_ready(entity_state_t *state, struct timespec *now, long required_quiet);
 
 #endif /* SCANNER_H */

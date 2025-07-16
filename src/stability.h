@@ -22,8 +22,8 @@ entity_state_t *stability_entry(deferred_check_t *entry);
 
 /* Quiet period checking */
 void stability_defer(monitor_t *monitor, entity_state_t *state);
-void stability_delay(monitor_t *monitor, deferred_check_t *entry, entity_state_t *root_state, struct timespec *current_time);
-bool stability_quiet(entity_state_t *root_state, struct timespec *current_time, long *elapsed_ms_out);
+void stability_delay(monitor_t *monitor, deferred_check_t *entry, entity_state_t *root_state, struct timespec *current_time, long required_quiet);
+bool stability_quiet(entity_state_t *root_state, struct timespec *current_time, long *elapsed_ms_out, long required_quiet);
 bool stability_ready(monitor_t *monitor, entity_state_t *state, operation_type_t op, int debounce_ms);
 
 /* Directory stability verification */
