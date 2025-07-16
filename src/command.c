@@ -528,7 +528,8 @@ char *command_placeholders(const watch_entry_t *watch, const char *command, cons
 	if (strstr(result, "%s") || strstr(result, "%S")) {
 		size_t size = 0;
 		if (state && state->type == ENTITY_DIRECTORY) {
-			size = state->dir_stats.tree_size;
+			entity_state_t *size_state = stability_root(state);
+			size = size_state ? size_state->dir_stats.tree_size : state->dir_stats.tree_size;
 		} else if (stat(event->path, &st) == 0) {
 			size = st.st_size;
 		}
