@@ -471,7 +471,7 @@ static void scanner_update_stats(entity_state_t *state, operation_type_t op) {
 }
 
 /* Propagate activity to all parent directories between entity and root */
-static void scanner_propagate(entity_state_t *state, entity_state_t *root, operation_type_t op) {
+static void scanner_propagate(entity_state_t *state, entity_state_t *root, operation_type_t op, dir_stats_t *root_stats) {
 	char *path_copy = strdup(state->path_state->path);
 	if (path_copy) {
 		/* Get parent directory path */
@@ -495,13 +495,29 @@ static void scanner_propagate(entity_state_t *state, entity_state_t *root, opera
 
 				/* Update directory stats for parent if this is a content change */
 				if (op == OP_DIR_CONTENT_CHANGED && parent_state->type == ENTITY_DIRECTORY) {
-					dir_stats_t parent_new_stats;
-					if (scanner_scan(parent_state->path_state->path, &parent_new_stats)) {
+					/* Optimization: For recursive watches within the same scope, reuse root stats */
+					bool within_recursive_scope = (root_stats && 
+					                               parent_state->watch->recursive &&
+					                               parent_state->watch == root->watch &&
+					                               strlen(path_copy) >= strlen(root->watch->path));
+					
+					if (within_recursive_scope) {
+						/* Use pre-calculated root stats - no redundant scanning */
 						parent_state->prev_stats = parent_state->dir_stats;
-						parent_state->dir_stats = parent_new_stats;
-
+						parent_state->dir_stats = *root_stats;
+						
 						/* Update cumulative changes */
 						scanner_update(parent_state);
+					} else {
+						/* Fall back to scanning for non-recursive or cross-scope parents */
+						dir_stats_t parent_new_stats;
+						if (scanner_scan(parent_state->path_state->path, &parent_new_stats)) {
+							parent_state->prev_stats = parent_state->dir_stats;
+							parent_state->dir_stats = parent_new_stats;
+
+							/* Update cumulative changes */
+							scanner_update(parent_state);
+						}
 					}
 				}
 
@@ -536,7 +552,8 @@ static void scanner_handle_recursive(entity_state_t *state, operation_type_t op)
 		scanner_sync(root->path_state, root);
 
 		/* Now propagate activity to all parent directories between this entity and root */
-		scanner_propagate(state, root, op);
+		/* Pass root stats to avoid redundant scanning within the same recursive scope */
+		scanner_propagate(state, root, op, &root->dir_stats);
 	}
 }
 
