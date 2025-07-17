@@ -164,9 +164,6 @@ void stability_defer(monitor_t *monitor, entity_state_t *state) {
 	/* Add to queue */
 	queue_upsert(monitor->check_queue, root_state->path_state->path, root_state->watch, next_check);
 
-	/* For the synchronization to work correctly, also perform a scanner_sync call */
-	scanner_sync(root_state->path_state, root_state);
-
 	log_message(DEBUG, "Scheduled deferred check for %s: in %ld ms (directory with %d files, %d dirs)",
 	            		root_state->path_state->path, required_quiet, root_state->dir_stats.file_count,
 						root_state->dir_stats.dir_count);
