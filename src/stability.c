@@ -559,9 +559,6 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 			log_message(DEBUG, "Quiet period not yet elapsed for %s (watch: %s), rescheduling",
 			        			root_state->path_state->path, primary_watch ? primary_watch->name : "unknown");
 
-			/* Increment instability counter */
-			root_state->unstable_count++; 
-
 			stability_delay(monitor, entry, root_state, current_time, required_quiet);
 			continue;
 		}
@@ -628,13 +625,13 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 		if (!is_stable) {
 			/* Directory is unstable - reset counter and reschedule */
 			root_state->checks_count = 0;
-			root_state->unstable_count++; /* Increment instability counter */
+			root_state->unstable_count++; /* Increment only for actual stability scan failures */
 
 			/* Update activity timestamp */
 			root_state->tree_activity = *current_time;
 			scanner_sync(root_state->path_state, root_state);
 
-			log_message(DEBUG, "Directory %s is still unstable (instability count: %d), rescheduling",
+			log_message(DEBUG, "Directory %s failed stability scan (instability count: %d), rescheduling",
 			            		entry->path, root_state->unstable_count);
 
 			stability_delay(monitor, entry, root_state, current_time, required_quiet);
