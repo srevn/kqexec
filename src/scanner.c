@@ -493,6 +493,9 @@ static void scanner_propagate(entity_state_t *state, entity_state_t *root, opera
 				parent_state->activity_active = true;
 				parent_state->checks_count = 0;
 
+				/* Reset stability_lost flag when activity becomes active to prevent repeated penalties */
+				parent_state->stability_lost = false;
+
 				/* Update directory stats for parent if this is a content change */
 				if (op == OP_DIR_CONTENT_CHANGED && parent_state->type == ENTITY_DIRECTORY) {
 					/* Optimization: For recursive watches within the same scope, reuse root stats */
@@ -541,6 +544,9 @@ static void scanner_handle_recursive(entity_state_t *state, operation_type_t op)
 		free(root->active_path);
 		root->active_path = strdup(state->path_state->path);
 		root->activity_active = true;
+
+		/* Reset stability_lost flag when activity becomes active to prevent repeated penalties */
+		root->stability_lost = false;
 
 		/* Reset root's stability checks */
 		root->checks_count = 0;

@@ -49,6 +49,10 @@ bool stability_ready(monitor_t *monitor, entity_state_t *state, operation_type_t
 		if (root && monitor) {
 			/* Always trigger a deferred check; queue deduplicates */
 			root->activity_active = true;
+
+			/* Reset stability_lost flag when activity becomes active to prevent repeated penalties */
+			root->stability_lost = false;
+
 			log_message(DEBUG, "Directory content change for %s, marked root %s as active, command deferred",
 			        			state->path_state->path, root->path_state->path);
 			scanner_sync(root->path_state, root);
@@ -122,6 +126,9 @@ void stability_defer(monitor_t *monitor, entity_state_t *state) {
 
 	/* Force root state to be active */
 	root_state->activity_active = true;
+
+	/* Reset stability_lost flag when activity becomes active to prevent repeated penalties */
+	root_state->stability_lost = false;
 
 	/* Initialize reference stats if needed - CRITICAL for empty directories */
 	if (!root_state->reference_init) {
