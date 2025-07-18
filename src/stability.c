@@ -287,18 +287,18 @@ bool stability_scan(entity_state_t *root_state, const char *path, dir_stats_t *s
 	/* Perform recursive stability verification */
 	bool scan_completed = scanner_stable(root_state, path, stats_out);
 
-	/* Always update directory stats, even from a partial/failed scan */
+	/* Only update stats and cumulative changes if the scan was successful */
 	if (scan_completed) {
 		root_state->checks_failed = 0; /* Reset failed checks on success */
+
+		/* Save previous stats for comparison before overwriting */
+		dir_stats_t temp_stats = root_state->dir_stats;
+		root_state->dir_stats = *stats_out;
+
+		/* Update cumulative changes based on the difference */
+		root_state->prev_stats = temp_stats;
+		scanner_update(root_state);
 	}
-
-	/* Save previous stats for comparison before overwriting */
-	dir_stats_t temp_stats = root_state->dir_stats;
-	root_state->dir_stats = *stats_out;
-
-	/* Update cumulative changes based on the difference */
-	root_state->prev_stats = temp_stats;
-	scanner_update(root_state);
 
 	log_message(DEBUG, "Stability scan for %s: files=%d, dirs=%d, size=%s, recursive_files=%d, recursive_dirs=%d, max_depth=%d",
 						path, stats_out->file_count, stats_out->dir_count, format_size((ssize_t)stats_out->tree_size, false),
