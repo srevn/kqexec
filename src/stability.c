@@ -163,6 +163,12 @@ void stability_defer(monitor_t *monitor, entity_state_t *state) {
 
 	/* Add to queue */
 	queue_upsert(monitor->check_queue, root_state->path_state->path, root_state->watch, next_check);
+	
+	/* Store the calculated quiet period for consistent use */
+	int index = queue_find(monitor->check_queue, root_state->path_state->path);
+	if (index >= 0) {
+		monitor->check_queue->items[index].scheduled_period = required_quiet;
+	}
 
 	log_message(DEBUG, "Scheduled deferred check for %s: in %ld ms (directory with %d files, %d dirs)",
 	            		root_state->path_state->path, required_quiet, root_state->dir_stats.file_count,
@@ -250,6 +256,7 @@ void stability_delay(monitor_t *monitor, deferred_check_t *entry, entity_state_t
 
 	/* Update the entry in place and restore heap property */
 	entry->next_check = next_check;
+	entry->scheduled_period = required_quiet;
 	heap_down(monitor->check_queue->items, monitor->check_queue->size, 0);
 }
 
@@ -548,11 +555,16 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 
 		/* Check if we're in verification mode or need to verify quiet period */
 		bool quiet_period_has_elapsed = entry->in_verification;
-		long required_quiet = 0;
+		long required_quiet = entry->scheduled_period;
 		
 		if (!quiet_period_has_elapsed) {
-			/* Calculate required quiet period and verify it has elapsed */
-			required_quiet = scanner_delay(root_state);
+			/* Use the stored quiet period from when this check was scheduled */
+			if (required_quiet <= 0) {
+				/* Fallback: calculate if not stored (shouldn't happen) */
+				required_quiet = scanner_delay(root_state);
+				entry->scheduled_period = required_quiet;
+			}
+			
 			long elapsed_ms;
 			quiet_period_has_elapsed = stability_quiet(root_state, current_time, &elapsed_ms, required_quiet);
 
@@ -591,6 +603,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 			
 			/* Reschedule with proper quiet period calculation based on new complexity */
 			required_quiet = scanner_delay(root_state);
+			log_message(DEBUG, "Recalculated quiet period for new directories: %ld ms", required_quiet);
 			stability_delay(monitor, entry, root_state, current_time, required_quiet);
 			continue;
 		}
@@ -643,6 +656,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 
 			/* Recalculate quiet period based on new instability */
 			required_quiet = scanner_delay(root_state);
+			log_message(DEBUG, "Recalculated quiet period for instability: %ld ms", required_quiet);
 			stability_delay(monitor, entry, root_state, current_time, required_quiet);
 			continue;
 		}
