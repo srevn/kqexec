@@ -149,7 +149,35 @@ void stability_defer(monitor_t *monitor, entity_state_t *state) {
 		root_state->tree_activity = now;
 	}
 
+	/* Check if there's already a pending check to implement lock-in behavior */
+	int existing_index = queue_find(monitor->check_queue, root_state->path_state->path);
+	
+	if (existing_index >= 0) {
+		/* A check is already pending. Refresh the timer, don't recalculate the delay. */
+		long locked_period = monitor->check_queue->items[existing_index].scheduled_period;
+		if (locked_period <= 0) {
+			/* Fallback if the period wasn't locked in correctly */
+			locked_period = scanner_delay(root_state);
+			monitor->check_queue->items[existing_index].scheduled_period = locked_period;
+		}
+		
+		/* Update activity time for true timer refresh */
+		clock_gettime(CLOCK_MONOTONIC, &root_state->tree_activity);
+		scanner_sync(root_state->path_state, root_state); /* Propagate new activity time */
+		
+		/* Use existing scheduling logic with locked period */
+		stability_delay(monitor, &monitor->check_queue->items[existing_index],
+		               root_state, &root_state->tree_activity, locked_period);
+		               
+		log_message(DEBUG, "Event received during quiet period, refreshing locked-in delay of %ld ms for %s",
+		            		locked_period, root_state->path_state->path);
+		return;
+	}
+
+	/* Calculate quiet period for first event of this burst */
 	long required_quiet = scanner_delay(root_state);
+	log_message(DEBUG, "Calculated new quiet period for %s: %ld ms (first event of burst)", 
+	            		root_state->path_state->path, required_quiet);
 
 	struct timespec next_check;
 	next_check.tv_sec = root_state->tree_activity.tv_sec + (required_quiet / 1000);
