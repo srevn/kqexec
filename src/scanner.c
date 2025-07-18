@@ -535,12 +535,14 @@ static void scanner_propagate(entity_state_t *state, entity_state_t *root, opera
 					                               strlen(path_copy) >= strlen(root->watch->path));
 					
 					if (within_recursive_scope) {
-						/* Use pre-calculated root stats - no redundant scanning */
-						parent_state->prev_stats = parent_state->dir_stats;
-						parent_state->dir_stats = *root_stats;
-						
-						/* Update cumulative changes */
-						scanner_update(parent_state);
+						if (parent_state != root) {
+							/* Use pre-calculated root stats - no redundant scanning */
+							parent_state->prev_stats = parent_state->dir_stats;
+							parent_state->dir_stats = *root_stats;
+
+							/* Update cumulative changes */
+							scanner_update(parent_state);
+						}
 					} else {
 						/* Fall back to scanning for non-recursive or cross-scope parents */
 						dir_stats_t parent_new_stats;
