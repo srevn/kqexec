@@ -20,18 +20,28 @@
 void scanner_update(entity_state_t *state) {
 	if (!state || !state->path_state) return;
 
-	/* Skip if we don't have previous stats yet */
-	if (state->prev_stats.file_count == 0 && state->prev_stats.dir_count == 0 &&
-	    state->prev_stats.tree_files == 0 && state->prev_stats.tree_dirs == 0 &&
-	    state->prev_stats.tree_size == 0) {
-		return;
-	}
-
 	/* Calculate incremental changes */
-	int new_file_change = state->dir_stats.tree_files - state->prev_stats.tree_files;
-	int new_dir_change = state->dir_stats.tree_dirs - state->prev_stats.tree_dirs;
-	int new_depth_change = state->dir_stats.max_depth - state->prev_stats.max_depth;
-	ssize_t new_size_change = (ssize_t)state->dir_stats.tree_size - (ssize_t)state->prev_stats.tree_size;
+	int new_file_change, new_dir_change, new_depth_change;
+	ssize_t new_size_change;
+	
+	/* Check if this is a new state (no previous stats) */
+	bool is_new_state = (state->prev_stats.file_count == 0 && state->prev_stats.dir_count == 0 &&
+	                     state->prev_stats.tree_files == 0 && state->prev_stats.tree_dirs == 0 &&
+	                     state->prev_stats.tree_size == 0);
+	
+	if (is_new_state) {
+		/* For new states, the change is the current stats (from initial empty state) */
+		new_file_change = state->dir_stats.tree_files;
+		new_dir_change = state->dir_stats.tree_dirs;
+		new_depth_change = state->dir_stats.max_depth;
+		new_size_change = (ssize_t)state->dir_stats.tree_size;
+	} else {
+		/* For existing states, calculate the difference from previous stats */
+		new_file_change = state->dir_stats.tree_files - state->prev_stats.tree_files;
+		new_dir_change = state->dir_stats.tree_dirs - state->prev_stats.tree_dirs;
+		new_depth_change = state->dir_stats.max_depth - state->prev_stats.max_depth;
+		new_size_change = (ssize_t)state->dir_stats.tree_size - (ssize_t)state->prev_stats.tree_size;
+	}
 
 	/* If significant directory deletion but no depth change reported, infer a depth change */
 	if (new_dir_change < -5 && new_depth_change == 0) {
