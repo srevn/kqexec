@@ -220,27 +220,6 @@ bool scanner_compare(dir_stats_t *prev, dir_stats_t *current) {
 		is_stable = false;
 	}
 
-	/* Check if total size is stable (allowing for reasonable changes) */
-	long size_diff = labs((long) prev->tree_size - (long) current->tree_size);
-	long base_threshold = prev->tree_size > 1000000
-	                      ? prev->tree_size / 1000  /* 0.1% for large dirs */
-	                      : 1024; /* 1KB for small dirs */
-	
-	/* For very large directories (>100MB), use a more generous threshold */
-	if (prev->tree_size > 100000000) {
-		base_threshold = prev->tree_size / 500;  /* 0.2% for very large dirs */
-	}
-	
-	/* Ensure minimum threshold for large operations */
-	if (base_threshold < 1048576) {  /* 1MB minimum */
-		base_threshold = 1048576;
-	}
-
-	if (size_diff > base_threshold) {
-		log_message(DEBUG, "Directory unstable: size changed by %ld bytes (threshold: %ld)", size_diff, base_threshold);
-		is_stable = false;
-	}
-
 	/* Check for temporary files */
 	if (current->has_temps) {
 		log_message(DEBUG, "Directory unstable: temporary files detected");
