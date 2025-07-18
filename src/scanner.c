@@ -27,29 +27,6 @@ void scanner_update(entity_state_t *state) {
 		return;
 	}
 
-	/* Check if this is the initial state where prev_stats == dir_stats */
-	if (!state->initial_scan &&
-	    state->prev_stats.tree_files == state->dir_stats.tree_files &&
-	    state->prev_stats.tree_dirs == state->dir_stats.tree_dirs &&
-	    state->prev_stats.max_depth == state->dir_stats.max_depth &&
-	    state->prev_stats.tree_size == state->dir_stats.tree_size) {
-		
-		/* This is the initial event - account for the directory creation */
-		state->cumulative_file = state->dir_stats.tree_files;
-		state->cumulative_dirs = state->dir_stats.tree_dirs;
-		state->cumulative_depth = state->dir_stats.max_depth;
-		state->cumulative_size = state->dir_stats.tree_size;
-		
-		/* Mark as accounted and clear prev_stats to prevent re-triggering */
-		state->initial_scan = true;
-		memset(&state->prev_stats, 0, sizeof(dir_stats_t));
-		
-		log_message(DEBUG, "Initial event accounted for %s: files=%+d, dirs=%+d, depth=%+d, size=%s",
-		        			state->path_state->path, state->cumulative_file, state->cumulative_dirs,
-		    				state->cumulative_depth, format_size(state->cumulative_size, true));
-		return;
-	}
-
 	/* Calculate incremental changes */
 	int new_file_change = state->dir_stats.tree_files - state->prev_stats.tree_files;
 	int new_dir_change = state->dir_stats.tree_dirs - state->prev_stats.tree_dirs;
@@ -453,7 +430,6 @@ void scanner_sync(path_state_t *path_state, entity_state_t *trigger_state) {
 				state->cumulative_depth = trigger_state->cumulative_depth;
 				state->cumulative_size = trigger_state->cumulative_size;
 				state->stability_lost = trigger_state->stability_lost;
-				state->initial_scan = trigger_state->initial_scan;
 				state->unstable_count = max_unstable_count;
 			}
 		}

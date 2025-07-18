@@ -54,7 +54,6 @@ typedef struct entity_state {
 	/* Stable reference state tracking */
 	dir_stats_t reference_stats;           /* Last known stable state statistics */
 	bool reference_init;                   /* Whether reference stats are initialized */
-	bool initial_scan;                     /* Flag for one-time initial scan accounting */
 	int cumulative_file;                   /* Running total of file changes since stability */
 	int cumulative_dirs;                   /* Running total of directory changes */
 	int cumulative_depth;                  /* Running total of depth changes */
