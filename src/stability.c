@@ -567,27 +567,19 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 
 		/* Check for new directories */
 		if (stability_new(monitor, entry)) {
-			log_message(DEBUG, "Found new directories during scan, deferring command execution");
-
-			/* Synchronize state after adding watches but before rescheduling */
+			log_message(DEBUG, "Found new directories during scan, treating as new activity");
+		
+			/* Synchronize state after adding watches */
 			scanner_sync(root_state->path_state, root_state);
-
-			/* Increment instability counter */
-			root_state->unstable_count++;
-
-			/* Reschedule with a shorter interval for quick follow-up */
-			struct timespec next_check;
-			next_check.tv_sec = current_time->tv_sec;
-			next_check.tv_nsec = current_time->tv_nsec + 200000000; /* 200ms */
-			if (next_check.tv_nsec >= 1000000000) {
-				next_check.tv_sec++;
-				next_check.tv_nsec -= 1000000000;
-			}
-
-			/* Update entry and restore heap property */
-			entry->next_check = next_check;
-			heap_down(monitor->check_queue->items, monitor->check_queue->size, 0);
-
+		
+			/* Treat new directory discovery as activity - update timestamp and reschedule with full quiet period */
+			root_state->tree_activity = *current_time;
+			root_state->unstable_count++; /* Increment since directory structure is still changing */
+			
+			log_message(DEBUG, "New directory discovery updated activity timestamp, rescheduling with full quiet period");
+			
+			/* Reschedule with proper quiet period calculation based on new complexity */
+			stability_delay(monitor, entry, root_state, current_time, required_quiet);
 			continue;
 		}
 
