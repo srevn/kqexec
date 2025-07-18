@@ -590,6 +590,17 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 			/* Synchronize state after adding watches */
 			scanner_sync(root_state->path_state, root_state);
 		
+			/* Immediately re-scan directory stats to account for newly discovered directories */
+			dir_stats_t updated_stats;
+			bool scan_successful = stability_scan(root_state, entry->path, &updated_stats);
+			
+			if (scan_successful) {
+				log_message(DEBUG, "Updated directory stats after new directory discovery: files=%d, dirs=%d, depth=%d",
+				            		updated_stats.tree_files, updated_stats.tree_dirs, updated_stats.max_depth);
+			} else {
+				log_message(WARNING, "Failed to update directory stats after new directory discovery for %s", entry->path);
+			}
+		
 			/* Treat new directory discovery as activity - update timestamp and reschedule with full quiet period */
 			root_state->tree_activity = *current_time;
 			root_state->unstable_count++; /* Increment since directory structure is still changing */
@@ -599,7 +610,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 			
 			log_message(DEBUG, "New directory discovery updated activity timestamp, exiting verification mode and rescheduling with full quiet period");
 			
-			/* Reschedule with proper quiet period calculation based on new complexity */
+			/* Reschedule with proper quiet period calculation based on updated directory stats */
 			required_quiet = scanner_delay(root_state);
 			log_message(DEBUG, "Recalculated quiet period for new directories: %ld ms", required_quiet);
 			stability_delay(monitor, entry, root_state, current_time, required_quiet);
