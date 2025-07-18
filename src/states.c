@@ -266,8 +266,10 @@ entity_state_t *states_get(const char *path, entity_type_t type, watch_entry_t *
 		log_message(DEBUG, "Copying stats from existing state for path %s (watch: %s)",
 		        			path, existing_state_for_path->watch->name);
 		copy_state(state, existing_state_for_path);
+		state->is_new = false;
 	} else {
 		/* This is the first state for this path, initialize stats from scratch */
+		state->is_new = true;
 		state->unstable_count = 0;
 		state->required_checks = 0;
 		state->reference_init = false;
@@ -280,19 +282,14 @@ entity_state_t *states_get(const char *path, entity_type_t type, watch_entry_t *
 
 		if (state->type == ENTITY_DIRECTORY && state->exists) {
 			if (scanner_scan(path, &state->dir_stats)) {
-				state->prev_stats = state->dir_stats;
+				/* For a new state, prev_stats is zeroed to correctly calculate the initial change */
+				memset(&state->prev_stats, 0, sizeof(dir_stats_t));
 				state->reference_stats = state->dir_stats;
 				state->reference_init = true;
 
-				/* This is the initial event - account for the directory creation */
-				state->cumulative_file = state->dir_stats.tree_files;
-				state->cumulative_dirs = state->dir_stats.tree_dirs;
-				state->cumulative_depth = state->dir_stats.max_depth;
-				state->cumulative_size = state->dir_stats.tree_size;
-
 				log_message(DEBUG, "Initialized directory stats for %s: files=%d, dirs=%d, depth=%d, size=%s",
-				        			path, state->dir_stats.file_count, state->dir_stats.dir_count,
-				        			state->dir_stats.depth, format_size((ssize_t)state->dir_stats.tree_size, false));
+				        			path, state->dir_stats.tree_files, state->dir_stats.tree_dirs,
+				        			state->dir_stats.max_depth, format_size((ssize_t)state->dir_stats.tree_size, false));
 			} else {
 				log_message(WARNING, "Failed to gather initial stats for directory: %s", path);
 			}
