@@ -292,9 +292,6 @@ bool stability_scan(entity_state_t *root_state, const char *path, dir_stats_t *s
 		root_state->prev_stats = temp_stats;
 		scanner_update(root_state);
 
-		/* Set previous stats to current for the next cycle's comparison */
-		root_state->prev_stats = *stats_out;
-
 		log_message(DEBUG, "Stability scan for %s: files=%d, dirs=%d, size=%s, recursive_files=%d, recursive_dirs=%d, max_depth=%d",
 		    				path, stats_out->file_count, stats_out->dir_count, format_size((ssize_t)stats_out->tree_size, false),
 		        			stats_out->tree_files, stats_out->tree_dirs, stats_out->max_depth);
@@ -415,6 +412,9 @@ void stability_reset(entity_state_t *root_state) {
 	root_state->cumulative_size = 0;
 	root_state->unstable_count = 0;
 	root_state->stability_lost = false;
+	
+	/* Update prev_stats to current stats for next cycle's comparison */
+	root_state->prev_stats = root_state->dir_stats;
 
 	/* Propagate the reset state to all related states for this path */
 	scanner_sync(root_state->path_state, root_state);
