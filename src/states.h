@@ -49,6 +49,7 @@ typedef struct entity_state {
 	int checks_count;                      /* Number of stability checks */
 	int checks_failed;                     /* Number of consecutive failed stability checks */
 	int unstable_count;                    /* Number of times found unstable in a row */
+	int required_checks;                   /* Required number of stability checks (locked in) */
 
 	/* Stable reference state tracking */
 	dir_stats_t reference_stats;           /* Last known stable state statistics */

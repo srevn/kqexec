@@ -408,6 +408,7 @@ void stability_reset(entity_state_t *root_state) {
 	/* Reset activity flag, stability counter, and all change tracking on the root state */
 	root_state->activity_active = false;
 	root_state->checks_count = 0;
+	root_state->required_checks = 0;
 	root_state->reference_stats = root_state->dir_stats;
 	root_state->reference_init = true;
 	root_state->cumulative_file = 0;
@@ -639,6 +640,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 		if (!is_stable) {
 			/* Directory is unstable - reset counter and reschedule */
 			root_state->checks_count = 0;
+			root_state->required_checks = 0; /* Reset required checks to recalculate on next cycle */
 			root_state->unstable_count++; /* Increment only for actual stability scan failures */
 
 			/* Update activity timestamp */
@@ -661,8 +663,11 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 		/* Directory is stable - determine if enough checks have been completed */
 		root_state->checks_count++;
 
-		/* Calculate required checks based on complexity factors */
-		int required_checks = stability_require(root_state, &current_stats);
+		/* Calculate required checks based on complexity factors (only if not already set) */
+		if (root_state->required_checks == 0) {
+			root_state->required_checks = stability_require(root_state, &current_stats);
+		}
+		int required_checks = root_state->required_checks;
 
 		log_message(DEBUG, "Stability check %d/%d for %s: changes (%+d files, %+d dirs, %+d depth) total (%d entries, depth %d)",
 		    				root_state->checks_count, required_checks, root_state->path_state->path, root_state->cumulative_file, 

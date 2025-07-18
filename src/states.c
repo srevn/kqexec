@@ -153,6 +153,7 @@ static void copy_state(entity_state_t *dest, const entity_state_t *src) {
 	dest->cumulative_size = src->cumulative_size;
 	dest->stability_lost = src->stability_lost;
 	dest->unstable_count = src->unstable_count;
+	dest->required_checks = src->required_checks;
 }
 
 /* Get or create an entity state for a given path and watch */
@@ -258,6 +259,7 @@ entity_state_t *states_get(const char *path, entity_type_t type, watch_entry_t *
 	init_tracking(state, watch);
 	state->command_time = 0;
 	state->checks_failed = 0;
+	state->required_checks = 0;
 
 	/* If an existing state for this path was found, copy its stats */
 	if (existing_state_for_path) {
@@ -267,6 +269,7 @@ entity_state_t *states_get(const char *path, entity_type_t type, watch_entry_t *
 	} else {
 		/* This is the first state for this path, initialize stats from scratch */
 		state->unstable_count = 0;
+		state->required_checks = 0;
 		state->reference_init = false;
 		state->cumulative_file = 0;
 		state->cumulative_dirs = 0;
