@@ -14,6 +14,7 @@ typedef struct {
 	watch_entry_t **watches;               /* Array of watches for this path */
 	int watch_count;                       /* Number of watches for this path */
 	int watch_capacity;                    /* Allocated capacity for watches array */
+	bool in_verification;                  /* True if in verification phase (skip quiet period checks) */
 } deferred_check_t;
 
 /* Deferred check queue structure */

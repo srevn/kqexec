@@ -546,24 +546,32 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 			continue;
 		}
 
-		/* Calculate required quiet period once to avoid redundant computation */
-		long required_quiet = scanner_delay(root_state);
+		/* Check if we're in verification mode or need to verify quiet period */
+		bool quiet_period_has_elapsed = entry->in_verification;
+		long required_quiet = 0;
 		
-		/* Verify if the quiet period has truly elapsed */
-		long elapsed_ms;
-		bool quiet_period_has_elapsed = stability_quiet(root_state, current_time, &elapsed_ms, required_quiet);
-
 		if (!quiet_period_has_elapsed) {
-			/* Quiet period not yet elapsed, reschedule */
-			watch_entry_t *primary_watch = stability_watch(entry);
-			log_message(DEBUG, "Quiet period not yet elapsed for %s (watch: %s), rescheduling",
-			        			root_state->path_state->path, primary_watch ? primary_watch->name : "unknown");
+			/* Calculate required quiet period and verify it has elapsed */
+			required_quiet = scanner_delay(root_state);
+			long elapsed_ms;
+			quiet_period_has_elapsed = stability_quiet(root_state, current_time, &elapsed_ms, required_quiet);
 
-			stability_delay(monitor, entry, root_state, current_time, required_quiet);
-			continue;
+			if (!quiet_period_has_elapsed) {
+				/* Quiet period not yet elapsed, reschedule */
+				watch_entry_t *primary_watch = stability_watch(entry);
+				log_message(DEBUG, "Quiet period not yet elapsed for %s (watch: %s), rescheduling",
+				        			root_state->path_state->path, primary_watch ? primary_watch->name : "unknown");
+
+				stability_delay(monitor, entry, root_state, current_time, required_quiet);
+				continue;
+			}
+			
+			/* Quiet period has elapsed, enter verification mode */
+			entry->in_verification = true;
+			log_message(DEBUG, "Quiet period elapsed for %s, entering verification mode", entry->path);
 		}
 
-		log_message(DEBUG, "Quiet period elapsed for %s, performing stability verification", entry->path);
+		log_message(DEBUG, "Performing stability verification for %s", entry->path);
 
 		/* Check for new directories */
 		if (stability_new(monitor, entry)) {
@@ -576,9 +584,13 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 			root_state->tree_activity = *current_time;
 			root_state->unstable_count++; /* Increment since directory structure is still changing */
 			
-			log_message(DEBUG, "New directory discovery updated activity timestamp, rescheduling with full quiet period");
+			/* Reset verification flag since this is new activity */
+			entry->in_verification = false;
+			
+			log_message(DEBUG, "New directory discovery updated activity timestamp, exiting verification mode and rescheduling with full quiet period");
 			
 			/* Reschedule with proper quiet period calculation based on new complexity */
+			required_quiet = scanner_delay(root_state);
 			stability_delay(monitor, entry, root_state, current_time, required_quiet);
 			continue;
 		}
@@ -623,9 +635,14 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 			root_state->tree_activity = *current_time;
 			scanner_sync(root_state->path_state, root_state);
 
-			log_message(DEBUG, "Directory %s failed stability scan (instability count: %d), rescheduling",
+			/* Reset verification flag since this is new activity */
+			entry->in_verification = false;
+
+			log_message(DEBUG, "Directory %s failed stability scan (instability count: %d), exiting verification mode and rescheduling",
 			            		entry->path, root_state->unstable_count);
 
+			/* Recalculate quiet period based on new instability */
+			required_quiet = scanner_delay(root_state);
 			stability_delay(monitor, entry, root_state, current_time, required_quiet);
 			continue;
 		}
