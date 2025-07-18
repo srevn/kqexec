@@ -646,12 +646,33 @@ static long scanner_base_period(entity_state_t *state) {
 	}
 }
 
+/* Calculate current activity magnitude (changes from reference state) for responsive adjustments */
+static void calculate_recent_activity(entity_state_t *state, int *recent_files, int *recent_dirs, int *recent_depth, ssize_t *recent_size) {
+	if (state->prev_stats.tree_files == 0 && state->prev_stats.tree_dirs == 0 && state->prev_stats.tree_size == 0) {
+		/* No previous state - use minimal values */
+		*recent_files = *recent_dirs = *recent_depth = 0;
+		*recent_size = 0;
+		return;
+	}
+
+	/* Calculate changes from the previous scan state to measure the current rate of change */
+	*recent_files = abs(state->dir_stats.tree_files - state->prev_stats.tree_files);
+	*recent_dirs = abs(state->dir_stats.tree_dirs - state->prev_stats.tree_dirs);
+	*recent_depth = abs(state->dir_stats.max_depth - state->prev_stats.max_depth);
+	*recent_size = labs((ssize_t)state->dir_stats.tree_size - (ssize_t)state->prev_stats.tree_size);
+}
+
 /* Apply stability, depth, and size adjustments to quiet period */
 static long scanner_adjust(entity_state_t *state, long base_ms) {
 	long required_ms = base_ms;
 	int total_entries = state->dir_stats.tree_files + state->dir_stats.tree_dirs;
 	int tree_depth = state->dir_stats.max_depth > 0 ? state->dir_stats.max_depth : state->dir_stats.depth;
-	int total_change = abs(state->cumulative_file) + abs(state->cumulative_dirs);
+	
+	/* Use current activity magnitude (changes from reference state) for responsiveness */
+	int recent_files, recent_dirs, recent_depth;
+	ssize_t recent_size;
+	calculate_recent_activity(state, &recent_files, &recent_dirs, &recent_depth, &recent_size);
+	int recent_change = recent_files + recent_dirs;
 
 	/* If stability was previously achieved and then lost, increase quiet period */
 	if (state->stability_lost) {
@@ -660,19 +681,19 @@ static long scanner_adjust(entity_state_t *state, long base_ms) {
 		log_message(DEBUG, "Stability previously achieved and lost, increasing quiet period by 25%%");
 	}
 
-	/* Tree depth multiplier - less dominant than before */
+	/* Tree depth multiplier - based on recent activity rate */
 	if (tree_depth > 0) {
 		/* Scale down the depth impact for simple operations */
-		float depth_factor = (total_change <= 1) ? 0.5 : 1.0;
+		float depth_factor = (recent_change <= 1) ? 0.5 : 1.0;
 		required_ms += tree_depth * 150 * depth_factor; /* Reduced from 250ms to 150ms per level */
 	}
 
-	/* Directory size complexity factor - minimal for small changes */
+	/* Directory size complexity factor - based on recent activity */
 	if (total_entries > 100) {
-		float size_factor = (total_change <= 3) ? 0.3 : 0.7;
+		float size_factor = (recent_change <= 3) ? 0.3 : 0.7;
 		int size_addition = (int) (250 * size_factor * (total_entries / 200.0));
 		/* Cap the size adjustment for small operations */
-		if (total_change <= 1 && size_addition > 300) size_addition = 300;
+		if (recent_change <= 1 && size_addition > 300) size_addition = 300;
 		required_ms += size_addition;
 	}
 

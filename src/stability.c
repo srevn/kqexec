@@ -393,9 +393,6 @@ bool stability_stable(entity_state_t *root_state, const dir_stats_t *current_sta
 
 	bool has_prev_stats = (root_state->prev_stats.file_count > 0 || root_state->prev_stats.dir_count > 0);
 	if (has_prev_stats && !scanner_compare(&root_state->prev_stats, (dir_stats_t *) current_stats)) {
-		log_message(DEBUG, "Directory unstable: content changed from %d/%d to %d/%d",
-		        			root_state->prev_stats.tree_files, root_state->prev_stats.tree_dirs,
-		        			current_stats->tree_files, current_stats->tree_dirs);
 		return false;
 	}
 
