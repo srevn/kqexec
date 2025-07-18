@@ -596,6 +596,14 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 
 			log_message(DEBUG, "New directory discovery updated activity timestamp, exiting verification mode and rescheduling with full quiet period");
 
+			/* Update directory stats to reflect new directory structure before calculating quiet period */
+			dir_stats_t new_stats;
+			if (scanner_scan(root_state->path_state->path, &new_stats)) {
+				root_state->prev_stats = root_state->dir_stats;
+				root_state->dir_stats = new_stats;
+				scanner_update(root_state);
+			}
+
 			/* Reschedule with proper quiet period calculation based on updated directory stats */
 			required_quiet = scanner_delay(root_state);
 			log_message(DEBUG, "Recalculated quiet period for new directories: %ld ms", required_quiet);
@@ -638,7 +646,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 			/* Directory is unstable - reset counter and reschedule */
 			root_state->checks_count = 0;
 			root_state->required_checks = 0; /* Reset required checks to recalculate on next cycle */
-			root_state->unstable_count++; /* Increment only for actual stability scan failures */
+			root_state->unstable_count++; /* Increment instability counter */
 
 			/* Update activity timestamp */
 			root_state->tree_activity = *current_time;
