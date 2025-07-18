@@ -663,6 +663,9 @@ static long scanner_base_period(entity_state_t *state) {
 	} else if (total_change < 10 && abs_depth_change == 0 && abs_size_change < 10 * 1024 * 1024) {
 		/* Several files changed, no structural changes, moderate size changes - modest quiet period */
 		return 1000;
+	} else if (total_change < 10 && abs_depth_change == 0 && abs_size_change < 100 * 1024 * 1024) {
+		/* Few files changed, no structural changes, but large size changes (10-100MB) - longer quiet period */
+		return 1350;
 	} else if (abs_depth_change > 0 || abs_size_change > 100 * 1024 * 1024) {
 		/* Structural depth changes or large size changes - significant quiet period */
 		int size_factor = (abs_size_change > 100 * 1024 * 1024) ? (abs_size_change / (100 * 1024 * 1024)) : 0;
