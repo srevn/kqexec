@@ -702,12 +702,22 @@ static long scanner_backoff(entity_state_t *state, long required_ms) {
 /* Apply final limits and complexity multiplier */
 static long scanner_limit_period(entity_state_t *state, long required_ms) {
 	/* Set reasonable limits */
-	if (required_ms < 10) required_ms = 10;
-	if (required_ms > 15000) required_ms = 15000; /* Cap at 15 seconds */
+	if (required_ms < 100) required_ms = 100;
+
+	/* Dynamic cap based on operation characteristics */
+	long max_period = 30000; /* Default 30 seconds */
+
+	if (required_ms > max_period) {
+		log_message(DEBUG, "Capping quiet period for %s from %ld ms to %ld ms", state->path_state->path, required_ms, max_period);
+		required_ms = max_period;
+	}
 
 	/* Apply complexity multiplier from watch config */
 	if (state->watch && state->watch->complexity > 0) {
+		long pre_multiplier = required_ms;
 		required_ms = (long) (required_ms * state->watch->complexity);
+		log_message(DEBUG, "Applied complexity multiplier %.2f to %s: %ld ms -> %ld ms",
+							state->watch->complexity, state->path_state->path, pre_multiplier, required_ms);
 	}
 
 	return required_ms;

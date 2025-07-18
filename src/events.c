@@ -280,7 +280,7 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int count, struct 
 
 				entity_type_t entity_type = (info->watch->type == WATCH_FILE) ? ENTITY_FILE : ENTITY_DIRECTORY;
 
-				log_message(DEBUG, "Event: path = %s, flags = 0x%x -> type = %s (watch: %s)",
+				log_message(DEBUG, "Event: path=%s, flags=0x%x -> type=%s (watch: %s)",
 									info->path, events[i].fflags, event_type_to_string(event.type), info->watch->name);
 
 				/* Proactive validation for directory events on NOTE_WRITE */
