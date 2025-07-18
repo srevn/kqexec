@@ -154,6 +154,7 @@ static void copy_state(entity_state_t *dest, const entity_state_t *src) {
 	dest->stability_lost = src->stability_lost;
 	dest->unstable_count = src->unstable_count;
 	dest->required_checks = src->required_checks;
+	dest->initial_scan = src->initial_scan;
 }
 
 /* Get or create an entity state for a given path and watch */
@@ -277,6 +278,7 @@ entity_state_t *states_get(const char *path, entity_type_t type, watch_entry_t *
 		state->cumulative_size = 0;
 		state->stability_lost = false;
 		state->check_pending = false;
+		state->initial_scan = false;
 
 		if (state->type == ENTITY_DIRECTORY && state->exists) {
 			if (scanner_scan(path, &state->dir_stats)) {

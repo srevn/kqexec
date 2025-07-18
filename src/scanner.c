@@ -28,7 +28,8 @@ void scanner_update(entity_state_t *state) {
 	}
 
 	/* Check if this is the initial state where prev_stats == dir_stats */
-	if (state->prev_stats.tree_files == state->dir_stats.tree_files &&
+	if (!state->initial_scan &&
+	    state->prev_stats.tree_files == state->dir_stats.tree_files &&
 	    state->prev_stats.tree_dirs == state->dir_stats.tree_dirs &&
 	    state->prev_stats.max_depth == state->dir_stats.max_depth &&
 	    state->prev_stats.tree_size == state->dir_stats.tree_size) {
@@ -39,7 +40,8 @@ void scanner_update(entity_state_t *state) {
 		state->cumulative_depth = state->dir_stats.max_depth;
 		state->cumulative_size = state->dir_stats.tree_size;
 		
-		/* Clear prev_stats to zero to prevent this from happening again */
+		/* Mark as accounted and clear prev_stats to prevent re-triggering */
+		state->initial_scan = true;
 		memset(&state->prev_stats, 0, sizeof(dir_stats_t));
 		
 		log_message(DEBUG, "Initial event accounted for %s: files=%+d, dirs=%+d, depth=%+d, size=%s",
@@ -445,11 +447,13 @@ void scanner_sync(path_state_t *path_state, entity_state_t *trigger_state) {
 				state->prev_stats = trigger_state->prev_stats;
 				state->checks_count = trigger_state->checks_count;
 				state->checks_failed = trigger_state->checks_failed;
+				state->required_checks = trigger_state->required_checks;
 				state->cumulative_file = trigger_state->cumulative_file;
 				state->cumulative_dirs = trigger_state->cumulative_dirs;
 				state->cumulative_depth = trigger_state->cumulative_depth;
 				state->cumulative_size = trigger_state->cumulative_size;
 				state->stability_lost = trigger_state->stability_lost;
+				state->initial_scan = trigger_state->initial_scan;
 				state->unstable_count = max_unstable_count;
 			}
 		}
