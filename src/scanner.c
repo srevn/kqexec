@@ -490,7 +490,7 @@ static void scanner_propagate(entity_state_t *state, entity_state_t *root, opera
 
 				/* Update directory stats for parent if this is a content change */
 				if (op == OP_DIR_CONTENT_CHANGED && parent_state->type == ENTITY_DIRECTORY) {
-					/* Optimization: For recursive watches within the same scope, reuse root stats */
+					/* For recursive watches within the same scope, reuse root stats */
 					bool within_recursive_scope = (root_stats && 
 					                               parent_state->watch->recursive &&
 					                               parent_state->watch == root->watch &&
@@ -552,7 +552,6 @@ static void scanner_handle_recursive(entity_state_t *state, operation_type_t op)
 		scanner_sync(root->path_state, root);
 
 		/* Now propagate activity to all parent directories between this entity and root */
-		/* Pass root stats to avoid redundant scanning within the same recursive scope */
 		scanner_propagate(state, root, op, &root->dir_stats);
 	}
 }
@@ -730,7 +729,7 @@ static long scanner_limit_period(entity_state_t *state, long required_ms) {
 	if (required_ms < 100) required_ms = 100;
 
 	/* Dynamic cap based on operation characteristics */
-	long max_period = 30000; /* Default 30 seconds */
+	long max_period = 60000; /* Default 60 seconds */
 
 	if (required_ms > max_period) {
 		log_message(DEBUG, "Capping quiet period for %s from %ld ms to %ld ms", state->path_state->path, required_ms, max_period);

@@ -585,18 +585,13 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 
 		/* Check for new directories */
 		if (stability_new(monitor, entry)) {
-			log_message(DEBUG, "Found new directories during scan, treating as new activity");
+			log_message(DEBUG, "Found new directories during scan, scheduling quick follow-up");
 
-			/* Treat new directory discovery as activity - update timestamp and reschedule with full quiet period */
+			/* This is activity, but we don't need a full quiet period reset */
 			root_state->tree_activity = *current_time;
 			root_state->unstable_count++; /* Increment since directory structure is still changing */
 
-			/* Reset verification flag since this is new activity */
-			entry->in_verification = false;
-
-			log_message(DEBUG, "New directory discovery updated activity timestamp, exiting verification mode and rescheduling with full quiet period");
-
-			/* Update directory stats to reflect new directory structure before calculating quiet period */
+			/* Update directory stats to reflect new directory structure */
 			dir_stats_t new_stats;
 			if (scanner_scan(root_state->path_state->path, &new_stats)) {
 				root_state->prev_stats = root_state->dir_stats;
@@ -604,10 +599,20 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 				scanner_update(root_state);
 			}
 
-			/* Reschedule with proper quiet period calculation based on updated directory stats */
-			required_quiet = scanner_delay(root_state);
-			log_message(DEBUG, "Recalculated quiet period for new directories: %ld ms", required_quiet);
-			stability_delay(monitor, entry, root_state, current_time, required_quiet);
+			/* We stay in verification mode, but reset the check count since the scope has changed. */
+			root_state->checks_count = 0;
+			root_state->required_checks = 0; /* Recalculate required checks */
+
+			/* Schedule a short follow-up check instead of a full quiet period */
+			struct timespec next_check;
+			next_check.tv_sec = current_time->tv_sec;
+			next_check.tv_nsec = current_time->tv_nsec + 200000000; /* 200ms */
+			if (next_check.tv_nsec >= 1000000000) {
+				next_check.tv_sec++;
+				next_check.tv_nsec -= 1000000000;
+			}
+			entry->next_check = next_check;
+			heap_down(monitor->check_queue->items, monitor->check_queue->size, 0);
 			continue;
 		}
 
