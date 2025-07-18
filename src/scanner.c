@@ -619,33 +619,27 @@ void scanner_track(entity_state_t *state, operation_type_t op) {
 	scanner_sync(state->path_state, state);
 }
 
-/* Calculate base quiet period based on change magnitude */
-static long scanner_base_period(entity_state_t *state) {
-	/* Use cumulative change counters instead of just prev/current comparison */
-	int abs_file_change = abs(state->cumulative_file);
-	int abs_dir_change = abs(state->cumulative_dirs);
-	int abs_depth_change = abs(state->cumulative_depth);
-	ssize_t abs_size_change = state->cumulative_size < 0 ? -state->cumulative_size : state->cumulative_size;
-	int total_change = abs_file_change + abs_dir_change;
+/* Calculate base quiet period based on recent change magnitude */
+static long scanner_base_period(int recent_files, int recent_dirs, int recent_depth, ssize_t recent_size) {
+	int total_change = recent_files + recent_dirs;
 
-	/* Prioritize operation complexity */
 	/* Start with a base quiet period based primarily on change magnitude */
-	if (total_change == 0 && abs_depth_change == 0 && abs_size_change == 0) {
+	if (total_change == 0 && recent_depth == 0 && recent_size == 0) {
 		/* No change - minimal quiet period */
 		return 250;
-	} else if (total_change < 5 && abs_depth_change == 0 && abs_size_change < 1024 * 1024) {
+	} else if (total_change < 5 && recent_depth == 0 && recent_size < 1024 * 1024) {
 		/* Few files change with no structural changes and small size changes - short quiet period */
 		return 500;
-	} else if (total_change < 10 && abs_depth_change == 0 && abs_size_change < 10 * 1024 * 1024) {
+	} else if (total_change < 10 && recent_depth == 0 && recent_size < 10 * 1024 * 1024) {
 		/* Several files changed, no structural changes, moderate size changes - modest quiet period */
 		return 1000;
-	} else if (total_change < 10 && abs_depth_change == 0 && abs_size_change < 100 * 1024 * 1024) {
+	} else if (total_change < 10 && recent_depth == 0 && recent_size < 100 * 1024 * 1024) {
 		/* Few files changed, no structural changes, but large size changes (10-100MB) - longer quiet period */
 		return 1350;
-	} else if (abs_depth_change > 0 || abs_size_change > 100 * 1024 * 1024) {
+	} else if (recent_depth > 0 || recent_size > 100 * 1024 * 1024) {
 		/* Structural depth changes or large size changes - significant quiet period */
-		int size_factor = (abs_size_change > 100 * 1024 * 1024) ? (abs_size_change / (100 * 1024 * 1024)) : 0;
-		return 1500 + (abs_depth_change * 500) + (size_factor * 250);
+		int size_factor = (recent_size > 100 * 1024 * 1024) ? (int)(recent_size / (100 * 1024 * 1024)) : 0;
+		return 1500 + (recent_depth * 500) + (size_factor * 250);
 	} else if (total_change < 10) {
 		/* Moderate changes - medium quiet period */
 		return 1200;
@@ -774,8 +768,13 @@ long scanner_delay(entity_state_t *state) {
 			int total_entries = state->dir_stats.tree_files + state->dir_stats.tree_dirs;
 			int tree_depth = state->dir_stats.max_depth > 0 ? state->dir_stats.max_depth : state->dir_stats.depth;
 
-			/* Calculate base period from change magnitude */
-			required_ms = scanner_base_period(state);
+			/* Get recent activity to drive the base period calculation */
+			int recent_files, recent_dirs, recent_depth;
+			ssize_t recent_size;
+			calculate_recent_activity(state, &recent_files, &recent_dirs, &recent_depth, &recent_size);
+
+			/* Calculate base period from recent change magnitude */
+			required_ms = scanner_base_period(recent_files, recent_dirs, recent_depth, recent_size);
 
 			/* Apply stability adjustments (depth, size, stability loss) */
 			required_ms = scanner_adjust(state, required_ms);
@@ -783,7 +782,7 @@ long scanner_delay(entity_state_t *state) {
 			/* Apply exponential backoff for consecutive instability */
 			required_ms = scanner_backoff(state, required_ms);
 
-			log_message(DEBUG, "Quiet period for %s: %ld ms (changes: %+d files, %+d dirs, %+d depth, %s size, total: entries %d, depth %d)",
+			log_message(DEBUG, "Quiet period for %s: %ld ms (cumulative: %+d files, %+d dirs, %+d depth, %s size) (total: %d entries, %d depth)",
 			        			state->path_state->path, required_ms, state->cumulative_file, state->cumulative_dirs,
 								state->cumulative_depth, format_size(state->cumulative_size, true), total_entries, tree_depth);
 		} else {
