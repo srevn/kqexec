@@ -706,6 +706,11 @@ static long scanner_adjust(entity_state_t *state, long base_ms) {
 	ssize_t recent_size;
 	calculate_recent_activity(state, &recent_files, &recent_dirs, &recent_depth, &recent_size);
 	int recent_change = recent_files + recent_dirs;
+	
+	/* Log recent activity calculation for debugging */
+	log_message(DEBUG, "Recent activity calculation for %s: files=%d, dirs=%d, depth=%d, size=%s (total_change=%d)", 
+	            		state->path_state->path, recent_files, recent_dirs, recent_depth, 
+	            		format_size(recent_size, true), recent_change);
 
 	/* If stability was previously achieved and then lost, increase quiet period */
 	if (state->stability_lost) {
