@@ -30,23 +30,6 @@ void scanner_update(entity_state_t *state) {
 	new_depth_change = state->dir_stats.max_depth - state->prev_stats.max_depth;
 	new_size_change = (ssize_t)state->dir_stats.tree_size - (ssize_t)state->prev_stats.tree_size;
 
-	/* If significant directory deletion but no depth change reported, infer a depth change */
-	if (new_dir_change < -5 && new_depth_change == 0) {
-		/* Large structure deletion detected but depth unchanged - likely a bug */
-		log_message(DEBUG, "Deletion detected with no depth change for %s, inferring depth reduction",
-		            		state->path_state->path);
-
-		/* Calculate inferred depth change proportional to directory removal */
-		float deletion_ratio = (float) abs(new_dir_change) /
-		                       (state->prev_stats.tree_dirs > 0 ? state->prev_stats.tree_dirs : 10);
-
-		/* Scale depth change based on deletion magnitude */
-		if (deletion_ratio > 0.5) {
-			new_depth_change = -2; /* Major deletion, likely multiple levels */
-		} else {
-			new_depth_change = -1; /* Standard deletion, at least one level */
-		}
-	}
 
 	/* Accumulate changes */
 	state->cumulative_file += new_file_change;
