@@ -467,7 +467,7 @@ static void scanner_propagate(entity_state_t *state, entity_state_t *root, opera
 
 				/* Update directory stats for parent if this is a content change */
 				if (op == OP_DIR_CONTENT_CHANGED && parent_state->type == ENTITY_DIRECTORY) {
-					/* For recursive watches within the same scope, reuse root stats */
+					/* For recursive watches within the same scope, propagate incremental changes */
 					bool within_recursive_scope = (root_stats && 
 					                               parent_state->watch->recursive &&
 					                               parent_state->watch == root->watch &&
@@ -475,9 +475,20 @@ static void scanner_propagate(entity_state_t *state, entity_state_t *root, opera
 					
 					if (within_recursive_scope) {
 						if (parent_state != root) {
-							/* Use pre-calculated root stats - no redundant scanning */
+							/* Calculate incremental changes from root's current update */
+							int root_file_change = root->dir_stats.tree_files - root->prev_stats.tree_files;
+							int root_dir_change = root->dir_stats.tree_dirs - root->prev_stats.tree_dirs;
+							int root_depth_change = root->dir_stats.max_depth - root->prev_stats.max_depth;
+							ssize_t root_size_change = (ssize_t)root->dir_stats.tree_size - (ssize_t)root->prev_stats.tree_size;
+							
+							/* Apply incremental changes to parent while preserving its absolute state */
 							parent_state->prev_stats = parent_state->dir_stats;
-							parent_state->dir_stats = *root_stats;
+							parent_state->dir_stats.tree_files += root_file_change;
+							parent_state->dir_stats.tree_dirs += root_dir_change;
+							parent_state->dir_stats.max_depth = (root_depth_change > 0) ? 
+								parent_state->dir_stats.max_depth + root_depth_change : 
+								parent_state->dir_stats.max_depth;
+							parent_state->dir_stats.tree_size += root_size_change;
 
 							/* Update cumulative changes */
 							scanner_update(parent_state);
