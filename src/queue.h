@@ -16,6 +16,9 @@ typedef struct {
 	int watch_capacity;                    /* Allocated capacity for watches array */
 	bool in_verification;                  /* True if in verification phase (skip quiet period checks) */
 	long scheduled_period;                 /* Quiet period used when scheduling this check */
+	long initial_period;                   /* Original calculated period (for graduated escalation) */
+	struct timespec last_escalation;       /* When we last escalated this check */
+	int escalation_count;                  /* Number of times we've escalated */
 } deferred_check_t;
 
 /* Deferred check queue structure */
