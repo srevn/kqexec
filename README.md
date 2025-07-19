@@ -14,6 +14,7 @@ A lightweight file and directory monitoring utility for FreeBSD and macOS that u
 - **State-Based Event Processing**: Tracks the state of files and directories to detect meaningful changes
 - **Command Debouncing**: Prevent command execution flooding when many events occur rapidly
 - **Placeholder Substitution**: Dynamic command generation based on event details
+- **Environment Variable Injection**: Rich event context automatically provided to commands
 - **Command Intent Tracking**: Filters out self-generated events by analyzing command operations
 - **Directory Stability Verification**: Uses `stat()` to recursively verify directory stability before executing commands
 - **Configuration Hot-Reload**: Monitors the configuration file and automatically reloads when it changes
@@ -132,9 +133,43 @@ Commands can include the following placeholders that will be replaced at runtime
 - `%u` : User who triggered the event
 - `%e` : Event type which occurred
 
+### Environment Variables
+
+In addition to command placeholders, kqexec automatically sets environment variables that provide rich context about the event:
+
+- `KQ_EVENT_TYPE` : Event type (CONTENT, STRUCTURE, METADATA)
+- `KQ_TRIGGER_PATH` : Full path where the event occurred
+- `KQ_WATCH_NAME` : Name of the watch from the configuration
+- `KQ_WATCH_PATH` : Base path being monitored
+- `KQ_RELATIVE_PATH` : Event path relative to the watch base
+- `KQ_TRIGGER_FILE` : Basename of the file that triggered the event (most recent)
+- `KQ_TRIGGER_FILE_PATH` : Full path of the file that triggered the event
+- `KQ_TRIGGER_DIR` : Directory containing the file that triggered the event
+- `KQ_USER_ID` : Numeric user ID that caused the event
+- `KQ_USERNAME` : Username that caused the event (resolved from user ID)
+- `KQ_TIMESTAMP` : ISO 8601 timestamp of the event
+- `KQ_MODIFIED_FILES` : Space-separated list of files modified within 1 second
+
+These environment variables make commands more powerful and reusable. For example:
+
+```bash
+#!/bin/bash
+case "$KQ_EVENT_TYPE" in
+    "STRUCTURE")
+        echo "Directory structure changed in $KQ_WATCH_NAME"
+        ;;
+    "CONTENT")
+        echo "File content modified: $KQ_TRIGGER_FILE"
+        ;;
+    *)
+        echo "Event $KQ_EVENT_TYPE occurred on $KQ_RELATIVE_PATH"
+        ;;
+esac
+```
+
 ## Examples
 
-### Basic Configuration
+### Configuration
 
 ```ini
 [Configuration Files]
@@ -150,11 +185,8 @@ hidden = false
 file = /var/log/kqexec.log
 events = CONTENT
 command = echo "Log file %p was modified at %t by user %u (event: %e)" >> /var/log/kqexec_activity.log
-```
+processing_delay = 1000
 
-### Advanced Configuration
-
-```ini
 [Web Content]
 # Monitor web server content directory recursively
 directory = /usr/local/www/data
@@ -164,29 +196,6 @@ log_output = true
 buffer_output = true
 recursive = true
 hidden = false
-
-[SSL Certificates]
-# Monitor certificate expiration
-file = /etc/ssl/certs
-events = CONTENT,STRUCTURE,METADATA
-command = /usr/local/bin/cert_check.sh
-
-[User Configuration]
-# Monitor user config directories, including hidden files
-directory = /home/user/.config
-events = STRUCTURE
-command = logger -p user.notice "User config changed: %p"
-recursive = true
-hidden = true
-
-[Database Backups]
-# Track changes to database backup directory
-directory = /var/db/backups
-events = ALL
-command = mail -s "New database backup created: %p" admin@example.com
-processing_delay = 10000
-log_output = false
-recursive = false
 ```
 
 ### Common Use Cases
