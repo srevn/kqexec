@@ -153,7 +153,7 @@ void stability_defer(monitor_t *monitor, entity_state_t *state) {
 	int existing_index = queue_find(monitor->check_queue, root_state->path_state->path);
 	
 	if (existing_index >= 0) {
-		/* A check is already pending. Check for graduated escalation opportunity. */
+		/* A check is already pending. Use maximum of locked-in period and new calculation. */
 		deferred_check_t *entry = &monitor->check_queue->items[existing_index];
 		long current_locked_period = entry->scheduled_period;
 		
@@ -161,63 +161,21 @@ void stability_defer(monitor_t *monitor, entity_state_t *state) {
 			/* Fallback if the period wasn't locked in correctly */
 			current_locked_period = scanner_delay(root_state);
 			entry->scheduled_period = current_locked_period;
-			entry->initial_period = current_locked_period;
 		}
 		
-		/* Check if complexity has increased significantly for graduated escalation */
+		/* Calculate current complexity and use maximum with locked-in period */
 		long current_complexity = scanner_delay(root_state);
-		bool should_escalate = false;
-		
-		/* Only escalate if:
-		 * 1. Current complexity is significantly higher than locked period
-		 * 2. We haven't escalated too recently (at least 1 second between escalations)
-		 * 3. We haven't escalated too many times (max 5 escalations)
-		 */
-		struct timespec current_time;
-		clock_gettime(CLOCK_MONOTONIC, &current_time);
-		
-		if (current_complexity > current_locked_period * 1.5 && 
-		    entry->escalation_count < 5) {
-			
-			/* Check if enough time has passed since last escalation */
-			long time_since_escalation = (current_time.tv_sec - entry->last_escalation.tv_sec) * 1000 +
-			                             (current_time.tv_nsec - entry->last_escalation.tv_nsec) / 1000000;
-			
-			if (time_since_escalation > 1000 || entry->escalation_count == 0) {
-				should_escalate = true;
-			}
-		}
-		
-		if (should_escalate) {
-			/* Graduated escalation: controlled increase */
-			long new_period = current_locked_period * 1.5;  /* 50% increase */
-			long max_increase = current_locked_period + 2000;  /* Cap at +2000ms */
-			new_period = (new_period < max_increase) ? new_period : max_increase;
-			
-			/* Don't let it exceed a reasonable maximum */
-			if (new_period > 60000) new_period = 60000;  /* Cap at 60 seconds */
-			
-			entry->scheduled_period = new_period;
-			entry->last_escalation = current_time;
-			entry->escalation_count++;
-			
-			log_message(DEBUG, "Graduated escalation for %s: %ld ms -> %ld ms (escalation #%d, complexity: %ld ms)",
-			    				root_state->path_state->path, current_locked_period, new_period, 
-			    				entry->escalation_count, current_complexity);
-			
-			current_locked_period = new_period;
-		}
+		long effective_period = (current_complexity > current_locked_period) ? current_complexity : current_locked_period;
 		
 		/* Update activity time for true timer refresh */
 		clock_gettime(CLOCK_MONOTONIC, &root_state->tree_activity);
 		scanner_sync(root_state->path_state, root_state); /* Propagate new activity time */
 		
-		/* Use existing scheduling logic with current period */
-		stability_delay(monitor, entry, root_state, &root_state->tree_activity, current_locked_period);
+		/* Use existing scheduling logic with effective period */
+		stability_delay(monitor, entry, root_state, &root_state->tree_activity, effective_period);
 		               
-		log_message(DEBUG, "Event received during quiet period, using period of %ld ms for %s%s",
-							current_locked_period, root_state->path_state->path, 
-		    				should_escalate ? " (escalated)" : " (refreshed)");
+		log_message(DEBUG, "Event received during quiet period, using period of %ld ms for %s (locked: %ld ms, calculated: %ld ms)",
+							effective_period, root_state->path_state->path, current_locked_period, current_complexity);
 		return;
 	}
 
@@ -243,11 +201,6 @@ void stability_defer(monitor_t *monitor, entity_state_t *state) {
 	int index = queue_find(monitor->check_queue, root_state->path_state->path);
 	if (index >= 0) {
 		monitor->check_queue->items[index].scheduled_period = required_quiet;
-		monitor->check_queue->items[index].initial_period = required_quiet;
-		/* Initialize escalation tracking for new entries */
-		monitor->check_queue->items[index].escalation_count = 0;
-		monitor->check_queue->items[index].last_escalation.tv_sec = 0;
-		monitor->check_queue->items[index].last_escalation.tv_nsec = 0;
 	}
 
 	log_message(DEBUG, "Scheduled deferred check for %s: in %ld ms (directory with %d files, %d dirs)",

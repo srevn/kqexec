@@ -278,10 +278,6 @@ void queue_upsert(defer_queue_t *queue, const char *path,
 	queue->items[new_index].watch_capacity = 0;
 	queue->items[new_index].in_verification = false;
 	queue->items[new_index].scheduled_period = 0;
-	queue->items[new_index].initial_period = 0;
-	queue->items[new_index].last_escalation.tv_sec = 0;
-	queue->items[new_index].last_escalation.tv_nsec = 0;
-	queue->items[new_index].escalation_count = 0;
 
 	/* Add the watch */
 	if (!queue_watch_add(&queue->items[new_index], watch)) {
