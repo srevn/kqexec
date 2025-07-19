@@ -7,7 +7,6 @@
 #include "queue.h"
 #include "monitor.h"
 #include "config.h"
-#include "states.h"
 #include "logger.h"
 
 /* Add a watch to a queue entry */

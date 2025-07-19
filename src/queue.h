@@ -2,7 +2,6 @@
 #define QUEUE_H
 
 #include <stdbool.h>
-#include <time.h>
 
 #include "config.h"
 #include "logger.h"

@@ -4,7 +4,6 @@
 #include <stdarg.h>
 #include <time.h>
 #include <pthread.h>
-#include <math.h>
 #include <stdbool.h>
 #include "logger.h"
 

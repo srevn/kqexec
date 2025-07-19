@@ -6,7 +6,6 @@
 #include <pwd.h>
 #include <signal.h>
 #include <errno.h>
-#include <stdarg.h>
 #include <pthread.h>
 #include <libgen.h>
 #include <sys/stat.h>

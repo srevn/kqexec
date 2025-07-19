@@ -4,7 +4,6 @@
 #include <stdbool.h>
 #include <sys/types.h>
 
-#include "monitor.h"
 #include "events.h"
 
 /* Forward declarations */

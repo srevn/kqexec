@@ -2,7 +2,6 @@
 #define STABILITY_H
 
 #include <stdbool.h>
-#include <time.h>
 
 #include "states.h"
 #include "queue.h"

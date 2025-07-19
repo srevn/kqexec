@@ -1,10 +1,8 @@
 #ifndef STATES_H
 #define STATES_H
 
-#include <stdbool.h>
 #include <stdint.h>
 #include <time.h>
-#include <sys/types.h>
 
 #include "config.h"
 #include "scanner.h"

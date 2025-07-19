@@ -14,7 +14,6 @@
 #include "states.h"
 #include "stability.h"
 #include "logger.h"
-#include "monitor.h"
 
 /* Update cumulative changes based on current vs. previous stats */
 void scanner_update(entity_state_t *state) {
@@ -402,9 +401,9 @@ void scanner_sync(path_state_t *path_state, entity_state_t *trigger_state) {
 						state->dir_stats = new_stats;
 						scanner_update(state);
 						log_message(DEBUG, "Rescanned directory for incompatible watch %s (recursive=%s, hidden=%s)", 
-						           state->watch->name, 
-						           state->watch->recursive ? "true" : "false",
-						           state->watch->hidden ? "true" : "false");
+						    				state->watch->name, 
+											state->watch->recursive ? "true" : "false",
+											state->watch->hidden ? "true" : "false");
 					} else {
 						log_message(WARNING, "Failed to rescan directory for watch %s during sync", state->watch->name);
 					}
