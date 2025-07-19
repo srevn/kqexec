@@ -85,7 +85,5 @@ bool states_init(void);
 void states_cleanup(void);
 bool states_corrupted(const entity_state_t *state);
 entity_state_t *states_get(const char *path, entity_type_t type, watch_entry_t *watch);
-void states_update(config_t *new_config);
-void states_prune(config_t *new_config);
 
 #endif /* STATES_H */
