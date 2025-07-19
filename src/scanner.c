@@ -367,28 +367,48 @@ void scanner_sync(path_state_t *path_state, entity_state_t *trigger_state) {
 		if (state != trigger_state) {
 			log_message(DEBUG, "Synchronizing state for watch %s", state->watch->name);
 
-			bool fully_compatible = (state->watch->recursive == trigger_state->watch->recursive &&
-			                         state->watch->events == trigger_state->watch->events &&
-			                         state->watch->hidden == trigger_state->watch->hidden);
-
+			/* Always share universal directory state regardless of watch configuration */
 			state->exists = trigger_state->exists;
 			state->last_update = trigger_state->last_update;
 			state->wall_time = trigger_state->wall_time;
 			state->tree_activity = sync_time;
 			state->activity_active = watch_active;
+			state->unstable_count = max_unstable_count;
 
-			if (fully_compatible && state->type == ENTITY_DIRECTORY && trigger_state->type == ENTITY_DIRECTORY) {
-				state->dir_stats = trigger_state->dir_stats;
-				state->prev_stats = trigger_state->prev_stats;
-				state->checks_count = trigger_state->checks_count;
-				state->checks_failed = trigger_state->checks_failed;
-				state->required_checks = trigger_state->required_checks;
-				state->cumulative_file = trigger_state->cumulative_file;
-				state->cumulative_dirs = trigger_state->cumulative_dirs;
-				state->cumulative_depth = trigger_state->cumulative_depth;
-				state->cumulative_size = trigger_state->cumulative_size;
-				state->stability_lost = trigger_state->stability_lost;
-				state->unstable_count = max_unstable_count;
+			if (state->type == ENTITY_DIRECTORY && trigger_state->type == ENTITY_DIRECTORY) {
+				/* Only share directory statistics if scanning configurations are compatible */
+				bool stats_compatible = (state->watch->recursive == trigger_state->watch->recursive &&
+				                         state->watch->hidden == trigger_state->watch->hidden);
+
+				if (stats_compatible) {
+					/* Compatible watches: share statistics directly */
+					state->dir_stats = trigger_state->dir_stats;
+					state->prev_stats = trigger_state->prev_stats;
+					state->checks_count = trigger_state->checks_count;
+					state->checks_failed = trigger_state->checks_failed;
+					state->required_checks = trigger_state->required_checks;
+					state->cumulative_file = trigger_state->cumulative_file;
+					state->cumulative_dirs = trigger_state->cumulative_dirs;
+					state->cumulative_depth = trigger_state->cumulative_depth;
+					state->cumulative_size = trigger_state->cumulative_size;
+					state->stability_lost = trigger_state->stability_lost;
+					log_message(DEBUG, "Shared directory statistics with compatible watch %s", state->watch->name);
+				} else {
+					/* Incompatible watches: rescan to get accurate statistics */
+					dir_stats_t new_stats;
+					if (scanner_scan(state->path_state->path, &new_stats)) {
+						/* Save previous stats for comparison and update with fresh scan */
+						state->prev_stats = state->dir_stats;
+						state->dir_stats = new_stats;
+						scanner_update(state);
+						log_message(DEBUG, "Rescanned directory for incompatible watch %s (recursive=%s, hidden=%s)", 
+						           state->watch->name, 
+						           state->watch->recursive ? "true" : "false",
+						           state->watch->hidden ? "true" : "false");
+					} else {
+						log_message(WARNING, "Failed to rescan directory for watch %s during sync", state->watch->name);
+					}
+				}
 			}
 		}
 	}
