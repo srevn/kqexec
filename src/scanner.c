@@ -24,24 +24,11 @@ void scanner_update(entity_state_t *state) {
 	int new_file_change, new_dir_change, new_depth_change;
 	ssize_t new_size_change;
 	
-	/* Check if this is a new state (no previous stats) */
-	bool is_new_state = (state->prev_stats.file_count == 0 && state->prev_stats.dir_count == 0 &&
-	                     state->prev_stats.tree_files == 0 && state->prev_stats.tree_dirs == 0 &&
-	                     state->prev_stats.tree_size == 0);
-	
-	if (is_new_state) {
-		/* For new states, the change is the current stats (from initial empty state) */
-		new_file_change = state->dir_stats.tree_files;
-		new_dir_change = state->dir_stats.tree_dirs;
-		new_depth_change = state->dir_stats.max_depth;
-		new_size_change = (ssize_t)state->dir_stats.tree_size;
-	} else {
-		/* For existing states, calculate the difference from previous stats */
-		new_file_change = state->dir_stats.tree_files - state->prev_stats.tree_files;
-		new_dir_change = state->dir_stats.tree_dirs - state->prev_stats.tree_dirs;
-		new_depth_change = state->dir_stats.max_depth - state->prev_stats.max_depth;
-		new_size_change = (ssize_t)state->dir_stats.tree_size - (ssize_t)state->prev_stats.tree_size;
-	}
+	/* Calculate the difference from previous stats */
+	new_file_change = state->dir_stats.tree_files - state->prev_stats.tree_files;
+	new_dir_change = state->dir_stats.tree_dirs - state->prev_stats.tree_dirs;
+	new_depth_change = state->dir_stats.max_depth - state->prev_stats.max_depth;
+	new_size_change = (ssize_t)state->dir_stats.tree_size - (ssize_t)state->prev_stats.tree_size;
 
 	/* If significant directory deletion but no depth change reported, infer a depth change */
 	if (new_dir_change < -5 && new_depth_change == 0) {
@@ -450,18 +437,16 @@ static void scanner_record(entity_state_t *state, operation_type_t op) {
 /* Update directory stats when content changes */
 static void scanner_update_stats(entity_state_t *state, operation_type_t op) {
 	if (op == OP_DIR_CONTENT_CHANGED && state->type == ENTITY_DIRECTORY) {
-		if (state->is_new) {
-			/* This is the first event, we need to calculate the initial cumulative change */
+		/* Update directory stats immediately to reflect the change */
+		dir_stats_t new_stats;
+		if (scanner_scan(state->path_state->path, &new_stats)) {
+			/* Save previous stats for comparison */
+			state->prev_stats = state->dir_stats;
+			/* Update with new stats */
+			state->dir_stats = new_stats;
+
+			/* Update cumulative changes */
 			scanner_update(state);
-			state->is_new = false; /* Mark as no longer new */
-		} else {
-			/* This is a subsequent event. Rescan to get the latest state */
-			dir_stats_t new_stats;
-			if (scanner_scan(state->path_state->path, &new_stats)) {
-				state->prev_stats = state->dir_stats;
-				state->dir_stats = new_stats;
-				scanner_update(state);
-			}
 		}
 
 		log_message(DEBUG, "Directory stats for %s: files=%d, dirs=%d, max_depth=%d (was: files=%d, dirs=%d, max_depth=%d)",
@@ -573,26 +558,9 @@ static void scanner_handle_root(entity_state_t *state, operation_type_t op) {
 	state->active_path = strdup(state->path_state->path);
 
 	/* Update directory stats immediately for content changes to root */
-	if (op == OP_DIR_CONTENT_CHANGED && state->type == ENTITY_DIRECTORY) {
-		bool is_initial_scan = (state->prev_stats.tree_files == 0 && state->prev_stats.tree_dirs == 0 && state->prev_stats.tree_size == 0);
+	scanner_update_stats(state, op);
 
-		dir_stats_t new_stats;
-		if (scanner_scan(state->path_state->path, &new_stats)) {
-			/* Save previous stats for comparison */
-			if (!is_initial_scan) {
-				state->prev_stats = state->dir_stats;
-			}
-			state->dir_stats = new_stats;
-
-			/* Update cumulative changes */
-			scanner_update(state);
-
-			log_message(DEBUG, "Updated directory stats for root %s after change: files=%d, dirs=%d, depth=%d",
-			        			state->path_state->path, state->dir_stats.file_count, state->dir_stats.dir_count,
-			            		state->dir_stats.depth);
-		}
-	}
-
+	/* Always sync the current state */
 	scanner_sync(state->path_state, state);
 }
 
@@ -603,15 +571,13 @@ void scanner_track(entity_state_t *state, operation_type_t op) {
 	/* Record basic activity in circular buffer */
 	scanner_record(state, op);
 
-	/* Handle recursive watches and root paths */
-	if (state->watch && state->watch->recursive) {
-		if (strcmp(state->path_state->path, state->watch->path) == 0) {
-			/* Handle when state is the root path itself */
-			scanner_handle_root(state, op);
-		} else {
-			/* Handle recursive watch activity */
-			scanner_handle_recursive(state, op);
-		}
+	/* If the event is on a directory that is the root of any watch, handle it */
+	if (state->type == ENTITY_DIRECTORY && strcmp(state->path_state->path, state->watch->path) == 0) {
+		scanner_handle_root(state, op);
+	}
+	/* Otherwise, if it's a recursive watch, it must be a sub-path event */
+	else if (state->watch && state->watch->recursive) {
+		scanner_handle_recursive(state, op);
 	}
 
 	/* Always sync the current state */
@@ -663,7 +629,7 @@ static long scanner_adjust(entity_state_t *state, long base_ms) {
 	int total_entries = state->dir_stats.tree_files + state->dir_stats.tree_dirs;
 	int tree_depth = state->dir_stats.max_depth > 0 ? state->dir_stats.max_depth : state->dir_stats.depth;
 	
-	/* Use current activity magnitude (changes from reference state) for responsiveness */
+	/* Use current activity magnitude for responsiveness */
 	int recent_files, recent_dirs, recent_depth;
 	ssize_t recent_size;
 	calculate_recent_activity(state, &recent_files, &recent_dirs, &recent_depth, &recent_size);

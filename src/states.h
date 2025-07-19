@@ -30,7 +30,6 @@ typedef struct entity_state {
 
 	/* Current state */
 	bool exists;                           /* Entity currently exists */
-	bool is_new;                           /* State is newly created */
 	bool content_changed;                  /* Content has changed */
 	bool metadata_changed;                 /* Metadata has changed */
 	bool structure_changed;                /* Structural change occurred */

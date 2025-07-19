@@ -266,10 +266,8 @@ entity_state_t *states_get(const char *path, entity_type_t type, watch_entry_t *
 		log_message(DEBUG, "Copying stats from existing state for path %s (watch: %s)",
 		        			path, existing_state_for_path->watch->name);
 		copy_state(state, existing_state_for_path);
-		state->is_new = false;
 	} else {
 		/* This is the first state for this path, initialize stats from scratch */
-		state->is_new = true;
 		state->unstable_count = 0;
 		state->required_checks = 0;
 		state->reference_init = false;
