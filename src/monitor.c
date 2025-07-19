@@ -288,6 +288,9 @@ bool monitor_tree(monitor_t *monitor, const char *dir_path, watch_entry_t *watch
 				return false;
 			}
 			log_message(DEBUG, "Added new watch for directory: %s", dir_path);
+
+			/* Establish baseline state */
+			states_get(dir_path, ENTITY_DIRECTORY, watch);
 		}
 	}
 
@@ -436,6 +439,9 @@ bool monitor_add(monitor_t *monitor, watch_entry_t *watch) {
 			watch_destroy(info);
 			return false;
 		}
+
+		/* Establish baseline state */
+		states_get(info->path, ENTITY_FILE, watch);
 
 		return monitor_kqueue(monitor, info);
 	}
@@ -699,6 +705,10 @@ bool monitor_reload(monitor_t *monitor) {
 		}
 	}
 
+	/* Reset the state management system */
+	states_cleanup();
+	states_init();
+
 	/* Clear deferred and delayed queues to prevent access to old states */
 	queue_destroy(monitor->check_queue);
 	monitor->check_queue = queue_create(16);
@@ -714,12 +724,6 @@ bool monitor_reload(monitor_t *monitor) {
 		log_message(DEBUG, "Cleared %d delayed events during config reload", monitor->delayed_count);
 		monitor->delayed_capacity = 0;
 	}
-
-	/* Update entity states to point to new watch entries */
-	states_update(new_config);
-
-	/* Clean up states that are no longer associated with any new watch */
-	states_prune(new_config);
 
 	/* Save old watches to be destroyed later */
 	watch_info_t **old_watches_list = monitor->watches;

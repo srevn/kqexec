@@ -281,14 +281,13 @@ entity_state_t *states_get(const char *path, entity_type_t type, watch_entry_t *
 
 		if (state->type == ENTITY_DIRECTORY && state->exists) {
 			if (scanner_scan(path, &state->dir_stats)) {
-				/* For a new state, prev_stats is zeroed to correctly calculate the initial change */
-				memset(&state->prev_stats, 0, sizeof(dir_stats_t));
+				state->prev_stats = state->dir_stats;
+				log_message(DEBUG, "Initial baseline established for %s: files=%d, dirs=%d, depth=%d, size=%s",
+				          			path, state->dir_stats.tree_files, state->dir_stats.tree_dirs,
+				           			state->dir_stats.max_depth, format_size((ssize_t)state->dir_stats.tree_size, false));
+
 				state->reference_stats = state->dir_stats;
 				state->reference_init = true;
-
-				log_message(DEBUG, "Initialized directory stats for %s: files=%d, dirs=%d, depth=%d, size=%s",
-				        			path, state->dir_stats.tree_files, state->dir_stats.tree_dirs,
-				        			state->dir_stats.max_depth, format_size((ssize_t)state->dir_stats.tree_size, false));
 			} else {
 				log_message(WARNING, "Failed to gather initial stats for directory: %s", path);
 			}
