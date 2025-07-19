@@ -245,12 +245,13 @@ bool scanner_compare(dir_stats_t *prev, dir_stats_t *current) {
 	return is_stable;
 }
 
-/* Collect statistics about a directory and its contents */
+/* Collect statistics about a directory and its contents, and determine stability */
 bool scanner_stable(entity_state_t *context_state, const char *dir_path, dir_stats_t *stats) {
 	DIR *dir;
 	struct dirent *entry;
 	struct stat st;
 	char path[PATH_MAX];
+	bool is_stable = true; /* Assume stable until proven otherwise */
 
 	if (!dir_path || !stats || !context_state) {
 		return false;
@@ -262,7 +263,7 @@ bool scanner_stable(entity_state_t *context_state, const char *dir_path, dir_sta
 	dir = opendir(dir_path);
 	if (!dir) {
 		log_message(WARNING, "Failed to open directory for stability check: %s", dir_path);
-		return false;
+		return false; /* Cannot scan, so not stable */
 	}
 
 	time_t now;
@@ -278,15 +279,15 @@ bool scanner_stable(entity_state_t *context_state, const char *dir_path, dir_sta
 
 		if (stat(path, &st) != 0) {
 			/* If a file disappears during scan, the directory is not stable */
-			log_message(DEBUG, "Directory %s unstable: file disappeared during scan", dir_path);
-			closedir(dir);
-			return false;
+			log_message(DEBUG, "Directory %s unstable: file disappeared during scan (%s)", dir_path, path);
+			is_stable = false;
+			continue; /* Continue scanning other files */
 		}
 
 		/* Look for temporary files or recent changes */
 		if (S_ISREG(st.st_mode)) {
 			stats->file_count++;
-			stats->direct_size += st.st_size;
+			stats->direct_size += st.st_size; /* Always accumulate size */
 
 			/* Update latest modification time */
 			if (st.st_mtime > stats->last_mtime) {
@@ -298,8 +299,7 @@ bool scanner_stable(entity_state_t *context_state, const char *dir_path, dir_sta
 				log_message(DEBUG, "Directory %s unstable: recent file modification (%s, %.1f seconds ago)",
 				        			dir_path, entry->d_name, difftime(now, st.st_mtime));
 				stats->has_temps = true;
-				closedir(dir);
-				return false;
+				is_stable = false; /* Mark as unstable but continue scanning */
 			}
 		} else if (S_ISDIR(st.st_mode)) {
 			stats->dir_count++;
@@ -311,8 +311,7 @@ bool scanner_stable(entity_state_t *context_state, const char *dir_path, dir_sta
 
 			dir_stats_t subdir_stats;
 			if (!scanner_stable(context_state, path, &subdir_stats)) {
-				closedir(dir);
-				return false;
+				is_stable = false; /* Propagate instability from subdirectories */
 			}
 
 			/* Update maximum tree depth based on subdirectory scan results */
@@ -350,7 +349,7 @@ bool scanner_stable(entity_state_t *context_state, const char *dir_path, dir_sta
 	}
 
 	closedir(dir);
-	return !stats->has_temps;
+	return is_stable;
 }
 
 /* Synchronize activity states for all watches on a given path */

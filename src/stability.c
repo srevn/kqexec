@@ -365,26 +365,24 @@ bool stability_scan(entity_state_t *root_state, const char *path, dir_stats_t *s
 	}
 
 	/* Perform recursive stability verification */
-	bool scan_completed = scanner_stable(root_state, path, stats_out);
+	bool is_stable = scanner_stable(root_state, path, stats_out);
 
-	/* Only update stats and cumulative changes if the scan was successful */
-	if (scan_completed) {
-		root_state->checks_failed = 0; /* Reset failed checks on success */
+	/* Always update stats and cumulative changes, even if unstable, to track progress */
+	root_state->checks_failed = is_stable ? 0 : root_state->checks_failed;
 
-		/* Save previous stats for comparison before overwriting */
-		dir_stats_t temp_stats = root_state->dir_stats;
-		root_state->dir_stats = *stats_out;
+	/* Save previous stats for comparison before overwriting */
+	dir_stats_t temp_stats = root_state->dir_stats;
+	root_state->dir_stats = *stats_out;
 
-		/* Update cumulative changes based on the difference */
-		root_state->prev_stats = temp_stats;
-		scanner_update(root_state);
-	}
+	/* Update cumulative changes based on the difference */
+	root_state->prev_stats = temp_stats;
+	scanner_update(root_state);
 
 	log_message(DEBUG, "Stability scan for %s: files=%d, dirs=%d, size=%s, recursive_files=%d, recursive_dirs=%d, max_depth=%d",
 						path, stats_out->file_count, stats_out->dir_count, format_size((ssize_t)stats_out->tree_size, false),
 						stats_out->tree_files, stats_out->tree_dirs, stats_out->max_depth);
 
-	return scan_completed;
+	return is_stable;
 }
 
 /* Handle scan failure cases */
@@ -669,7 +667,6 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 
 			/* This is activity, but we don't need a full quiet period reset */
 			root_state->tree_activity = *current_time;
-			root_state->unstable_count++; /* Increment since directory structure is still changing */
 
 			/* Update directory stats to reflect new directory structure */
 			dir_stats_t new_stats;
