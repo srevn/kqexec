@@ -667,7 +667,16 @@ static long scanner_adjust(entity_state_t *state, long base_ms) {
 	int recent_files, recent_dirs, recent_depth;
 	ssize_t recent_size;
 	calculate_recent_activity(state, &recent_files, &recent_dirs, &recent_depth, &recent_size);
-	int recent_change = recent_files + recent_dirs;
+	/* Calculate comprehensive activity magnitude including depth and size changes */
+	int size_weight = 0;
+	if (recent_size > 100 * 1024 * 1024) {
+		size_weight = (int)(recent_size / (100 * 1024 * 1024)); /* 1 point per 100MB */
+	} else if (recent_size > 10 * 1024 * 1024) {
+		size_weight = 1; /* 1 point for 10-100MB */
+	} else if (recent_size > 1024 * 1024) {
+		size_weight = 0; /* No weight for 1-10MB */
+	}
+	int recent_change = recent_files + recent_dirs + recent_depth + size_weight;
 	
 	/* Log recent activity calculation for debugging */
 	log_message(DEBUG, "Recent activity calculation for %s: files=%d, dirs=%d, depth=%d, size=%s (total_change=%d)", 
