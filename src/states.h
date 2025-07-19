@@ -25,6 +25,7 @@ typedef struct entity_state {
 	watch_entry_t *watch;                  /* The watch entry for this state */
 	struct timespec last_update;           /* When state was last updated (MONOTONIC) */
 	struct timespec wall_time;             /* Wall clock time (REALTIME) */
+	struct timespec last_op_time;          /* Timestamp of the last operation to prevent duplicates */
 
 	/* Current state */
 	bool exists;                           /* Entity currently exists */

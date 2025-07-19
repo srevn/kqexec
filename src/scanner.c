@@ -581,6 +581,14 @@ static void scanner_handle_root(entity_state_t *state, operation_type_t op) {
 void scanner_track(entity_state_t *state, operation_type_t op) {
 	if (!state) return;
 
+	/* Check for duplicate tracking to avoid re-processing the same event */
+	if (state->last_op_time.tv_sec == state->last_update.tv_sec &&
+	    state->last_op_time.tv_nsec == state->last_update.tv_nsec) {
+		log_message(DEBUG, "Skipping duplicate track for %s (op=%d)",
+		        			state->path_state ? state->path_state->path : "NULL", op);
+		return;
+	}
+
 	/* Record basic activity in circular buffer */
 	scanner_record(state, op);
 
@@ -595,6 +603,9 @@ void scanner_track(entity_state_t *state, operation_type_t op) {
 
 	/* Always sync the current state */
 	scanner_sync(state->path_state, state);
+
+	/* Record the timestamp of this operation to prevent duplicates */
+	state->last_op_time = state->last_update;
 }
 
 /* Calculate base quiet period based on recent change magnitude */

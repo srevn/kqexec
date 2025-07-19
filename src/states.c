@@ -258,6 +258,8 @@ entity_state_t *states_get(const char *path, entity_type_t type, watch_entry_t *
 
 	init_tracking(state, watch);
 	state->command_time = 0;
+	state->last_op_time.tv_sec = 0;
+	state->last_op_time.tv_nsec = 0;
 	state->checks_failed = 0;
 	state->required_checks = 0;
 
