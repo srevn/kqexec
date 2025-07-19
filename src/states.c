@@ -278,7 +278,6 @@ entity_state_t *states_get(const char *path, entity_type_t type, watch_entry_t *
 		state->cumulative_depth = 0;
 		state->cumulative_size = 0;
 		state->stability_lost = false;
-		state->check_pending = false;
 
 		if (state->type == ENTITY_DIRECTORY && state->exists) {
 			if (scanner_scan(path, &state->dir_stats)) {

@@ -14,38 +14,6 @@
 #include "stability.h"
 #include "scanner.h"
 
-/* Create a new event queue */
-event_queue_t* event_queue_create(void) {
-	event_queue_t *queue = calloc(1, sizeof(event_queue_t));
-	if (queue == NULL) {
-		log_message(ERROR, "Failed to allocate memory for event queue");
-		return NULL;
-	}
-	
-	queue->items = NULL;
-	queue->count = 0;
-	queue->capacity = 0;
-	
-	return queue;
-}
-
-/* Destroy an event queue and free all resources */
-void event_queue_destroy(event_queue_t *queue) {
-	if (queue == NULL) {
-		return;
-	}
-	
-	/* Free all event paths */
-	if (queue->items) {
-		for (int i = 0; i < queue->count; i++) {
-			free(queue->items[i].event.path);
-		}
-		free(queue->items);
-	}
-	
-	free(queue);
-}
-
 /* Initialize a sync request structure */
 void sync_request_init(sync_request_t *sync_request) {
 	if (!sync_request) return;

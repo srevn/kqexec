@@ -55,13 +55,6 @@ typedef struct delayed_event {
 	struct timespec process_time;          /* When to process this event */
 } delayed_event_t;
 
-/* Event queue structure */
-typedef struct {
-	delayed_event_t *items;                /* Array of delayed events */
-	int count;                             /* Current number of delayed events */
-	int capacity;                          /* Allocated capacity */
-} event_queue_t;
-
 /* Sync request structure for collecting paths that need validation */
 typedef struct {
 	char **paths;                          /* Array of paths needing sync */
@@ -78,10 +71,6 @@ int events_timeout(monitor_t *monitor, struct timespec *now);
 bool events_handle(monitor_t *monitor, struct kevent *events, int count, struct timespec *time, sync_request_t *sync_request);
 bool events_process(monitor_t *monitor, watch_entry_t *watch, file_event_t *event, entity_type_t entity_type);
 struct timespec *timeout_calculate(monitor_t *monitor, struct timespec *timeout, struct timespec *now);
-
-/* Event queue management */
-event_queue_t *event_queue_create(void);
-void event_queue_destroy(event_queue_t *queue);
 
 /* Sync request management */
 void sync_request_init(sync_request_t *sync_request);

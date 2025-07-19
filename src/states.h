@@ -51,6 +51,7 @@ typedef struct entity_state {
 	int checks_failed;                     /* Number of consecutive failed stability checks */
 	int unstable_count;                    /* Number of times found unstable in a row */
 	int required_checks;                   /* Required number of stability checks (locked in) */
+	bool stability_lost;                   /* Flag indicating stability was previously achieved and lost */
 
 	/* Stable reference state tracking */
 	dir_stats_t reference_stats;           /* Last known stable state statistics */
@@ -60,9 +61,7 @@ typedef struct entity_state {
 	int cumulative_depth;                  /* Running total of depth changes */
 	ssize_t cumulative_size;               /* Running total of size changes since stability */
 
-	bool check_pending;                    /* Flag indicating a deferred check is scheduled */
-	bool stability_lost;                   /* Flag indicating stability was previously achieved and lost */
-
+	/* Activity and trigger tracking */
 	struct timespec tree_activity;         /* Latest activity anywhere in the tree */
 	char *active_path;                     /* Path of the most recent activity */
 	char *trigger_path;                    /* Path of the specific file that triggered a directory event */
