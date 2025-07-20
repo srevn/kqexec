@@ -165,7 +165,16 @@ void stability_defer(monitor_t *monitor, entity_state_t *state) {
 		
 		/* Calculate current complexity and use maximum with locked-in period */
 		long current_complexity = scanner_delay(root_state);
-		long effective_period = (current_complexity > current_locked_period) ? current_complexity : current_locked_period;
+		
+		/* Allow responsive drops if new period is significantly lower */
+		long effective_period;
+		if (current_complexity < current_locked_period && current_complexity < (current_locked_period * 0.6)) {
+			/* Significant drop - use calculated period for responsiveness */
+			effective_period = current_complexity;
+		} else {
+			/* Use maximum for stability */
+			effective_period = (current_complexity > current_locked_period) ? current_complexity : current_locked_period;
+		}
 		
 		/* Update activity time for true timer refresh */
 		clock_gettime(CLOCK_MONOTONIC, &root_state->tree_activity);
