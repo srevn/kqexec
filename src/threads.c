@@ -97,7 +97,7 @@ static void *worker_thread(void *arg) {
 
 		/* Execute the command */
 		if (item) {
-			command_execute(item->watch, item->event, true);
+			command_execute(item->monitor, item->watch, item->event, true);
 
 			/* Clean up work item */
 			free_watch_entry(item->watch);
@@ -208,7 +208,7 @@ void thread_pool_destroy(void) {
 }
 
 /* Submit work to thread pool */
-bool thread_pool_submit(const watch_entry_t *watch, const file_event_t *event) {
+bool thread_pool_submit(monitor_t *monitor, const watch_entry_t *watch, const file_event_t *event) {
 	if (!g_thread_pool || !watch || !event) {
 		log_message(ERROR, "Invalid parameters for thread_pool_submit");
 		return false;
@@ -221,6 +221,7 @@ bool thread_pool_submit(const watch_entry_t *watch, const file_event_t *event) {
 		return false;
 	}
 
+	item->monitor = monitor;
 	item->watch = copy_watch_entry(watch);
 	item->event = copy_file_event(event);
 	item->next = NULL;

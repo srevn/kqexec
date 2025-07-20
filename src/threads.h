@@ -12,6 +12,7 @@
 
 /* Work item for thread pool */
 typedef struct work_item {
+	monitor_t *monitor;                    /* Monitor instance */
 	watch_entry_t *watch;                  /* Watch configuration (copied) */
 	file_event_t *event;                   /* Event data (copied) */
 	struct work_item *next;                /* Next item in queue */
@@ -33,7 +34,7 @@ typedef struct {
 /* Thread pool function prototypes */
 bool thread_pool_init(void);
 void thread_pool_destroy(void);
-bool thread_pool_submit(const watch_entry_t *watch, const file_event_t *event);
+bool thread_pool_submit(monitor_t *monitor, const watch_entry_t *watch, const file_event_t *event);
 void thread_pool_wait_all(void);
 
 #endif /* THREADS_H */

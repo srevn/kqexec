@@ -145,20 +145,11 @@ int main(int argc, char *argv[]) {
 		return EXIT_FAILURE;
 	}
 
-	/* Initialize entity states */
-	if (!states_init()) {
-		log_message(CRITICAL, "Failed to initialize entity states");
-		command_cleanup();
-		config_destroy(config);
-		log_close();
-		return EXIT_FAILURE;
-	}
 
 	/* Create monitor */
 	monitor = monitor_create(config);
 	if (monitor == NULL) {
 		log_message(CRITICAL, "Failed to create monitor");
-		states_cleanup();
 		command_cleanup();
 		config_destroy(config);
 		log_close();
@@ -169,7 +160,6 @@ int main(int argc, char *argv[]) {
 	if (!monitor_setup(monitor)) {
 		log_message(CRITICAL, "Failed to set up monitor");
 		monitor_destroy(monitor);
-		states_cleanup();
 		command_cleanup();
 		log_close();
 		return EXIT_FAILURE;
@@ -185,7 +175,6 @@ int main(int argc, char *argv[]) {
 	if (!monitor_start(monitor)) {
 		log_message(CRITICAL, "Failed to start monitor");
 		monitor_destroy(monitor);
-		states_cleanup();
 		command_cleanup();
 		log_close();
 		return EXIT_FAILURE;
@@ -194,7 +183,6 @@ int main(int argc, char *argv[]) {
 	/* Clean up */
 	daemon_set_monitor(NULL);
 	monitor_destroy(monitor);
-	states_cleanup();
 	command_cleanup();
 	log_close();
 

@@ -416,7 +416,7 @@ static void command_substitute(char *result, const char *placeholder, const char
  * %u: User who triggered the event
  * %e: Event type which occurred
  */
-char *command_placeholders(const watch_entry_t *watch, const char *command, const file_event_t *event) {
+char *command_placeholders(monitor_t *monitor, const watch_entry_t *watch, const char *command, const file_event_t *event) {
 	char *result;
 	char time_str[64];
 	char user_str[64];
@@ -474,13 +474,13 @@ char *command_placeholders(const watch_entry_t *watch, const char *command, cons
 	}
 
 	/* Get entity state for size and trigger file placeholders */
-	entity_state_t *state = states_get(event->path, ENTITY_UNKNOWN, (watch_entry_t *) watch);
+	entity_state_t *state = state_table_get(monitor->states, event->path, ENTITY_UNKNOWN, (watch_entry_t *) watch);
 
 	/* Substitute %f and %F with trigger file path and name */
 	if (strstr(result, "%f") || strstr(result, "%F")) {
 		const char *trigger_path = event->path; /* Default to event path */
 		if (state) {
-			entity_state_t *root_state = stability_root(state);
+			entity_state_t *root_state = stability_root(monitor, state);
 			if (root_state && root_state->trigger_path) {
 				trigger_path = root_state->trigger_path;
 			}
@@ -527,8 +527,8 @@ char *command_placeholders(const watch_entry_t *watch, const char *command, cons
 	if (strstr(result, "%s") || strstr(result, "%S")) {
 		size_t size = 0;
 		if (state && state->type == ENTITY_DIRECTORY) {
-			entity_state_t *size_state = stability_root(state);
-			size = size_state ? size_state->dir_stats.tree_size : state->dir_stats.tree_size;
+			entity_state_t *size_state = stability_root(monitor, state);
+			size = size_state ? size_state->stability->dir_stats.tree_size : state->stability->dir_stats.tree_size;
 		} else if (stat(event->path, &st) == 0) {
 			size = st.st_size;
 		}
@@ -591,7 +591,7 @@ static void buffer_flush(const watch_entry_t *watch, char **buffer, int count) {
 }
 
 /* Command execution synchronous or asynchronous */
-bool command_execute(const watch_entry_t *watch, const file_event_t *event, bool synchronous) {
+bool command_execute(monitor_t *monitor, const watch_entry_t *watch, const file_event_t *event, bool synchronous) {
 	if (watch == NULL || event == NULL) {
 		log_message(ERROR, "Invalid arguments to command_execute");
 		return false;
@@ -599,7 +599,7 @@ bool command_execute(const watch_entry_t *watch, const file_event_t *event, bool
 
 	/* For asynchronous execution, delegate to thread pool */
 	if (!synchronous) {
-		return thread_pool_submit(watch, event);
+		return thread_pool_submit(monitor, watch, event);
 	}
 
 	/* Synchronous execution with robust output capture */
@@ -625,7 +625,7 @@ bool command_execute(const watch_entry_t *watch, const file_event_t *event, bool
 	time(&start_time);
 
 	/* Substitute placeholders in the command */
-	command = command_placeholders(watch, watch->command, event);
+	command = command_placeholders(monitor, watch, watch->command, event);
 	if (command == NULL) {
 		return false;
 	}
@@ -674,7 +674,7 @@ bool command_execute(const watch_entry_t *watch, const file_event_t *event, bool
 
 		/* Set environment variables for the command if enabled */
 		if (watch->environment) {
-			command_environment(watch, event);
+			command_environment(monitor, watch, event);
 		}
 
 		/* Execute the command */
@@ -820,7 +820,7 @@ bool command_execute(const watch_entry_t *watch, const file_event_t *event, bool
 	        		   watch->name, pid, end_time - start_time, WEXITSTATUS(status));
 
 	/* Mark the entity state with the command execution */
-	entity_state_t *state = states_get(event->path, ENTITY_UNKNOWN, (watch_entry_t *) watch);
+	entity_state_t *state = state_table_get(monitor->states, event->path, ENTITY_UNKNOWN, (watch_entry_t *) watch);
 	if (state) {
 		state->command_time = time(NULL);
 	}
@@ -830,7 +830,7 @@ bool command_execute(const watch_entry_t *watch, const file_event_t *event, bool
 }
 
 /* Set environment variables for command execution */
-void command_environment(const watch_entry_t *watch, const file_event_t *event) {
+void command_environment(monitor_t *monitor, const watch_entry_t *watch, const file_event_t *event) {
 	char buffer[1024];
 	struct passwd *pwd;
 	struct tm tm;
@@ -874,9 +874,9 @@ void command_environment(const watch_entry_t *watch, const file_event_t *event) 
 
 	/* KQ_TRIGGER_FILE_PATH - full path of the file that triggered the event */
 	const char *trigger_file_path = event->path; /* Default to event path */
-	entity_state_t *state = states_get(event->path, ENTITY_UNKNOWN, (watch_entry_t *) watch);
+	entity_state_t *state = state_table_get(monitor->states, event->path, ENTITY_UNKNOWN, (watch_entry_t *) watch);
 	if (state) {
-		entity_state_t *root_state = stability_root(state);
+		entity_state_t *root_state = stability_root(monitor, state);
 		if (root_state && root_state->trigger_path) {
 			trigger_file_path = root_state->trigger_path;
 		}

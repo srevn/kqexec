@@ -6,6 +6,7 @@
 #include "queue.h"
 #include "config.h"
 #include "events.h"
+#include "states.h"
 
 /* Maximum number of watches */
 #define MAX_WATCHES 128
@@ -34,6 +35,9 @@ typedef struct monitor {
 
 	/* Priority queue for deferred directory checks */
 	defer_queue_t *check_queue;            /* Deferred checks queue */
+
+	/* State management */
+	state_table_t *states;                 /* State table for this monitor */
 
 	/* Queue for delayed events */
 	struct delayed_event *delayed_events;  /* Array of delayed events */

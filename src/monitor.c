@@ -59,6 +59,16 @@ monitor_t *monitor_create(config_t *config) {
 	/* Initialize the deferred check queue */
 	monitor->check_queue = queue_create(16); /* Initial capacity of 16 */
 
+	/* Initialize state table */
+	monitor->states = state_table_create(PATH_HASH_SIZE);
+	if (!monitor->states) {
+		log_message(ERROR, "Failed to create state table for monitor");
+		queue_destroy(monitor->check_queue);
+		free(monitor->config_file);
+		free(monitor);
+		return NULL;
+	}
+
 	/* Initialize delayed event queue */
 	monitor->delayed_events = NULL;
 	monitor->delayed_count = 0;
@@ -111,6 +121,9 @@ void monitor_destroy(monitor_t *monitor) {
 		}
 		free(monitor->delayed_events);
 	}
+
+	/* Clean up state table */
+	state_table_destroy(monitor->states);
 
 	/* Destroy the configuration */
 	config_destroy(monitor->config);
@@ -290,7 +303,7 @@ bool monitor_tree(monitor_t *monitor, const char *dir_path, watch_entry_t *watch
 			log_message(DEBUG, "Added new watch for directory: %s", dir_path);
 
 			/* Establish baseline state */
-			states_get(dir_path, ENTITY_DIRECTORY, watch);
+			state_table_get(monitor->states, dir_path, ENTITY_DIRECTORY, watch);
 		}
 	}
 
@@ -441,7 +454,7 @@ bool monitor_add(monitor_t *monitor, watch_entry_t *watch) {
 		}
 
 		/* Establish baseline state */
-		states_get(info->path, ENTITY_FILE, watch);
+		state_table_get(monitor->states, info->path, ENTITY_FILE, watch);
 
 		return monitor_kqueue(monitor, info);
 	}
@@ -707,8 +720,12 @@ bool monitor_reload(monitor_t *monitor) {
 	}
 
 	/* Reset the state management system */
-	states_cleanup();
-	states_init();
+	state_table_destroy(monitor->states);
+	monitor->states = state_table_create(PATH_HASH_SIZE);
+	if (!monitor->states) {
+		log_message(ERROR, "Failed to recreate state table during reload");
+		return false;
+	}
 
 	/* Clear deferred and delayed queues to prevent access to old states */
 	queue_destroy(monitor->check_queue);

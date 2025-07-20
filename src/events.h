@@ -11,9 +11,6 @@
 typedef struct monitor monitor_t;
 typedef struct entity_state entity_state_t;
 
-/* Activity window size for detecting quiet periods (in milliseconds) */
-#define MAX_SAMPLES 5                      /* Number of recent events to track for activity analysis */
-
 /* Logical operation types */
 typedef enum {
 	OP_NONE = 0,                           /* No operation */
@@ -31,12 +28,6 @@ typedef enum {
 	OP_DIR_DELETED,                        /* Directory was deleted */
 	OP_DIR_METADATA_CHANGED                /* Directory attributes changed */
 } operation_type_t;
-
-/* Activity sample for analyzing bursts of events */
-typedef struct {
-	struct timespec timestamp;             /* When the event occurred */
-	operation_type_t operation;            /* Type of operation */
-} activity_sample_t;
 
 /* Structure for file/directory event */
 typedef struct file_event {

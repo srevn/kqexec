@@ -398,8 +398,14 @@ operation_type_t determine_operation(entity_state_t *state, event_type_t new_eve
 
 		/* For directory creation, gather initial stats */
 		if (state->type == ENTITY_DIRECTORY) {
-			scanner_scan(state->path_state->path, &state->dir_stats);
-			state->prev_stats = state->dir_stats;
+			/* Create stability state for new directories */
+			if (!state->stability) {
+				state->stability = stability_state_create();
+			}
+			if (state->stability) {
+				scanner_scan(state->path_state->path, &state->stability->dir_stats);
+				state->stability->prev_stats = state->stability->dir_stats;
+			}
 		}
 	} else if (exists_now) {
 		/* Existed before and exists now - check for other changes */
@@ -481,7 +487,7 @@ bool events_process(monitor_t *monitor, watch_entry_t *watch, file_event_t *even
 	}
 
 	/* Get state using the event path and watch config */
-	entity_state_t *state = states_get(event->path, entity_type, watch);
+	entity_state_t *state = state_table_get(monitor->states, event->path, entity_type, watch);
 	if (state == NULL) {
 		return false; /* Error already logged by states_get */
 	}
@@ -520,7 +526,7 @@ bool events_process(monitor_t *monitor, watch_entry_t *watch, file_event_t *even
 		log_message(INFO, "Executing command for %s (watch: %s, operation: %d)",
 		    			   state->path_state->path, watch->name, op);
 
-		if (command_execute(watch, &synthetic_event, false)) {
+		if (command_execute(monitor, watch, &synthetic_event, false)) {
 			log_message(INFO, "Command execution successful for %s", state->path_state->path);
 
 			/* Update last command time and reset change flags */

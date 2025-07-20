@@ -25,9 +25,9 @@ typedef struct {
 bool command_init(void);
 int command_get_debounce_time(void);
 void command_debounce_time(int milliseconds);
-bool command_execute(const watch_entry_t *watch, const file_event_t *event, bool synchronous);
-char *command_placeholders(const watch_entry_t *watch, const char *command, const file_event_t *event);
-void command_environment(const watch_entry_t *watch, const file_event_t *event);
+bool command_execute(monitor_t *monitor, const watch_entry_t *watch, const file_event_t *event, bool synchronous);
+char *command_placeholders(monitor_t *monitor, const watch_entry_t *watch, const char *command, const file_event_t *event);
+void command_environment(monitor_t *monitor, const watch_entry_t *watch, const file_event_t *event);
 void command_cleanup(void);
 
 /* Function prototypes for command intent tracking */
