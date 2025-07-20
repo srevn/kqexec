@@ -25,6 +25,7 @@ static watch_entry_t *copy_watch_entry(const watch_entry_t *watch) {
 	copy->buffer_output = watch->buffer_output;
 	copy->recursive = watch->recursive;
 	copy->hidden = watch->hidden;
+	copy->environment = watch->environment;
 	copy->complexity = watch->complexity;
 	copy->processing_delay = watch->processing_delay;
 

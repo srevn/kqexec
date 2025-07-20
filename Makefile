@@ -152,6 +152,20 @@ endif
 	@echo "command = logger -p user.notice \"User configuration changed in %p\"" >> $@
 	@echo "recursive = true" >> $@
 	@echo "hidden = true" >> $@
+	@echo "" >> $@
+	@echo "[Script Automation]" >> $@
+	@echo "# Monitor directory and pass context via environment variables" >> $@
+ifeq ($(UNAME_S),Darwin)
+	@echo "directory = $(HOME)/projects" >> $@
+	@echo "command = $(HOME)/scripts/build-deploy.sh" >> $@
+else
+	@echo "directory = /home/user/projects" >> $@
+	@echo "command = /home/user/scripts/build-deploy.sh" >> $@
+endif
+	@echo "events = CONTENT,STRUCTURE" >> $@
+	@echo "environment = true" >> $@
+	@echo "log_output = true" >> $@
+	@echo "recursive = true" >> $@
 
 # Generate sample configuration
 config: kqexec.conf.sample

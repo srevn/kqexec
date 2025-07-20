@@ -672,8 +672,10 @@ bool command_execute(const watch_entry_t *watch, const file_event_t *event, bool
 			close(stderr_pipe[1]);
 		}
 
-		/* Set environment variables for the command */
-		command_environment(watch, event, command);
+		/* Set environment variables for the command if enabled */
+		if (watch->environment) {
+			command_environment(watch, event);
+		}
 
 		/* Execute the command */
 		execl("/bin/sh", "sh", "-c", command, NULL);
@@ -828,108 +830,84 @@ bool command_execute(const watch_entry_t *watch, const file_event_t *event, bool
 }
 
 /* Set environment variables for command execution */
-void command_environment(const watch_entry_t *watch, const file_event_t *event, const char *command) {
+void command_environment(const watch_entry_t *watch, const file_event_t *event) {
 	char buffer[1024];
 	struct passwd *pwd;
 	struct tm tm;
 
-	if (watch == NULL || event == NULL || command == NULL) {
+	if (watch == NULL || event == NULL) {
 		return;
 	}
 
-	/* KQ_EVENT_TYPE */
-	if (strstr(command, "$KQ_EVENT_TYPE") || strstr(command, "${KQ_EVENT_TYPE}")) {
-		setenv("KQ_EVENT_TYPE", event_type_to_string(event->type), 1);
-	}
+	/* KQ_EVENT_TYPE - event type which occurred */
+	setenv("KQ_EVENT_TYPE", event_type_to_string(event->type), 1);
 
-	/* KQ_TRIGGER_PATH */
-	if (strstr(command, "$KQ_TRIGGER_PATH") || strstr(command, "${KQ_TRIGGER_PATH}")) {
-		setenv("KQ_TRIGGER_PATH", event->path, 1);
-	}
+	/* KQ_TRIGGER_PATH - full path where the event occurred */
+	setenv("KQ_TRIGGER_PATH", event->path, 1);
 
-	/* KQ_WATCH_NAME */
-	if (strstr(command, "$KQ_WATCH_NAME") || strstr(command, "${KQ_WATCH_NAME}")) {
-		setenv("KQ_WATCH_NAME", watch->name, 1);
-	}
+	/* KQ_WATCH_NAME - name of the watch from the configuration */
+	setenv("KQ_WATCH_NAME", watch->name, 1);
 
-	/* KQ_WATCH_PATH */
-	if (strstr(command, "$KQ_WATCH_PATH") || strstr(command, "${KQ_WATCH_PATH}")) {
-		setenv("KQ_WATCH_PATH", watch->path, 1);
-	}
+	/* KQ_WATCH_PATH - base path being monitored */
+	setenv("KQ_WATCH_PATH", watch->path, 1);
 
-	/* KQ_RELATIVE_PATH */
-	if (strstr(command, "$KQ_RELATIVE_PATH") || strstr(command, "${KQ_RELATIVE_PATH}")) {
-		const char *relative_path = event->path + strlen(watch->path);
-		if (*relative_path == '/') {
-			relative_path++;
-		}
-		setenv("KQ_RELATIVE_PATH", relative_path, 1);
+	/* KQ_RELATIVE_PATH - event path relative to the watch base*/
+	const char *relative_path = event->path + strlen(watch->path);
+	if (*relative_path == '/') {
+		relative_path++;
 	}
+	setenv("KQ_RELATIVE_PATH", relative_path, 1);
 
 	/* KQ_TRIGGER_FILE - basename of trigger path */
-	if (strstr(command, "$KQ_TRIGGER_FILE") || strstr(command, "${KQ_TRIGGER_FILE}")) {
-		char *path_copy = strdup(event->path);
-		if (path_copy) {
-			setenv("KQ_TRIGGER_FILE", basename(path_copy), 1);
-			free(path_copy);
-		}
+	char *path_copy = strdup(event->path);
+	if (path_copy) {
+		setenv("KQ_TRIGGER_FILE", basename(path_copy), 1);
+		free(path_copy);
 	}
 
 	/* KQ_TRIGGER_DIR - directory containing trigger */
-	if (strstr(command, "$KQ_TRIGGER_DIR") || strstr(command, "${KQ_TRIGGER_DIR}")) {
-		char *path_copy = strdup(event->path);
-		if (path_copy) {
-			setenv("KQ_TRIGGER_DIR", dirname(path_copy), 1);
-			free(path_copy);
-		}
+	path_copy = strdup(event->path);
+	if (path_copy) {
+		setenv("KQ_TRIGGER_DIR", dirname(path_copy), 1);
+		free(path_copy);
 	}
 
 	/* KQ_TRIGGER_FILE_PATH - full path of the file that triggered the event */
-	if (strstr(command, "$KQ_TRIGGER_FILE_PATH") || strstr(command, "${KQ_TRIGGER_FILE_PATH}")) {
-		const char *trigger_file_path = event->path; /* Default to event path */
-		entity_state_t *state = states_get(event->path, ENTITY_UNKNOWN, (watch_entry_t *) watch);
-		if (state) {
-			entity_state_t *root_state = stability_root(state);
-			if (root_state && root_state->trigger_path) {
-				trigger_file_path = root_state->trigger_path;
-			}
+	const char *trigger_file_path = event->path; /* Default to event path */
+	entity_state_t *state = states_get(event->path, ENTITY_UNKNOWN, (watch_entry_t *) watch);
+	if (state) {
+		entity_state_t *root_state = stability_root(state);
+		if (root_state && root_state->trigger_path) {
+			trigger_file_path = root_state->trigger_path;
 		}
-		setenv("KQ_TRIGGER_FILE_PATH", trigger_file_path, 1);
 	}
+	setenv("KQ_TRIGGER_FILE_PATH", trigger_file_path, 1);
 
-	/* KQ_USER_ID */
-	if (strstr(command, "$KQ_USER_ID") || strstr(command, "${KQ_USER_ID}")) {
-		snprintf(buffer, sizeof(buffer), "%d", event->user_id);
-		setenv("KQ_USER_ID", buffer, 1);
-	}
+	/* KQ_USER_ID - numeric user ID that caused the event*/
+	snprintf(buffer, sizeof(buffer), "%d", event->user_id);
+	setenv("KQ_USER_ID", buffer, 1);
 
 	/* KQ_USERNAME - try to resolve user ID to name */
-	if (strstr(command, "$KQ_USERNAME") || strstr(command, "${KQ_USERNAME}")) {
-		pwd = getpwuid(event->user_id);
-		if (pwd) {
-			setenv("KQ_USERNAME", pwd->pw_name, 1);
-		} else {
-			snprintf(buffer, sizeof(buffer), "%d", event->user_id);
-			setenv("KQ_USERNAME", buffer, 1);
-		}
+	pwd = getpwuid(event->user_id);
+	if (pwd) {
+		setenv("KQ_USERNAME", pwd->pw_name, 1);
+	} else {
+		snprintf(buffer, sizeof(buffer), "%d", event->user_id);
+		setenv("KQ_USERNAME", buffer, 1);
 	}
 
 	/* KQ_TIMESTAMP - ISO 8601 format */
-	if (strstr(command, "$KQ_TIMESTAMP") || strstr(command, "${KQ_TIMESTAMP}")) {
-		if (localtime_r(&event->wall_time.tv_sec, &tm)) {
-			strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%S", &tm);
-			setenv("KQ_TIMESTAMP", buffer, 1);
-		}
+	if (localtime_r(&event->wall_time.tv_sec, &tm)) {
+		strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%S", &tm);
+		setenv("KQ_TIMESTAMP", buffer, 1);
 	}
 
 	/* KQ_MODIFIED_FILES - recent files modified around this event */
-	if (strstr(command, "$KQ_MODIFIED_FILES") || strstr(command, "${KQ_MODIFIED_FILES}")) {
-		time_t since_time = event->wall_time.tv_sec - 1;
-		char *modified_files = scanner_modified(watch->path, since_time, watch->recursive, true);
-		if (modified_files) {
-			setenv("KQ_MODIFIED_FILES", modified_files, 1);
-			free(modified_files);
-		}
+	time_t since_time = event->wall_time.tv_sec - 1;
+	char *modified_files = scanner_modified(watch->path, since_time, watch->recursive, true);
+	if (modified_files) {
+		setenv("KQ_MODIFIED_FILES", modified_files, 1);
+		free(modified_files);
 	}
 }
 

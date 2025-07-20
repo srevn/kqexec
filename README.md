@@ -14,7 +14,7 @@ A lightweight file and directory monitoring utility for FreeBSD and macOS that u
 - **State-Based Event Processing**: Tracks the state of files and directories to detect meaningful changes
 - **Command Debouncing**: Prevent command execution flooding when many events occur rapidly
 - **Placeholder Substitution**: Dynamic command generation based on event details
-- **Environment Variable Injection**: Rich event context automatically provided to commands
+- **Environment Variable Injection**: Event context provided to commands when enabled
 - **Command Intent Tracking**: Filters out self-generated events by analyzing command operations
 - **Directory Stability Verification**: Uses `stat()` to recursively verify directory stability before executing commands
 - **Configuration Hot-Reload**: Monitors the configuration file and automatically reloads when it changes
@@ -80,6 +80,7 @@ file = /path/to/file          # For monitoring a single file
 directory = /path/to/dir      # For monitoring a directory
 events = EVENT1,EVENT2        # Comma-separated list of events
 command = command to execute  # Command to run when events occur
+environment = false           # Whether to set KQ_* environment variables (default: false)
 processing_delay = 5000       # Delay in milliseconds before processing events (default: 0)
 complexity = 2.5              # Higher values reduce I/O by waiting longer for stability checks. (default: 1.0)
 log_output = false            # Whether to capture and log command output (default: false)
@@ -135,9 +136,9 @@ Commands can include the following placeholders that will be replaced at runtime
 
 ### Environment Variables
 
-In addition to command placeholders, kqexec automatically sets environment variables that provide rich context about the event:
+In addition to command placeholders, kqexec can optionally set environment variables that provide context about the event. To enable this feature, add `environment = true` (or `env_vars = true`) to your watch configuration:
 
-- `KQ_EVENT_TYPE` : Event type (CONTENT, STRUCTURE, METADATA)
+- `KQ_EVENT_TYPE` : Event type (STRUCTURE, CONTENT, METADATA)
 - `KQ_TRIGGER_PATH` : Full path where the event occurred
 - `KQ_WATCH_NAME` : Name of the watch from the configuration
 - `KQ_WATCH_PATH` : Base path being monitored
@@ -196,6 +197,15 @@ log_output = true
 buffer_output = true
 recursive = true
 hidden = false
+
+[Script Automation]
+# Monitor directory and pass context via environment variables
+directory = /home/user/projects
+events = CONTENT,STRUCTURE
+command = /home/user/scripts/build-deploy.sh
+environment = true
+log_output = true
+recursive = true
 ```
 
 ### Common Use Cases

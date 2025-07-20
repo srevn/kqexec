@@ -471,6 +471,7 @@ static watch_entry_t *config_entry(const char *config_file_path) {
 	config_watch->buffer_output = false;
 	config_watch->recursive = false;
 	config_watch->hidden = false;
+	config_watch->environment = false;
 	config_watch->complexity = 1.0;
 	config_watch->processing_delay = 0;
 

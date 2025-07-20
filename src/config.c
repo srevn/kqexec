@@ -320,6 +320,7 @@ bool config_parse_file(config_t *config, const char *filename) {
 			current_watch->buffer_output = false; /* Default to not buffering output */
 			current_watch->recursive = true; /* Default to recursive for directories */
 			current_watch->hidden = false; /* Default to not including hidden files */
+			current_watch->environment = false; /* Default to not injecting environment variables */
 			current_watch->processing_delay = 0; /* Default to no delay */
 			current_watch->complexity = 1.0; /* Default complexity multiplier */
 			state = SECTION_ENTRY;
@@ -358,8 +359,8 @@ bool config_parse_file(config_t *config, const char *filename) {
 				current_watch->path = strdup(value);
 			} else if (strcasecmp(key, "events") == 0) {
 				if (!config_parse_events(value, &current_watch->events)) {
-					log_message(ERROR, "Invalid value for events at line %d: %s",
-					            line_number, value);
+					log_message(ERROR, "Invalid value for %s at line %d: %s", key,
+										line_number, value);
 					watch_entry_destroy(current_watch);
 					fclose(fp);
 					return false;
@@ -372,8 +373,8 @@ bool config_parse_file(config_t *config, const char *filename) {
 				} else if (strcasecmp(value, "false") == 0 || strcmp(value, "0") == 0) {
 					current_watch->log_output = false;
 				} else {
-					log_message(ERROR, "Invalid value for log_output at line %d: %s",
-					            line_number, value);
+					log_message(ERROR, "Invalid value for %s at line %d: %s", key,
+										line_number, value);
 					watch_entry_destroy(current_watch);
 					fclose(fp);
 					return false;
@@ -384,8 +385,8 @@ bool config_parse_file(config_t *config, const char *filename) {
 				} else if (strcasecmp(value, "false") == 0 || strcmp(value, "0") == 0) {
 					current_watch->buffer_output = false;
 				} else {
-					log_message(ERROR, "Invalid value for buffer_output at line %d: %s",
-					            line_number, value);
+					log_message(ERROR, "Invalid value for %s at line %d: %s", key,
+										line_number, value);
 					watch_entry_destroy(current_watch);
 					fclose(fp);
 					return false;
@@ -396,8 +397,8 @@ bool config_parse_file(config_t *config, const char *filename) {
 				} else if (strcasecmp(value, "false") == 0 || strcmp(value, "0") == 0) {
 					current_watch->recursive = false;
 				} else {
-					log_message(ERROR, "Invalid value for recursive at line %d: %s",
-					            line_number, value);
+					log_message(ERROR, "Invalid value for %s at line %d: %s", key,
+										line_number, value);
 					watch_entry_destroy(current_watch);
 					fclose(fp);
 					return false;
@@ -408,8 +409,20 @@ bool config_parse_file(config_t *config, const char *filename) {
 				} else if (strcasecmp(value, "false") == 0 || strcmp(value, "0") == 0) {
 					current_watch->hidden = false;
 				} else {
-					log_message(ERROR, "Invalid value for hidden at line %d: %s",
-					            line_number, value);
+					log_message(ERROR, "Invalid value for %s at line %d: %s", key,
+										line_number, value);
+					watch_entry_destroy(current_watch);
+					fclose(fp);
+					return false;
+				}
+			} else if (strcasecmp(key, "environment") == 0 || strcasecmp(key, "env_vars") == 0) {
+				if (strcasecmp(value, "true") == 0 || strcmp(value, "1") == 0) {
+					current_watch->environment = true;
+				} else if (strcasecmp(value, "false") == 0 || strcmp(value, "0") == 0) {
+					current_watch->environment = false;
+				} else {
+					log_message(ERROR, "Invalid value for %s at line %d: %s", key,
+					            		line_number, value);
 					watch_entry_destroy(current_watch);
 					fclose(fp);
 					return false;
@@ -417,24 +430,24 @@ bool config_parse_file(config_t *config, const char *filename) {
 			} else if (strcasecmp(key, "complexity") == 0) {
 				double complexity_value = atof(value);
 				if (complexity_value <= 0) {
-					log_message(ERROR, "Invalid complexity value at line %d: %s (must be > 0)",
-					            line_number, value);
+					log_message(ERROR, "Invalid %s value at line %d: %s (must be > 0)", key,
+					            		line_number, value);
 					watch_entry_destroy(current_watch);
 					fclose(fp);
 					return false;
 				} else {
 					current_watch->complexity = complexity_value;
 				}
-			} else if (strcasecmp(key, "delay") == 0 || strcasecmp(key, "processing_delay") == 0) {
-				int delay_value = atoi(value);
-				if (delay_value < 0) {
-					log_message(ERROR, "Invalid processing_delay value at line %d: %s (must be >= 0)",
-					            line_number, value);
+			} else if (strcasecmp(key, "processing_delay") == 0 || strcasecmp(key, "delay") == 0) {
+				int processing_delay_value = atoi(value);
+				if (processing_delay_value < 0) {
+					log_message(ERROR, "Invalid %s value at line %d: %s (must be >= 0)", key,
+					            		line_number, value);
 					watch_entry_destroy(current_watch);
 					fclose(fp);
 					return false;
 				} else {
-					current_watch->processing_delay = delay_value;
+					current_watch->processing_delay = processing_delay_value;
 				}
 			} else {
 				log_message(WARNING, "Unknown key at line %d: %s", line_number, key);
