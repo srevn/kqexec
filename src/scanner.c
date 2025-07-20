@@ -624,17 +624,17 @@ static long scanner_base_period(int recent_files, int recent_dirs, int recent_de
 		return 1000;
 	} else if (total_change < 10 && recent_depth == 0 && recent_size < 100 * 1024 * 1024) {
 		/* Few files changed, no structural changes, but large size changes (10-100MB) - longer quiet period */
-		return 1350;
+		return 1500;
 	} else if (recent_depth > 0 || recent_size > 100 * 1024 * 1024) {
 		/* Structural depth changes or large size changes - significant quiet period */
 		int size_factor = (recent_size > 100 * 1024 * 1024) ? (int)(recent_size / (100 * 1024 * 1024)) : 0;
 		return 1500 + (recent_depth * 500) + (size_factor * 250);
 	} else if (total_change < 10) {
 		/* Moderate changes - medium quiet period */
-		return 1200;
+		return 1250;
 	} else {
 		/* Many changes - longer quiet period */
-		return 1500 + (total_change / 10) * 250;
+		return 2000 + (total_change / 10) * 250;
 	}
 }
 
