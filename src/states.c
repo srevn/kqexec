@@ -19,9 +19,8 @@
 #include "events.h"
 #include "scanner.h"
 
-
 /* Check if entity state is corrupted by verifying magic number */
-bool states_corrupted(const entity_state_t *state) {
+bool state_corrupted(const entity_t *state) {
 	if (!state) return true;
 	
 	if ((uintptr_t)state < 0x1000 || ((uintptr_t)state & 0x7) != 0) {
@@ -38,7 +37,7 @@ bool states_corrupted(const entity_state_t *state) {
 }
 
 /* Hash function for a path string */
-static unsigned int hash_path(const char *path, size_t bucket_count) {
+static unsigned int state_hash_path(const char *path, size_t bucket_count) {
 	unsigned int hash = 5381; /* djb2 hash initial value */
 	if (!path) return 0;
 	
@@ -50,14 +49,14 @@ static unsigned int hash_path(const char *path, size_t bucket_count) {
 }
 
 /* Create a new state table */
-state_table_t *state_table_create(size_t bucket_count) {
-	state_table_t *table = calloc(1, sizeof(state_table_t));
+state_t *state_create(size_t bucket_count) {
+	state_t *table = calloc(1, sizeof(state_t));
 	if (!table) {
 		log_message(ERROR, "Failed to allocate memory for state table");
 		return NULL;
 	}
 
-	table->buckets = calloc(bucket_count, sizeof(path_state_t *));
+	table->buckets = calloc(bucket_count, sizeof(node_t *));
 	if (!table->buckets) {
 		log_message(ERROR, "Failed to allocate memory for state table buckets");
 		free(table);
@@ -83,31 +82,31 @@ state_table_t *state_table_create(size_t bucket_count) {
 }
 
 /* Free resources used by an entity state */
-static void free_entity_state(entity_state_t *state) {
+static void state_free_entity(entity_t *state) {
 	if (state) {
-		activity_state_destroy(state->activity);
-		stability_state_destroy(state->stability);
-		free(state->trigger_path);
+		scanner_destroy(state->scanner);
+		stability_destroy(state->stability);
+		free(state->trigger);
 		free(state);
 	}
 }
 
 /* Free resources used by a path state and all its entity states */
-static void free_path_state(path_state_t *ps) {
-	if (ps) {
-		entity_state_t *state = ps->entity_head;
+static void state_free_node(node_t *node) {
+	if (node) {
+		entity_t *state = node->entities;
 		while (state) {
-			entity_state_t *next = state->path_next;
-			free_entity_state(state);
+			entity_t *next = state->next;
+			state_free_entity(state);
 			state = next;
 		}
-		free(ps->path);
-		free(ps);
+		free(node->path);
+		free(node);
 	}
 }
 
 /* Destroy a state table */
-void state_table_destroy(state_table_t *table) {
+void state_destroy(state_t *table) {
 	if (!table) return;
 
 	/* Lock mutex during cleanup */
@@ -115,11 +114,11 @@ void state_table_destroy(state_table_t *table) {
 
 	/* Free all path states */
 	for (size_t i = 0; i < table->bucket_count; i++) {
-		path_state_t *ps = table->buckets[i];
-		while (ps) {
-			path_state_t *next = ps->bucket_next;
-			free_path_state(ps);
-			ps = next;
+		node_t *node = table->buckets[i];
+		while (node) {
+			node_t *next = node->next;
+			state_free_node(node);
+			node = next;
 		}
 		table->buckets[i] = NULL;
 	}
@@ -136,49 +135,49 @@ void state_table_destroy(state_table_t *table) {
 
 
 /* Initialize activity tracking for a new entity state */
-static void init_tracking(entity_state_t *state, watch_entry_t *watch) {
+static void state_init_tracking(entity_t *state, watch_t *watch) {
 	if (!state) return;
 
 	state->watch = watch;
 
 	/* Activity tracking is created on demand */
-	state->activity = NULL;
+	state->scanner = NULL;
 	
 	/* Stability tracking is created on demand */
 	state->stability = NULL;
 }
 
 /* Copies all directory-related statistics and tracking fields from a source to a destination state. */
-static void copy_state(entity_state_t *dest, const entity_state_t *src) {
+static void state_copy(entity_t *dest, const entity_t *src) {
 	if (!dest || !src) return;
 
 	/* Copy stability state if source has it */
 	if (src->stability) {
 		if (!dest->stability) {
-			dest->stability = stability_state_create();
+			dest->stability = stability_create();
 			if (!dest->stability) return;
 		}
 		*dest->stability = *src->stability;
 	}
 
 	/* Copy activity state if source has it */
-	if (src->activity) {
-		if (!dest->activity) {
-			dest->activity = activity_state_create(src->activity->active_path);
-			if (!dest->activity) return;
+	if (src->scanner) {
+		if (!dest->scanner) {
+			dest->scanner = scanner_create(src->scanner->active_path);
+			if (!dest->scanner) return;
 		}
 		/* Copy the activity data but preserve the existing active_path */
-		char *saved_path = dest->activity->active_path;
-		*dest->activity = *src->activity;
-		dest->activity->active_path = saved_path ? strdup(saved_path) : NULL;
+		char *saved_path = dest->scanner->active_path;
+		*dest->scanner = *src->scanner;
+		dest->scanner->active_path = saved_path ? strdup(saved_path) : NULL;
 		free(saved_path);
 	}
 }
 
 /* Get or create an entity state for a given path and watch */
-entity_state_t *state_table_get(state_table_t *table, const char *path, entity_type_t type, watch_entry_t *watch) {
+entity_t *state_get(state_t *table, const char *path, kind_t kind, watch_t *watch) {
 	if (!table || !path || !watch || !table->buckets) {
-		log_message(ERROR, "Invalid arguments to state_table_get");
+		log_message(ERROR, "Invalid arguments to state_get");
 		return NULL;
 	}
 
@@ -188,64 +187,64 @@ entity_state_t *state_table_get(state_table_t *table, const char *path, entity_t
 		return NULL;
 	}
 
-	unsigned int hash = hash_path(path, table->bucket_count);
+	unsigned int hash = state_hash_path(path, table->bucket_count);
 	
 	/* Lock the mutex*/
 	pthread_mutex_lock(&table->mutex);
 	
-	path_state_t *ps = table->buckets[hash];
+	node_t *node = table->buckets[hash];
 
-	/* Find existing path_state */
-	while (ps) {
-		if (strcmp(ps->path, path) == 0) {
+	/* Find existing node */
+	while (node) {
+		if (strcmp(node->path, path) == 0) {
 			break;
 		}
-		ps = ps->bucket_next;
+		node = node->next;
 	}
 
-	/* If path_state not found, create it */
-	if (!ps) {
-		ps = calloc(1, sizeof(path_state_t));
-		if (!ps) {
-			log_message(ERROR, "Failed to allocate memory for path_state: %s", path);
+	/* If node not found, create it */
+	if (!node) {
+		node = calloc(1, sizeof(node_t));
+		if (!node) {
+			log_message(ERROR, "Failed to allocate memory for node: %s", path);
 			pthread_mutex_unlock(&table->mutex);
 			return NULL;
 		}
-		ps->path = strdup(path);
-		if (!ps->path) {
-			log_message(ERROR, "Failed to duplicate path for path_state: %s", path);
-			free(ps);
+		node->path = strdup(path);
+		if (!node->path) {
+			log_message(ERROR, "Failed to duplicate path for node: %s", path);
+			free(node);
 			pthread_mutex_unlock(&table->mutex);
 			return NULL;
 		}
-		ps->bucket_next = table->buckets[hash];
-		table->buckets[hash] = ps;
+		node->next = table->buckets[hash];
+		table->buckets[hash] = node;
 	}
 
-	/* Find existing entity_state for this watch */
-	entity_state_t *state = ps->entity_head;
+	/* Find existing entity for this watch */
+	entity_t *state = node->entities;
 	while (state) {
 		if (strcmp(state->watch->name, watch->name) == 0) {
-			if (state->type == ENTITY_UNKNOWN && type != ENTITY_UNKNOWN) {
-				state->type = type;
+			if (state->kind == ENTITY_UNKNOWN && kind != ENTITY_UNKNOWN) {
+				state->kind = kind;
 			}
 			pthread_mutex_unlock(&table->mutex);
 			return state;
 		}
-		state = state->path_next;
+		state = state->next;
 	}
 
 	/* Check if we have an existing state for this path to copy stats from */
-	entity_state_t *existing_state_for_path = ps->entity_head;
+	entity_t *existing_state = node->entities;
 
-	/* Create new entity_state */
-	state = calloc(1, sizeof(entity_state_t));
+	/* Create new entity */
+	state = calloc(1, sizeof(entity_t));
 	if (!state) {
-		log_message(ERROR, "Failed to allocate memory for entity_state: %s", path);
-		/* If the path_state was newly created for this entity, free it to prevent a leak */
-		if (!ps->entity_head) {
-			table->buckets[hash] = ps->bucket_next;
-			free_path_state(ps);
+		log_message(ERROR, "Failed to allocate memory for entity: %s", path);
+		/* If the node was newly created for this entity, free it to prevent a leak */
+		if (!node->entities) {
+			table->buckets[hash] = node->next;
+			state_free_node(node);
 		}
 		pthread_mutex_unlock(&table->mutex);
 		return NULL;
@@ -254,57 +253,57 @@ entity_state_t *state_table_get(state_table_t *table, const char *path, entity_t
 	/* Initialize magic number for corruption detection */
 	state->magic = ENTITY_STATE_MAGIC;
 	
-	state->path_state = ps;
-	state->type = type;
+	state->node = node;
+	state->kind = kind;
 	state->watch = watch;
 
-	struct stat st;
-	state->exists = (stat(path, &st) == 0);
+	struct stat info;
+	state->exists = (stat(path, &info) == 0);
 
 	/* Determine entity type from stat if needed */
-	if (type == ENTITY_UNKNOWN && state->exists) {
-		if (S_ISDIR(st.st_mode)) state->type = ENTITY_DIRECTORY;
-		else if (S_ISREG(st.st_mode)) state->type = ENTITY_FILE;
-	} else if (type != ENTITY_UNKNOWN) {
-		state->type = type;
+	if (kind == ENTITY_UNKNOWN && state->exists) {
+		if (S_ISDIR(info.st_mode)) state->kind = ENTITY_DIRECTORY;
+		else if (S_ISREG(info.st_mode)) state->kind = ENTITY_FILE;
+	} else if (kind != ENTITY_UNKNOWN) {
+		state->kind = kind;
 	}
 
-	clock_gettime(CLOCK_MONOTONIC, &state->last_update);
+	clock_gettime(CLOCK_MONOTONIC, &state->last_time);
 	clock_gettime(CLOCK_REALTIME, &state->wall_time);
-	state->trigger_path = NULL;
+	state->trigger = NULL;
 
-	init_tracking(state, watch);
+	state_init_tracking(state, watch);
 	state->command_time = 0;
-	state->last_op_time.tv_sec = 0;
-	state->last_op_time.tv_nsec = 0;
+	state->op_time.tv_sec = 0;
+	state->op_time.tv_nsec = 0;
 
 	/* If an existing state for this path was found, copy its stats */
-	if (existing_state_for_path) {
+	if (existing_state) {
 		log_message(DEBUG, "Copying stats from existing state for path %s (watch: %s)",
-		        			path, existing_state_for_path->watch->name);
-		copy_state(state, existing_state_for_path);
+		        			path, existing_state->watch->name);
+		state_copy(state, existing_state);
 	} else {
 		/* This is the first state for this path, initialize stats from scratch */
-		if (state->type == ENTITY_DIRECTORY && state->exists) {
+		if (state->kind == ENTITY_DIRECTORY && state->exists) {
 			/* Create stability state for directories */
-			state->stability = stability_state_create();
+			state->stability = stability_create();
 			if (!state->stability) {
-				free_entity_state(state);
-				if (!ps->entity_head) {
-					table->buckets[hash] = ps->bucket_next;
-					free_path_state(ps);
+				state_free_entity(state);
+				if (!node->entities) {
+					table->buckets[hash] = node->next;
+					state_free_node(node);
 				}
 				pthread_mutex_unlock(&table->mutex);
 				return NULL;
 			}
 
-			if (scanner_scan(path, &state->stability->dir_stats)) {
-				state->stability->prev_stats = state->stability->dir_stats;
+			if (scanner_scan(path, &state->stability->stats)) {
+				state->stability->prev_stats = state->stability->stats;
 				log_message(DEBUG, "Initial baseline established for %s: files=%d, dirs=%d, depth=%d, size=%s",
-				          			path, state->stability->dir_stats.tree_files, state->stability->dir_stats.tree_dirs,
-				           			state->stability->dir_stats.max_depth, format_size((ssize_t)state->stability->dir_stats.tree_size, false));
+				          			path, state->stability->stats.tree_files, state->stability->stats.tree_dirs,
+				           			state->stability->stats.max_depth, format_size((ssize_t)state->stability->stats.tree_size, false));
 
-				state->stability->reference_stats = state->stability->dir_stats;
+				state->stability->ref_stats = state->stability->stats;
 				state->stability->reference_init = true;
 			} else {
 				log_message(WARNING, "Failed to gather initial stats for directory: %s", path);
@@ -312,9 +311,9 @@ entity_state_t *state_table_get(state_table_t *table, const char *path, entity_t
 		}
 	}
 
-	/* Add to the path_state's list */
-	state->path_next = ps->entity_head;
-	ps->entity_head = state;
+	/* Add to the node's list */
+	state->next = node->entities;
+	node->entities = state;
 
 	log_message(DEBUG, "Created new state for path=%s, watch=%s", path, watch->name);
 	

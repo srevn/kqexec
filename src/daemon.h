@@ -8,7 +8,7 @@
 
 /* Function prototypes */
 bool daemon_start(config_t *config);
-bool daemon_setup_signals(void);
-void daemon_set_monitor(monitor_t *monitor);
+bool daemon_signals(void);
+void daemon_monitor(monitor_t *monitor);
 
 #endif /* DAEMON_H */

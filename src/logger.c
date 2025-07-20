@@ -8,7 +8,7 @@
 #include "logger.h"
 
 /* Global log level */
-static log_level_t current_log_level = NOTICE;
+static loglevel_t current_log_level = NOTICE;
 
 /* Flag indicating whether syslog is initialized */
 static int syslog_initialized = 0;
@@ -20,7 +20,7 @@ static int console_output = 0;
 static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* Initialize logging */
-void log_init(const char *ident, int facility, log_level_t level, int use_console) {
+void log_init(const char *ident, int facility, loglevel_t level, int use_console) {
 	current_log_level = level;
 	console_output = use_console;
 
@@ -38,7 +38,7 @@ void log_close(void) {
 }
 
 /* Log a message */
-void log_message(log_level_t level, const char *format, ...) {
+void log_message(loglevel_t level, const char *format, ...) {
 	va_list args;
 
 	/* Check if we should log this message */
@@ -62,12 +62,12 @@ void log_message(log_level_t level, const char *format, ...) {
 	/* Also log to console if requested */
 	if (console_output || !syslog_initialized) {
 		char timestamp[32];
-		time_t now;
+		time_t current_time;
 		struct tm tm_now;
 
 		/* Get current time */
-		time(&now);
-		localtime_r(&now, &tm_now);
+		time(&current_time);
+		localtime_r(&current_time, &tm_now);
 		strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", &tm_now);
 
 		/* Print to stderr */

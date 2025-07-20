@@ -7,9 +7,6 @@
 #include "config.h"
 #include "logger.h"
 
-/* Maximum line length in config file */
-#define MAX_LINE_LEN 1024
-
 /* Trim whitespace from a string */
 static char *trim(char *str) {
 	if (str == NULL) {
@@ -41,7 +38,7 @@ static char *trim(char *str) {
 }
 
 /* Parse event type string */
-bool config_parse_events(const char *events_str, event_type_t *events) {
+bool config_events(const char *events_str, filter_t *events) {
 	*events = EVENT_NONE;
 	char *events_copy, *token, *saveptr;
 
@@ -80,7 +77,7 @@ bool config_parse_events(const char *events_str, event_type_t *events) {
 }
 
 /* Convert event type to string representation */
-const char *event_type_to_string(event_type_t event) {
+const char *filter_to_string(filter_t event) {
 	if (event == EVENT_NONE) return "NONE";
 
 	/* Handle composite event types by listing all that apply */
@@ -117,13 +114,13 @@ config_t *config_create(void) {
 	config->daemon_mode = false;
 	config->syslog_level = NOTICE;
 	config->watches = NULL;
-	config->watch_count = 0;
+	config->num_watches = 0;
 
 	return config;
 }
 
 /* Free a watch entry */
-static void watch_entry_destroy(watch_entry_t *watch) {
+static void watch_entry_destroy(watch_t *watch) {
 	if (watch == NULL) {
 		return;
 	}
@@ -140,9 +137,9 @@ void config_destroy(config_t *config) {
 		return;
 	}
 
-	free(config->config_file);
+	free(config->config_path);
 
-	for (int i = 0; i < config->watch_count; i++) {
+	for (int i = 0; i < config->num_watches; i++) {
 		watch_entry_destroy(config->watches[i]);
 	}
 
@@ -151,11 +148,11 @@ void config_destroy(config_t *config) {
 }
 
 /* Add a watch entry to the configuration */
-static bool config_add_watch(config_t *config, watch_entry_t *watch) {
-	watch_entry_t **new_watches;
+static bool config_add_watch(config_t *config, watch_t *watch) {
+	watch_t **new_watches;
 
 	/* Check for duplicate watch names */
-	for (int i = 0; i < config->watch_count; i++) {
+	for (int i = 0; i < config->num_watches; i++) {
 		if (config->watches[i] && config->watches[i]->name && watch->name &&
 		    strcmp(config->watches[i]->name, watch->name) == 0) {
 			log_message(ERROR, "Duplicate watch name '%s' found in configuration", watch->name);
@@ -163,29 +160,29 @@ static bool config_add_watch(config_t *config, watch_entry_t *watch) {
 		}
 	}
 
-	new_watches = realloc(config->watches, (config->watch_count + 1) * sizeof(watch_entry_t *));
+	new_watches = realloc(config->watches, (config->num_watches + 1) * sizeof(watch_t *));
 	if (new_watches == NULL) {
 		log_message(ERROR, "Failed to allocate memory for watch entry");
 		return false;
 	}
 
 	config->watches = new_watches;
-	config->watches[config->watch_count] = watch;
-	config->watch_count++;
+	config->watches[config->num_watches] = watch;
+	config->num_watches++;
 
 	return true;
 }
 
 /* Parse the configuration file */
-bool config_parse_file(config_t *config, const char *filename) {
+bool config_parse(config_t *config, const char *filename) {
 	FILE *fp;
 	char line[MAX_LINE_LEN];
-	section_state_t state = SECTION_NONE;
-	watch_entry_t *current_watch = NULL;
+	section_t state = SECTION_NONE;
+	watch_t *current_watch = NULL;
 	int line_number = 0;
 
 	if (config == NULL || filename == NULL) {
-		log_message(ERROR, "Invalid arguments to config_parse_file");
+		log_message(ERROR, "Invalid arguments to config_parse");
 		return false;
 	}
 
@@ -196,7 +193,7 @@ bool config_parse_file(config_t *config, const char *filename) {
 		return false;
 	}
 
-	config->config_file = strdup(filename);
+	config->config_path = strdup(filename);
 
 	while (fgets(line, sizeof(line), fp) != NULL) {
 		char *str;
@@ -285,7 +282,7 @@ bool config_parse_file(config_t *config, const char *filename) {
 					return false;
 				}
 
-				if (current_watch->events == EVENT_NONE) {
+				if (current_watch->filter == EVENT_NONE) {
 					log_message(ERROR, "Missing or invalid events in section [%s]", current_watch->name);
 					watch_entry_destroy(current_watch);
 					fclose(fp);
@@ -308,7 +305,7 @@ bool config_parse_file(config_t *config, const char *filename) {
 			}
 
 			/* Start a new section */
-			current_watch = calloc(1, sizeof(watch_entry_t));
+			current_watch = calloc(1, sizeof(watch_t));
 			if (current_watch == NULL) {
 				log_message(ERROR, "Failed to allocate memory for watch entry");
 				fclose(fp);
@@ -352,13 +349,13 @@ bool config_parse_file(config_t *config, const char *filename) {
 			value = trim(value);
 
 			if (strcasecmp(key, "file") == 0) {
-				current_watch->type = WATCH_FILE;
+				current_watch->target = WATCH_FILE;
 				current_watch->path = strdup(value);
 			} else if (strcasecmp(key, "directory") == 0) {
-				current_watch->type = WATCH_DIRECTORY;
+				current_watch->target = WATCH_DIRECTORY;
 				current_watch->path = strdup(value);
 			} else if (strcasecmp(key, "events") == 0) {
-				if (!config_parse_events(value, &current_watch->events)) {
+				if (!config_events(value, &current_watch->filter)) {
 					log_message(ERROR, "Invalid value for %s at line %d: %s", key,
 										line_number, value);
 					watch_entry_destroy(current_watch);
@@ -465,7 +462,7 @@ bool config_parse_file(config_t *config, const char *filename) {
 			return false;
 		}
 
-		if (current_watch->events == EVENT_NONE) {
+		if (current_watch->filter == EVENT_NONE) {
 			log_message(ERROR, "Missing or invalid events in section [%s]", current_watch->name);
 			watch_entry_destroy(current_watch);
 			fclose(fp);
@@ -490,7 +487,7 @@ bool config_parse_file(config_t *config, const char *filename) {
 	fclose(fp);
 
 	/* Check if we have at least one watch entry */
-	if (config->watch_count == 0) {
+	if (config->num_watches == 0) {
 		log_message(ERROR, "No valid watch entries found in config file");
 		return false;
 	}

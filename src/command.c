@@ -25,10 +25,10 @@
 /* Global array of active command intents */
 #define MAX_INTENTS 10
 static int intent_count = 0;
-static command_intent_t command_intents[MAX_INTENTS];
+static intent_t intents[MAX_INTENTS];
 
 /* Debounce time in milliseconds */
-static int debounce_time_ms = DEFAULT_DEBOUNCE_TIME_MS;
+static int debounce_ms = DEFAULT_DEBOUNCE_TIME_MS;
 
 /* SIGCHLD handler to reap child processes and mark command intents as complete */
 static void command_sigchld(int sig) {
@@ -44,7 +44,7 @@ static void command_sigchld(int sig) {
 
 	while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
 		/* Mark the command intent as complete */
-		command_intent_complete(pid);
+		intent_complete(pid);
 	}
 
 	/* Restore original signal mask */
@@ -64,20 +64,20 @@ bool command_init(void) {
 	}
 
 	/* Initialize thread pool */
-	if (!thread_pool_init()) {
+	if (!threads_init()) {
 		log_message(ERROR, "Failed to initialize thread pool");
 		return false;
 	}
 
 	/* Initialize command intent tracking */
-	memset(command_intents, 0, sizeof(command_intents));
+	memset(intents, 0, sizeof(intents));
 	intent_count = 0;
 
 	return true;
 }
 
 /* Clean up command intent tracking */
-void command_intent_cleanup(void) {
+void intent_cleanup(void) {
 	sigset_t mask, oldmask;
 
 	/* Block SIGCHLD to prevent race condition with signal handler */
@@ -86,15 +86,15 @@ void command_intent_cleanup(void) {
 	sigprocmask(SIG_BLOCK, &mask, &oldmask);
 
 	for (int i = 0; i < MAX_INTENTS; i++) {
-		if (command_intents[i].active && command_intents[i].affected_paths) {
-			for (int j = 0; j < command_intents[i].affected_path_count; j++) {
-				free(command_intents[i].affected_paths[j]);
+		if (intents[i].active && intents[i].paths) {
+			for (int j = 0; j < intents[i].num_paths; j++) {
+				free(intents[i].paths[j]);
 			}
-			free(command_intents[i].affected_paths);
-			command_intents[i].affected_paths = NULL;
+			free(intents[i].paths);
+			intents[i].paths = NULL;
 		}
 	}
-	memset(command_intents, 0, sizeof(command_intents));
+	memset(intents, 0, sizeof(intents));
 	intent_count = 0;
 
 	/* Restore previous signal mask */
@@ -103,36 +103,36 @@ void command_intent_cleanup(void) {
 
 /* Check if a path is affected by any active command */
 bool command_affects(const char *path) {
-	time_t now;
-	time(&now);
+	time_t current_time;
+	time(&current_time);
 	sigset_t mask, oldmask;
 
-	/* Block SIGCHLD while accessing command_intents array */
+	/* Block SIGCHLD while accessing intents array */
 	sigemptyset(&mask);
 	sigaddset(&mask, SIGCHLD);
 	pthread_sigmask(SIG_BLOCK, &mask, &oldmask);
 
 	/* Iterate through all active command intents */
 	for (int i = 0; i < MAX_INTENTS; i++) {
-		if (!command_intents[i].active) continue;
+		if (!intents[i].active) continue;
 
 		/* Check if the command has expired */
-		if (now > command_intents[i].expected_end_time) {
+		if (current_time > intents[i].expire) {
 			log_message(DEBUG, "Command intent %d expired", i);
 
 			/* Mark as inactive but don't free memory here to prevent race conditions */
-			command_intents[i].active = false;
+			intents[i].active = false;
 			intent_count--;
 			continue;
 		}
 
 		/* Check if the path matches any affected path */
-		if (!command_intents[i].affected_paths) {
+		if (!intents[i].paths) {
 			continue;
 		}
 
-		for (int j = 0; j < command_intents[i].affected_path_count; j++) {
-			const char *affected_path = command_intents[i].affected_paths[j];
+		for (int j = 0; j < intents[i].num_paths; j++) {
+			const char *affected_path = intents[i].paths[j];
 
 			if (!affected_path) {
 				continue;
@@ -140,8 +140,7 @@ bool command_affects(const char *path) {
 
 			/* Check for exact match */
 			if (strcmp(path, affected_path) == 0) {
-				log_message(DEBUG, "Path %s is directly affected by command %d",
-				            path, i);
+				log_message(DEBUG, "Path %s is directly affected by command %d", path, i);
 				/* Restore signal mask before returning */
 				pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
 				return true;
@@ -175,10 +174,10 @@ bool command_affects(const char *path) {
 }
 
 /* Clean up expired command intents - call this periodically and safely */
-void command_intent_expire(void) {
+void intent_expire(void) {
 	sigset_t mask, oldmask;
-	time_t now;
-	time(&now);
+	time_t current_time;
+	time(&current_time);
 
 	/* Block SIGCHLD to prevent race condition with signal handler */
 	sigemptyset(&mask);
@@ -186,26 +185,26 @@ void command_intent_expire(void) {
 	sigprocmask(SIG_BLOCK, &mask, &oldmask);
 
 	for (int i = 0; i < MAX_INTENTS; i++) {
-		if (!command_intents[i].active) continue;
+		if (!intents[i].active) continue;
 
 		/* Check if the command has expired */
-		if (now > command_intents[i].expected_end_time) {
+		if (current_time > intents[i].expire) {
 			/* Free affected paths memory */
-			if (command_intents[i].affected_paths) {
-				for (int j = 0; j < command_intents[i].affected_path_count; j++) {
-					if (command_intents[i].affected_paths[j]) {
-						free(command_intents[i].affected_paths[j]);
-						command_intents[i].affected_paths[j] = NULL;
+			if (intents[i].paths) {
+				for (int j = 0; j < intents[i].num_paths; j++) {
+					if (intents[i].paths[j]) {
+						free(intents[i].paths[j]);
+						intents[i].paths[j] = NULL;
 					}
 				}
-				free(command_intents[i].affected_paths);
-				command_intents[i].affected_paths = NULL;
+				free(intents[i].paths);
+				intents[i].paths = NULL;
 			}
-			command_intents[i].affected_path_count = 0;
+			intents[i].num_paths = 0;
 
 			/* Mark as inactive if not already */
-			if (command_intents[i].active) {
-				command_intents[i].active = false;
+			if (intents[i].active) {
+				intents[i].active = false;
 				intent_count--;
 			}
 		}
@@ -216,18 +215,18 @@ void command_intent_expire(void) {
 }
 
 /* Analyze a command to determine what paths it will affect */
-command_intent_t *command_intent_create(pid_t pid, const char *command, const char *base_path) {
+intent_t *intent_create(pid_t pid, const char *command, const char *base_path) {
 	sigset_t mask, oldmask;
 
-	/* Block SIGCHLD while accessing command_intents array */
+	/* Block SIGCHLD while accessing intents array */
 	sigemptyset(&mask);
 	sigaddset(&mask, SIGCHLD);
 	pthread_sigmask(SIG_BLOCK, &mask, &oldmask);
 
-	/* Find a free slot in the command_intents array */
+	/* Find a free slot in the intents array */
 	int slot = -1;
 	for (int i = 0; i < MAX_INTENTS; i++) {
-		if (!command_intents[i].active) {
+		if (!intents[i].active) {
 			slot = i;
 			break;
 		}
@@ -241,24 +240,24 @@ command_intent_t *command_intent_create(pid_t pid, const char *command, const ch
 	}
 
 	/* Initialize the command intent */
-	command_intent_t *intent = &command_intents[slot];
-	memset(intent, 0, sizeof(command_intent_t));
-	intent->command_pid = pid;
-	time(&intent->start_time);
+	intent_t *intent = &intents[slot];
+	memset(intent, 0, sizeof(intent_t));
+	intent->pid = pid;
+	time(&intent->start);
 
 	/* Set a default expected end time (10 seconds) */
-	intent->expected_end_time = intent->start_time + 10;
+	intent->expire = intent->start + 10;
 
 	/* Allocate memory for affected paths */
-	intent->affected_paths = calloc(MAX_AFFECTED_PATHS, sizeof(char *));
-	if (!intent->affected_paths) {
+	intent->paths = calloc(MAX_AFFECTED_PATHS, sizeof(char *));
+	if (!intent->paths) {
 		log_message(ERROR, "Failed to allocate memory for affected paths");
 		return NULL;
 	}
 
 	/* Add the base path as the first affected path */
-	intent->affected_paths[0] = strdup(base_path);
-	intent->affected_path_count = 1;
+	intent->paths[0] = strdup(base_path);
+	intent->num_paths = 1;
 
 	/* Simple command analysis - parse the command for common operations */
 	/* Check for file moves */
@@ -296,16 +295,16 @@ command_intent_t *command_intent_create(pid_t pid, const char *command, const ch
 
 						/* Add the target path if it's not already in the list */
 						bool already_added = false;
-						for (int j = 0; j < intent->affected_path_count; j++) {
-							if (strcmp(intent->affected_paths[j], path) == 0) {
+						for (int j = 0; j < intent->num_paths; j++) {
+							if (strcmp(intent->paths[j], path) == 0) {
 								already_added = true;
 								break;
 							}
 						}
 
-						if (!already_added && intent->affected_path_count < MAX_AFFECTED_PATHS) {
-							intent->affected_paths[intent->affected_path_count] = strdup(path);
-							intent->affected_path_count++;
+						if (!already_added && intent->num_paths < MAX_AFFECTED_PATHS) {
+							intent->paths[intent->num_paths] = strdup(path);
+							intent->num_paths++;
 							log_message(DEBUG, "Added target path %s to affected paths", path);
 						}
 					}
@@ -326,7 +325,7 @@ command_intent_t *command_intent_create(pid_t pid, const char *command, const ch
 	intent->active = true;
 	intent_count++;
 
-	log_message(DEBUG, "Created command intent for PID %d with %d affected paths", pid, intent->affected_path_count);
+	log_message(DEBUG, "Created command intent for PID %d with %d affected paths", pid, intent->num_paths);
 
 	/* Restore signal mask before returning */
 	pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
@@ -334,33 +333,33 @@ command_intent_t *command_intent_create(pid_t pid, const char *command, const ch
 }
 
 /* Mark a command intent as complete */
-bool command_intent_complete(pid_t pid) {
+bool intent_complete(pid_t pid) {
 	sigset_t mask, oldmask;
 
-	/* Block SIGCHLD while accessing command_intents array */
+	/* Block SIGCHLD while accessing intents array */
 	sigemptyset(&mask);
 	sigaddset(&mask, SIGCHLD);
 	pthread_sigmask(SIG_BLOCK, &mask, &oldmask);
 
 	for (int i = 0; i < MAX_INTENTS; i++) {
-		if (command_intents[i].active && command_intents[i].command_pid == pid) {
-			command_intents[i].active = false;
+		if (intents[i].active && intents[i].pid == pid) {
+			intents[i].active = false;
 			intent_count--;
 
 			log_message(DEBUG, "Marked command intent for PID %d as complete", pid);
 
 			/* Free affected paths */
-			if (command_intents[i].affected_paths) {
-				for (int j = 0; j < command_intents[i].affected_path_count; j++) {
-					if (command_intents[i].affected_paths[j]) {
-						free(command_intents[i].affected_paths[j]);
-						command_intents[i].affected_paths[j] = NULL;
+			if (intents[i].paths) {
+				for (int j = 0; j < intents[i].num_paths; j++) {
+					if (intents[i].paths[j]) {
+						free(intents[i].paths[j]);
+						intents[i].paths[j] = NULL;
 					}
 				}
-				free(command_intents[i].affected_paths);
-				command_intents[i].affected_paths = NULL;
+				free(intents[i].paths);
+				intents[i].paths = NULL;
 			}
-			command_intents[i].affected_path_count = 0;
+			intents[i].num_paths = 0;
 
 			/* Restore signal mask before returning */
 			pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
@@ -376,14 +375,14 @@ bool command_intent_complete(pid_t pid) {
 /* Set debounce time */
 void command_debounce_time(int milliseconds) {
 	if (milliseconds >= 0) {
-		debounce_time_ms = milliseconds;
-		log_message(INFO, "Command debounce time set to %d ms", debounce_time_ms);
+		debounce_ms = milliseconds;
+		log_message(INFO, "Command debounce time set to %d ms", debounce_ms);
 	}
 }
 
 /* Get debounce time */
 int command_get_debounce_time(void) {
-	return debounce_time_ms;
+	return debounce_ms;
 }
 
 /* Helper function to substitute a placeholder in a string */
@@ -416,7 +415,7 @@ static void command_substitute(char *result, const char *placeholder, const char
  * %u: User who triggered the event
  * %e: Event type which occurred
  */
-char *command_placeholders(monitor_t *monitor, const watch_entry_t *watch, const char *command, const file_event_t *event) {
+char *command_placeholders(monitor_t *monitor, const watch_t *watch, const char *command, const event_t *event) {
 	char *result;
 	char time_str[64];
 	char user_str[64];
@@ -424,7 +423,7 @@ char *command_placeholders(monitor_t *monitor, const watch_entry_t *watch, const
 	char *event_str;
 	struct passwd *pwd;
 	struct tm tm;
-	struct stat st;
+	struct stat info;
 
 	if (command == NULL || event == NULL || watch == NULL) {
 		return NULL;
@@ -474,22 +473,22 @@ char *command_placeholders(monitor_t *monitor, const watch_entry_t *watch, const
 	}
 
 	/* Get entity state for size and trigger file placeholders */
-	entity_state_t *state = state_table_get(monitor->states, event->path, ENTITY_UNKNOWN, (watch_entry_t *) watch);
+	entity_t *state = state_get(monitor->states, event->path, ENTITY_UNKNOWN, (watch_t *) watch);
 
 	/* Substitute %f and %F with trigger file path and name */
 	if (strstr(result, "%f") || strstr(result, "%F")) {
-		const char *trigger_path = event->path; /* Default to event path */
+		const char *trigger = event->path; /* Default to event path */
 		if (state) {
-			entity_state_t *root_state = stability_root(monitor, state);
-			if (root_state && root_state->trigger_path) {
-				trigger_path = root_state->trigger_path;
+			entity_t *root = stability_root(monitor, state);
+			if (root && root->trigger) {
+				trigger = root->trigger;
 			}
 		}
 
-		command_substitute(result, "%f", trigger_path);
+		command_substitute(result, "%f", trigger);
 
 		if (strstr(result, "%F")) {
-			char *path_copy = strdup(trigger_path);
+			char *path_copy = strdup(trigger);
 			if (path_copy) {
 				command_substitute(result, "%F", basename(path_copy));
 				free(path_copy);
@@ -526,11 +525,11 @@ char *command_placeholders(monitor_t *monitor, const watch_entry_t *watch, const
 	/* Handle size placeholders %s and %S */
 	if (strstr(result, "%s") || strstr(result, "%S")) {
 		size_t size = 0;
-		if (state && state->type == ENTITY_DIRECTORY) {
-			entity_state_t *size_state = stability_root(monitor, state);
-			size = size_state ? size_state->stability->dir_stats.tree_size : state->stability->dir_stats.tree_size;
-		} else if (stat(event->path, &st) == 0) {
-			size = st.st_size;
+		if (state && state->kind == ENTITY_DIRECTORY) {
+			entity_t *size_state = stability_root(monitor, state);
+			size = size_state ? size_state->stability->stats.tree_size : state->stability->stats.tree_size;
+		} else if (stat(event->path, &info) == 0) {
+			size = info.st_size;
 		}
 
 		snprintf(size_str, sizeof(size_str), "%zu", size);
@@ -553,7 +552,7 @@ char *command_placeholders(monitor_t *monitor, const watch_entry_t *watch, const
 	command_substitute(result, "%u", user_str);
 
 	/* Substitute %e with the event type */
-	event_str = (char *) event_type_to_string(event->type);
+	event_str = (char *) filter_to_string(event->type);
 	command_substitute(result, "%e", event_str);
 
 	return result;
@@ -580,10 +579,10 @@ static bool buffer_append(char ***buffer, int *count, int *capacity, const char 
 }
 
 /* Flush buffered output */
-static void buffer_flush(const watch_entry_t *watch, char **buffer, int count) {
-	if (count == 0) return;
+static void buffer_flush(const watch_t *watch, char **buffer, int buffer_count) {
+	if (buffer_count == 0) return;
 
-	for (int i = 0; i < count; i++) {
+	for (int i = 0; i < buffer_count; i++) {
 		if (buffer[i]) {
 			log_message(NOTICE, "[%s]: %s", watch->name, buffer[i]);
 		}
@@ -591,7 +590,7 @@ static void buffer_flush(const watch_entry_t *watch, char **buffer, int count) {
 }
 
 /* Command execution synchronous or asynchronous */
-bool command_execute(monitor_t *monitor, const watch_entry_t *watch, const file_event_t *event, bool synchronous) {
+bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *event, bool synchronous) {
 	if (watch == NULL || event == NULL) {
 		log_message(ERROR, "Invalid arguments to command_execute");
 		return false;
@@ -599,7 +598,7 @@ bool command_execute(monitor_t *monitor, const watch_entry_t *watch, const file_
 
 	/* For asynchronous execution, delegate to thread pool */
 	if (!synchronous) {
-		return thread_pool_submit(monitor, watch, event);
+		return threads_submit(monitor, watch, event);
 	}
 
 	/* Synchronous execution with robust output capture */
@@ -608,7 +607,7 @@ bool command_execute(monitor_t *monitor, const watch_entry_t *watch, const file_
 	int stdout_pipe[2] = {-1, -1}, stderr_pipe[2] = {-1, -1};
 	bool capture_output = watch->log_output;
 	bool buffer_output = watch->buffer_output;
-	time_t start_time, end_time;
+	time_t start, end_time;
 
 	/* Output buffering variables */
 	char **output_buffer = NULL;
@@ -622,7 +621,7 @@ bool command_execute(monitor_t *monitor, const watch_entry_t *watch, const file_
 	}
 
 	/* Record start time */
-	time(&start_time);
+	time(&start);
 
 	/* Substitute placeholders in the command */
 	command = command_placeholders(monitor, watch, watch->command, event);
@@ -686,7 +685,7 @@ bool command_execute(monitor_t *monitor, const watch_entry_t *watch, const file_
 	}
 
 	/* Parent process - create command intent */
-	command_intent_create(pid, command, event->path);
+	intent_create(pid, command, event->path);
 
 	/* Read and log output if configured - robust version */
 	if (capture_output) {
@@ -796,7 +795,7 @@ bool command_execute(monitor_t *monitor, const watch_entry_t *watch, const file_
 	waitpid(pid, &status, 0);
 
 	/* Mark the command intent as complete immediately */
-	command_intent_complete(pid);
+	intent_complete(pid);
 
 	/* Restore previous signal mask */
 	sigprocmask(SIG_SETMASK, &oldmask, NULL);
@@ -817,10 +816,10 @@ bool command_execute(monitor_t *monitor, const watch_entry_t *watch, const file_
 
 	/* Log command completion */
 	log_message(INFO, "[%s] Finished execution (pid %d, duration: %lds, exit: %d)",
-	        		   watch->name, pid, end_time - start_time, WEXITSTATUS(status));
+	        		   watch->name, pid, end_time - start, WEXITSTATUS(status));
 
 	/* Mark the entity state with the command execution */
-	entity_state_t *state = state_table_get(monitor->states, event->path, ENTITY_UNKNOWN, (watch_entry_t *) watch);
+	entity_t *state = state_get(monitor->states, event->path, ENTITY_UNKNOWN, (watch_t *) watch);
 	if (state) {
 		state->command_time = time(NULL);
 	}
@@ -830,7 +829,7 @@ bool command_execute(monitor_t *monitor, const watch_entry_t *watch, const file_
 }
 
 /* Set environment variables for command execution */
-void command_environment(monitor_t *monitor, const watch_entry_t *watch, const file_event_t *event) {
+void command_environment(monitor_t *monitor, const watch_t *watch, const event_t *event) {
 	char buffer[1024];
 	struct passwd *pwd;
 	struct tm tm;
@@ -840,7 +839,7 @@ void command_environment(monitor_t *monitor, const watch_entry_t *watch, const f
 	}
 
 	/* KQ_EVENT_TYPE - event type which occurred */
-	setenv("KQ_EVENT_TYPE", event_type_to_string(event->type), 1);
+	setenv("KQ_EVENT_TYPE", filter_to_string(event->type), 1);
 
 	/* KQ_TRIGGER_PATH - full path where the event occurred */
 	setenv("KQ_TRIGGER_PATH", event->path, 1);
@@ -874,11 +873,11 @@ void command_environment(monitor_t *monitor, const watch_entry_t *watch, const f
 
 	/* KQ_TRIGGER_FILE_PATH - full path of the file that triggered the event */
 	const char *trigger_file_path = event->path; /* Default to event path */
-	entity_state_t *state = state_table_get(monitor->states, event->path, ENTITY_UNKNOWN, (watch_entry_t *) watch);
+	entity_t *state = state_get(monitor->states, event->path, ENTITY_UNKNOWN, (watch_t *) watch);
 	if (state) {
-		entity_state_t *root_state = stability_root(monitor, state);
-		if (root_state && root_state->trigger_path) {
-			trigger_file_path = root_state->trigger_path;
+		entity_t *root = stability_root(monitor, state);
+		if (root && root->trigger) {
+			trigger_file_path = root->trigger;
 		}
 	}
 	setenv("KQ_TRIGGER_FILE_PATH", trigger_file_path, 1);
@@ -914,11 +913,11 @@ void command_environment(monitor_t *monitor, const watch_entry_t *watch, const f
 /* Clean up command subsystem */
 void command_cleanup(void) {
 	/* Wait for all pending commands to complete */
-	thread_pool_wait_all();
+	threads_wait_all();
 
 	/* Destroy thread pool */
-	thread_pool_destroy();
+	threads_destroy();
 
 	/* Clean up command intents */
-	command_intent_cleanup();
+	intent_cleanup();
 }

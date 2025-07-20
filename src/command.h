@@ -12,29 +12,33 @@
 #define MAX_AFFECTED_PATH_LEN 1024         /* Maximum length of an affected path */
 
 /* Command intent tracking structure */
-typedef struct {
-	pid_t command_pid;                     /* Process ID of the executed command */
-	time_t start_time;                     /* When the command started */
-	time_t expected_end_time;              /* Estimated completion time */
-	char **affected_paths;                 /* Paths that will be affected by this command */
-	int affected_path_count;               /* Number of affected paths */
+typedef struct intent {
+	pid_t pid;                             /* Process ID of the executed command */
+	time_t start;                          /* When the command started */
+	time_t expire;                         /* Estimated completion time */
+	char **paths;                          /* Paths that will be affected by this command */
+	int num_paths;                         /* Number of affected paths */
 	bool active;                           /* Whether this intent is still active */
-} command_intent_t;
+} intent_t;
 
-/* Function prototypes */
+/* Command system lifecycle */
 bool command_init(void);
-int command_get_debounce_time(void);
-void command_debounce_time(int milliseconds);
-bool command_execute(monitor_t *monitor, const watch_entry_t *watch, const file_event_t *event, bool synchronous);
-char *command_placeholders(monitor_t *monitor, const watch_entry_t *watch, const char *command, const file_event_t *event);
-void command_environment(monitor_t *monitor, const watch_entry_t *watch, const file_event_t *event);
 void command_cleanup(void);
 
-/* Function prototypes for command intent tracking */
-void command_intent_cleanup(void);
-void command_intent_expire(void);
-command_intent_t *command_intent_create(pid_t pid, const char *command, const char *base_path);
-bool command_intent_complete(pid_t pid);
+/* Debounce configuration */
+int command_get_debounce_time(void);
+void command_debounce_time(int milliseconds);
+
+/* Command execution */
+bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *event, bool synchronous);
+char *command_placeholders(monitor_t *monitor, const watch_t *watch, const char *command, const event_t *event);
+void command_environment(monitor_t *monitor, const watch_t *watch, const event_t *event);
+
+/* Intent tracking management */
+intent_t *intent_create(pid_t pid, const char *command, const char *base_path);
+bool intent_complete(pid_t pid);
+void intent_expire(void);
+void intent_cleanup(void);
 bool command_affects(const char *path);
 
 #endif /* COMMAND_H */

@@ -10,23 +10,23 @@
 #include "logger.h"
 
 /* Add a watch to a queue entry */
-bool queue_watch_add(deferred_check_t *entry, watch_entry_t *watch) {
+bool queue_watch_add(check_t *entry, watch_t *watch) {
 	if (!entry || !watch) {
 		log_message(ERROR, "Invalid parameters for queue_watch_add");
 		return false;
 	}
 
 	/* Check if this watch is already in the array */
-	for (int i = 0; i < entry->watch_count; i++) {
+	for (int i = 0; i < entry->num_watches; i++) {
 		if (entry->watches && entry->watches[i] == watch) {
 			return true; /* Already present */
 		}
 	}
 
 	/* Ensure capacity */
-	if (entry->watch_count >= entry->watch_capacity) {
+	if (entry->num_watches >= entry->watch_capacity) {
 		int new_capacity = entry->watch_capacity == 0 ? 4 : entry->watch_capacity * 2;
-		watch_entry_t **new_watches = realloc(entry->watches, new_capacity * sizeof(watch_entry_t *));
+		watch_t **new_watches = realloc(entry->watches, new_capacity * sizeof(watch_t *));
 		if (!new_watches) {
 			log_message(ERROR, "Failed to resize watches array in queue entry");
 			return false;
@@ -35,18 +35,18 @@ bool queue_watch_add(deferred_check_t *entry, watch_entry_t *watch) {
 		entry->watch_capacity = new_capacity;
 
 		/* Zero out new memory */
-		if (entry->watch_count < new_capacity) {
-			memset(&entry->watches[entry->watch_count], 0, (new_capacity - entry->watch_count) * sizeof(watch_entry_t *));
+		if (entry->num_watches < new_capacity) {
+			memset(&entry->watches[entry->num_watches], 0, (new_capacity - entry->num_watches) * sizeof(watch_t *));
 		}
 	}
 
 	/* Add the new watch */
-	entry->watches[entry->watch_count++] = watch;
+	entry->watches[entry->num_watches++] = watch;
 	return true;
 }
 
 /* Cleanup the priority queue */
-void queue_destroy(defer_queue_t *queue) {
+void queue_destroy(queue_t *queue) {
 	if (!queue) return;
 
 	/* Free path strings and watch arrays */
@@ -61,7 +61,7 @@ void queue_destroy(defer_queue_t *queue) {
 		}
 
 		/* Clear the struct to prevent double-free issues */
-		memset(&queue->items[i], 0, sizeof(deferred_check_t));
+		memset(&queue->items[i], 0, sizeof(check_t));
 	}
 
 	free(queue->items);
@@ -71,17 +71,17 @@ void queue_destroy(defer_queue_t *queue) {
 }
 
 /* Initialize the priority queue */
-defer_queue_t *queue_create(int initial_capacity) {
+queue_t *queue_create(int initial_capacity) {
 	if (initial_capacity < 8) initial_capacity = 8;
 
-	defer_queue_t *queue = calloc(1, sizeof(defer_queue_t));
+	queue_t *queue = calloc(1, sizeof(queue_t));
 	if (!queue) {
 		log_message(ERROR, "Failed to allocate memory for queue structure");
 		return NULL;
 	}
 
 	/* Allocate memory for the queue items and zero it out */
-	queue->items = calloc(initial_capacity, sizeof(deferred_check_t));
+	queue->items = calloc(initial_capacity, sizeof(check_t));
 	if (!queue->items) {
 		log_message(ERROR, "Failed to allocate memory for deferred check queue");
 		free(queue);
@@ -106,23 +106,23 @@ int time_compare(struct timespec *a, struct timespec *b) {
 }
 
 /* Restore heap property upward */
-void heap_up(deferred_check_t *queue, int index) {
-	if (!queue || index <= 0) return;
+void heap_up(check_t *queue, int heap_index) {
+	if (!queue || heap_index <= 0) return;
 
-	int parent = (index - 1) / 2;
+	int parent = (heap_index - 1) / 2;
 
 	/* Ensure both queue entries have valid paths to avoid crash */
-	if (!queue[index].path || !queue[parent].path) {
-		log_message(WARNING, "Heapify up encountered invalid path at index %d or parent %d", index, parent);
+	if (!queue[heap_index].path || !queue[parent].path) {
+		log_message(WARNING, "Heapify up encountered invalid path at index %d or parent %d", heap_index, parent);
 		return;
 	}
 
-	if (time_compare(&queue[index].next_check, &queue[parent].next_check) < 0) {
+	if (time_compare(&queue[heap_index].next_check, &queue[parent].next_check) < 0) {
 		/* Swap with parent using a temporary copy */
-		deferred_check_t temp;
-		memcpy(&temp, &queue[index], sizeof(deferred_check_t));
-		memcpy(&queue[index], &queue[parent], sizeof(deferred_check_t));
-		memcpy(&queue[parent], &temp, sizeof(deferred_check_t));
+		check_t temp;
+		memcpy(&temp, &queue[heap_index], sizeof(check_t));
+		memcpy(&queue[heap_index], &queue[parent], sizeof(check_t));
+		memcpy(&queue[parent], &temp, sizeof(check_t));
 
 		/* Recursively heapify up */
 		heap_up(queue, parent);
@@ -130,23 +130,23 @@ void heap_up(deferred_check_t *queue, int index) {
 }
 
 /* Restore heap property downward */
-void heap_down(deferred_check_t *queue, int size, int index) {
-	if (!queue || index < 0 || size <= 0 || index >= size) {
+void heap_down(check_t *queue, int queue_size, int heap_index) {
+	if (!queue || heap_index < 0 || queue_size <= 0 || heap_index >= queue_size) {
 		return;
 	}
 
-	int smallest = index;
-	int left = 2 * index + 1;
-	int right = 2 * index + 2;
+	int smallest = heap_index;
+	int left = 2 * heap_index + 1;
+	int right = 2 * heap_index + 2;
 
 	/* First validate that the current entry has a valid path */
-	if (!queue[index].path) {
-		log_message(WARNING, "Heapify down encountered NULL path at index %d", index);
+	if (!queue[heap_index].path) {
+		log_message(WARNING, "Heapify down encountered NULL path at index %d", heap_index);
 		return;
 	}
 
 	/* Check left child with validation */
-	if (left < size) {
+	if (left < queue_size) {
 		if (!queue[left].path) {
 			log_message(WARNING, "Left child at index %d has NULL path", left);
 		} else if (time_compare(&queue[left].next_check, &queue[smallest].next_check) < 0) {
@@ -155,7 +155,7 @@ void heap_down(deferred_check_t *queue, int size, int index) {
 	}
 
 	/* Check right child with validation */
-	if (right < size) {
+	if (right < queue_size) {
 		if (!queue[right].path) {
 			log_message(WARNING, "Right child at index %d has NULL path", right);
 		} else if (time_compare(&queue[right].next_check, &queue[smallest].next_check) < 0) {
@@ -163,20 +163,20 @@ void heap_down(deferred_check_t *queue, int size, int index) {
 		}
 	}
 
-	if (smallest != index) {
+	if (smallest != heap_index) {
 		/* Swap with smallest child using a temporary copy to properly preserve pointers */
-		deferred_check_t temp;
-		memcpy(&temp, &queue[index], sizeof(deferred_check_t));
-		memcpy(&queue[index], &queue[smallest], sizeof(deferred_check_t));
-		memcpy(&queue[smallest], &temp, sizeof(deferred_check_t));
+		check_t temp;
+		memcpy(&temp, &queue[heap_index], sizeof(check_t));
+		memcpy(&queue[heap_index], &queue[smallest], sizeof(check_t));
+		memcpy(&queue[smallest], &temp, sizeof(check_t));
 
 		/* Recursively heapify down */
-		heap_down(queue, size, smallest);
+		heap_down(queue, queue_size, smallest);
 	}
 }
 
 /* Find a queue entry by path */
-int queue_find(defer_queue_t *queue, const char *path) {
+int queue_find(queue_t *queue, const char *path) {
 	if (!queue || !queue->items) {
 		return -1;
 	}
@@ -206,19 +206,19 @@ int queue_find(defer_queue_t *queue, const char *path) {
 }
 
 /* Add or update an entry in the queue */
-void queue_upsert(defer_queue_t *queue, const char *path,
-                  watch_entry_t *watch, struct timespec next_check) {
+void queue_upsert(queue_t *queue, const char *path,
+                  watch_t *watch, struct timespec next_check) {
 	if (!queue || !queue->items || !path || !watch) {
 		log_message(WARNING, "Invalid parameters for queue_upsert");
 		return;
 	}
 
 	/* Check if entry already exists for this path (regardless of watch) */
-	int index = queue_find(queue, path);
+	int queue_index = queue_find(queue, path);
 
-	if (index >= 0) {
+	if (queue_index >= 0) {
 		/* Entry exists - update it */
-		deferred_check_t *entry = &queue->items[index];
+		check_t *entry = &queue->items[queue_index];
 
 		/* Add this watch if not already present */
 		if (!queue_watch_add(entry, watch)) {
@@ -229,8 +229,8 @@ void queue_upsert(defer_queue_t *queue, const char *path,
 		entry->next_check = next_check;
 
 		/* Restore heap property by trying both up and down heapify */
-		heap_up(queue->items, index);
-		heap_down(queue->items, queue->size, index);
+		heap_up(queue->items, queue_index);
+		heap_down(queue->items, queue->size, queue_index);
 
 		log_message(DEBUG, "Updated check time for %s (new time: %ld.%09ld)",
 		        			path, (long) next_check.tv_sec, next_check.tv_nsec);
@@ -243,7 +243,7 @@ void queue_upsert(defer_queue_t *queue, const char *path,
 	if (queue->size >= queue->capacity) {
 		int old_capacity = queue->capacity;
 		int new_capacity = old_capacity == 0 ? 8 : old_capacity * 2;
-		deferred_check_t *new_items = realloc(queue->items, new_capacity * sizeof(deferred_check_t));
+		check_t *new_items = realloc(queue->items, new_capacity * sizeof(check_t));
 		if (!new_items) {
 			log_message(ERROR, "Failed to resize deferred check queue");
 			return;
@@ -253,7 +253,7 @@ void queue_upsert(defer_queue_t *queue, const char *path,
 
 		/* Zero out new memory */
 		if (new_capacity > old_capacity) {
-			memset(&queue->items[old_capacity], 0, (new_capacity - old_capacity) * sizeof(deferred_check_t));
+			memset(&queue->items[old_capacity], 0, (new_capacity - old_capacity) * sizeof(check_t));
 		}
 	}
 
@@ -268,15 +268,15 @@ void queue_upsert(defer_queue_t *queue, const char *path,
 	}
 
 	/* Clear the new entry first to avoid garbage data */
-	memset(&queue->items[new_index], 0, sizeof(deferred_check_t));
+	memset(&queue->items[new_index], 0, sizeof(check_t));
 
 	queue->items[new_index].path = path_copy;
 	queue->items[new_index].next_check = next_check;
 	queue->items[new_index].watches = NULL;
-	queue->items[new_index].watch_count = 0;
+	queue->items[new_index].num_watches = 0;
 	queue->items[new_index].watch_capacity = 0;
-	queue->items[new_index].in_verification = false;
-	queue->items[new_index].scheduled_period = 0;
+	queue->items[new_index].verifying = false;
+	queue->items[new_index].scheduled_quiet = 0;
 
 	/* Add the watch */
 	if (!queue_watch_add(&queue->items[new_index], watch)) {
@@ -296,62 +296,62 @@ void queue_upsert(defer_queue_t *queue, const char *path,
 }
 
 /* Remove an entry from the queue */
-void queue_remove(defer_queue_t *queue, const char *path) {
+void queue_remove(queue_t *queue, const char *path) {
 	if (!queue || !queue->items || queue->size <= 0) return;
 
-	int index;
+	int queue_index;
 
 	/* Special case for empty path - handle corrupted queue entry removal */
 	if (!path || path[0] == '\0') {
 		/* Find first entry with NULL path */
-		for (index = 0; index < queue->size; index++) {
-			if (!queue->items[index].path) {
-				log_message(WARNING, "Removing corrupted queue entry at index %d", index);
+		for (queue_index = 0; queue_index < queue->size; queue_index++) {
+			if (!queue->items[queue_index].path) {
+				log_message(WARNING, "Removing corrupted queue entry at index %d", queue_index);
 				break;
 			}
 		}
-		if (index >= queue->size) {
+		if (queue_index >= queue->size) {
 			/* No corrupted entries found */
 			return;
 		}
 	} else {
 		/* Normal case - find by path */
-		index = queue_find(queue, path);
-		if (index < 0) return; /* Not found */
+		queue_index = queue_find(queue, path);
+		if (queue_index < 0) return; /* Not found */
 	}
 
 	/* Store a copy of the path for logging if available */
 	char path_copy[PATH_MAX] = "<corrupted>";
-	if (queue->items[index].path) {
-		strncpy(path_copy, queue->items[index].path, PATH_MAX - 1);
+	if (queue->items[queue_index].path) {
+		strncpy(path_copy, queue->items[queue_index].path, PATH_MAX - 1);
 		path_copy[PATH_MAX - 1] = '\0';
 	}
 
 	/* Free resources */
-	if (queue->items[index].path) {
-		free(queue->items[index].path);
-		queue->items[index].path = NULL;
+	if (queue->items[queue_index].path) {
+		free(queue->items[queue_index].path);
+		queue->items[queue_index].path = NULL;
 	}
 
-	if (queue->items[index].watches) {
-		free(queue->items[index].watches);
-		queue->items[index].watches = NULL;
+	if (queue->items[queue_index].watches) {
+		free(queue->items[queue_index].watches);
+		queue->items[queue_index].watches = NULL;
 	}
 
 	/* Replace with the last element and restore heap property */
 	queue->size--;
-	if (index < queue->size) {
+	if (queue_index < queue->size) {
 		/* Move the last element to the removed position */
-		memcpy(&queue->items[index], &queue->items[queue->size], sizeof(deferred_check_t));
+		memcpy(&queue->items[queue_index], &queue->items[queue->size], sizeof(check_t));
 
 		/* Clear the last element which was just moved */
-		memset(&queue->items[queue->size], 0, sizeof(deferred_check_t));
+		memset(&queue->items[queue->size], 0, sizeof(check_t));
 
 		/* Restore heap property for the moved element */
-		heap_down(queue->items, queue->size, index);
+		heap_down(queue->items, queue->size, queue_index);
 	} else {
 		/* Removed the last element, just clear it */
-		memset(&queue->items[index], 0, sizeof(deferred_check_t));
+		memset(&queue->items[queue_index], 0, sizeof(check_t));
 	}
 
 	log_message(DEBUG, "Removed deferred check for %s", path_copy);

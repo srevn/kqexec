@@ -17,47 +17,72 @@
 #include "logger.h"
 #include "events.h"
 
+/* Create a scanner state */
+scanner_t *scanner_create(const char *path) {
+	scanner_t *scanner = calloc(1, sizeof(scanner_t));
+	if (!scanner) {
+		log_message(ERROR, "Failed to allocate scanner state");
+		return NULL;
+	}
+	
+	scanner->sample_count = 0;
+	scanner->sample_index = 0;
+	scanner->active = false;
+	scanner->active_path = path ? strdup(path) : NULL;
+	clock_gettime(CLOCK_MONOTONIC, &scanner->latest_time);
+	
+	return scanner;
+}
+
+/* Destroy a scanner state */
+void scanner_destroy(scanner_t *scanner) {
+	if (scanner) {
+		free(scanner->active_path);
+		free(scanner);
+	}
+}
+
 /* Update cumulative changes based on current vs. previous stats */
-void scanner_update(entity_state_t *state) {
-	if (!state || !state->path_state || !state->stability) return;
+void scanner_update(entity_t *state) {
+	if (!state || !state->node || !state->stability) return;
 
 	/* Calculate incremental changes */
-	int new_file_change, new_dir_change, new_depth_change;
-	ssize_t new_size_change;
+	int new_files, new_dirs, new_depth;
+	ssize_t new_size;
 	
 	/* Calculate the difference from previous stats */
-	new_file_change = state->stability->dir_stats.tree_files - state->stability->prev_stats.tree_files;
-	new_dir_change = state->stability->dir_stats.tree_dirs - state->stability->prev_stats.tree_dirs;
-	new_depth_change = state->stability->dir_stats.max_depth - state->stability->prev_stats.max_depth;
-	new_size_change = (ssize_t)state->stability->dir_stats.tree_size - (ssize_t)state->stability->prev_stats.tree_size;
+	new_files = state->stability->stats.tree_files - state->stability->prev_stats.tree_files;
+	new_dirs = state->stability->stats.tree_dirs - state->stability->prev_stats.tree_dirs;
+	new_depth = state->stability->stats.max_depth - state->stability->prev_stats.max_depth;
+	new_size = (ssize_t)state->stability->stats.tree_size - (ssize_t)state->stability->prev_stats.tree_size;
 
 
 	/* Accumulate changes */
-	state->stability->cumulative_file += new_file_change;
-	state->stability->cumulative_dirs += new_dir_change;
-	state->stability->cumulative_depth += new_depth_change;
-	state->stability->cumulative_size += new_size_change;
+	state->stability->delta_files += new_files;
+	state->stability->delta_dirs += new_dirs;
+	state->stability->delta_depth += new_depth;
+	state->stability->delta_size += new_size;
 
 	/* Set flag indicating stability was lost if we're detecting new changes */
-	bool activity_active = state->activity ? state->activity->activity_active : false;
-	if (!activity_active && (new_file_change != 0 || new_dir_change != 0 || new_depth_change != 0 || new_size_change != 0)) {
+	bool active = state->scanner ? state->scanner->active : false;
+	if (!active && (new_files != 0 || new_dirs != 0 || new_depth != 0 || new_size != 0)) {
 		state->stability->stability_lost = true;
 	}
 
 	/* Log significant cumulative changes */
-	if (new_file_change != 0 || new_dir_change != 0 || new_depth_change != 0 || new_size_change != 0) {
+	if (new_files != 0 || new_dirs != 0 || new_depth != 0 || new_size != 0) {
 		log_message(DEBUG, "Updated cumulative changes for %s: files=%+d (%+d), dirs=%+d (%+d), depth=%+d (%+d), size=%s (%s)",
-		            		state->path_state->path, state->stability->cumulative_file, new_file_change, state->stability->cumulative_dirs,
-							new_dir_change, state->stability->cumulative_depth, new_depth_change, format_size(state->stability->cumulative_size, true),
-							format_size(new_size_change, true));
+		            		state->node->path, state->stability->delta_files, new_files, state->stability->delta_dirs,
+							new_dirs, state->stability->delta_depth, new_depth, format_size(state->stability->delta_size, true),
+							format_size(new_size, true));
 	}
 }
 
 /* Gather basic directory statistics */
-bool scanner_scan(const char *dir_path, dir_stats_t *stats) {
+bool scanner_scan(const char *dir_path, stats_t *stats) {
 	DIR *dir;
-	struct dirent *entry;
-	struct stat st;
+	struct dirent *dirent;
+	struct stat info;
 	char path[PATH_MAX];
 
 	if (!dir_path || !stats) {
@@ -65,7 +90,7 @@ bool scanner_scan(const char *dir_path, dir_stats_t *stats) {
 	}
 
 	/* Initialize stats with recursive fields */
-	memset(stats, 0, sizeof(dir_stats_t));
+	memset(stats, 0, sizeof(stats_t));
 
 	dir = opendir(dir_path);
 	if (!dir) {
@@ -73,61 +98,61 @@ bool scanner_scan(const char *dir_path, dir_stats_t *stats) {
 		return false;
 	}
 
-	time_t now;
-	time(&now);
+	time_t current_time;
+	time(&current_time);
 
-	while ((entry = readdir(dir))) {
+	while ((dirent = readdir(dir))) {
 		/* Skip . and .. */
-		if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+		if (strcmp(dirent->d_name, ".") == 0 || strcmp(dirent->d_name, "..") == 0) {
 			continue;
 		}
 
-		snprintf(path, sizeof(path), "%s/%s", dir_path, entry->d_name);
+		snprintf(path, sizeof(path), "%s/%s", dir_path, dirent->d_name);
 
-		if (stat(path, &st) != 0) {
+		if (stat(path, &info) != 0) {
 			/* Skip files that can't be stat'd but continue processing */
 			continue;
 		}
 
-		if (S_ISREG(st.st_mode)) {
-			stats->file_count++;
-			stats->direct_size += st.st_size;
+		if (S_ISREG(info.st_mode)) {
+			stats->local_files++;
+			stats->local_size += info.st_size;
 
 			/* Update latest modification time */
-			if (st.st_mtime > stats->last_mtime) {
-				stats->last_mtime = st.st_mtime;
+			if (info.st_mtime > stats->last_mtime) {
+				stats->last_mtime = info.st_mtime;
 			}
-		} else if (S_ISDIR(st.st_mode)) {
-			stats->dir_count++;
+		} else if (S_ISDIR(info.st_mode)) {
+			stats->local_dirs++;
 
-			dir_stats_t subdir_stats;
-			if (scanner_scan(path, &subdir_stats)) {
+			stats_t sub_stats;
+			if (scanner_scan(path, &sub_stats)) {
 				/* Update maximum tree depth based on subdirectory scan results */
-				if (subdir_stats.depth + 1 > stats->depth) {
-					stats->depth = subdir_stats.depth + 1;
+				if (sub_stats.depth + 1 > stats->depth) {
+					stats->depth = sub_stats.depth + 1;
 				}
 
 				/* Calculate and update recursive stats by summing up from subdirectories */
-				stats->tree_files += subdir_stats.tree_files;
-				stats->tree_dirs += subdir_stats.tree_dirs;
-				stats->tree_size += subdir_stats.tree_size;
+				stats->tree_files += sub_stats.tree_files;
+				stats->tree_dirs += sub_stats.tree_dirs;
+				stats->tree_size += sub_stats.tree_size;
 
 				/* Update max_depth considering subdirectory's max depth */
-				if (subdir_stats.max_depth + 1 > stats->max_depth) {
-					stats->max_depth = subdir_stats.max_depth + 1;
+				if (sub_stats.max_depth + 1 > stats->max_depth) {
+					stats->max_depth = sub_stats.max_depth + 1;
 				}
 
-				if (subdir_stats.last_mtime > stats->last_mtime) {
-					stats->last_mtime = subdir_stats.last_mtime;
+				if (sub_stats.last_mtime > stats->last_mtime) {
+					stats->last_mtime = sub_stats.last_mtime;
 				}
 			}
 		}
 	}
 
 	/* Ensure recursive stats include direct stats at this level */
-	stats->tree_files += stats->file_count;
-	stats->tree_dirs += stats->dir_count;
-	stats->tree_size += stats->direct_size;
+	stats->tree_files += stats->local_files;
+	stats->tree_dirs += stats->local_dirs;
+	stats->tree_size += stats->local_size;
 
 	/* If max_depth is not set, use depth */
 	if (stats->max_depth == 0 && stats->depth > 0) {
@@ -139,7 +164,7 @@ bool scanner_scan(const char *dir_path, dir_stats_t *stats) {
 }
 
 /* Compare two directory statistics to check for stability */
-bool scanner_compare(dir_stats_t *prev, dir_stats_t *current) {
+bool scanner_compare(stats_t *prev, stats_t *current) {
 	if (!prev || !current) return false;
 
 	/* Calculate content changes using recursive stats for a complete view of the tree */
@@ -203,7 +228,7 @@ bool scanner_compare(dir_stats_t *prev, dir_stats_t *current) {
 	}
 
 	/* Check for temporary files */
-	if (current->has_temps) {
+	if (current->temp_files) {
 		log_message(DEBUG, "Directory unstable: temporary files detected");
 		is_stable = false;
 	}
@@ -218,19 +243,19 @@ bool scanner_compare(dir_stats_t *prev, dir_stats_t *current) {
 }
 
 /* Collect statistics about a directory and its contents, and determine stability */
-bool scanner_stable(entity_state_t *context_state, const char *dir_path, dir_stats_t *stats) {
+bool scanner_stable(entity_t *context, const char *dir_path, stats_t *stats) {
 	DIR *dir;
-	struct dirent *entry;
-	struct stat st;
+	struct dirent *dirent;
+	struct stat info;
 	char path[PATH_MAX];
 	bool is_stable = true; /* Assume stable until proven otherwise */
 
-	if (!dir_path || !stats || !context_state) {
+	if (!dir_path || !stats || !context) {
 		return false;
 	}
 
 	/* Initialize stats including the new recursive fields */
-	memset(stats, 0, sizeof(dir_stats_t));
+	memset(stats, 0, sizeof(stats_t));
 
 	dir = opendir(dir_path);
 	if (!dir) {
@@ -238,18 +263,18 @@ bool scanner_stable(entity_state_t *context_state, const char *dir_path, dir_sta
 		return false; /* Cannot scan, so not stable */
 	}
 
-	time_t now;
-	time(&now);
+	time_t current_time;
+	time(&current_time);
 
-	while ((entry = readdir(dir))) {
+	while ((dirent = readdir(dir))) {
 		/* Skip . and .. */
-		if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+		if (strcmp(dirent->d_name, ".") == 0 || strcmp(dirent->d_name, "..") == 0) {
 			continue;
 		}
 
-		snprintf(path, sizeof(path), "%s/%s", dir_path, entry->d_name);
+		snprintf(path, sizeof(path), "%s/%s", dir_path, dirent->d_name);
 
-		if (stat(path, &st) != 0) {
+		if (stat(path, &info) != 0) {
 			/* If a file disappears during scan, the directory is not stable */
 			log_message(DEBUG, "Directory %s unstable: file disappeared during scan (%s)", dir_path, path);
 			is_stable = false;
@@ -257,63 +282,63 @@ bool scanner_stable(entity_state_t *context_state, const char *dir_path, dir_sta
 		}
 
 		/* Look for temporary files or recent changes */
-		if (S_ISREG(st.st_mode)) {
-			stats->file_count++;
-			stats->direct_size += st.st_size; /* Always accumulate size */
+		if (S_ISREG(info.st_mode)) {
+			stats->local_files++;
+			stats->local_size += info.st_size; /* Always accumulate size */
 
 			/* Update latest modification time */
-			if (st.st_mtime > stats->last_mtime) {
-				stats->last_mtime = st.st_mtime;
+			if (info.st_mtime > stats->last_mtime) {
+				stats->last_mtime = info.st_mtime;
 			}
 
 			/* Check for very recent file modifications (< 1 seconds) */
-			if (difftime(now, st.st_mtime) < 1.0) {
+			if (difftime(current_time, info.st_mtime) < 1.0) {
 				log_message(DEBUG, "Directory %s unstable: recent file modification (%s, %.1f seconds ago)",
-				        			dir_path, entry->d_name, difftime(now, st.st_mtime));
-				stats->has_temps = true;
+				        			dir_path, dirent->d_name, difftime(current_time, info.st_mtime));
+				stats->temp_files = true;
 				is_stable = false; /* Mark as unstable but continue scanning */
 			}
-		} else if (S_ISDIR(st.st_mode)) {
-			stats->dir_count++;
+		} else if (S_ISDIR(info.st_mode)) {
+			stats->local_dirs++;
 
 			/* Skip hidden directories if configured */
-			if (!context_state->watch->hidden && entry->d_name[0] == '.') {
+			if (!context->watch->hidden && dirent->d_name[0] == '.') {
 				continue;
 			}
 
-			dir_stats_t subdir_stats;
-			if (!scanner_stable(context_state, path, &subdir_stats)) {
+			stats_t sub_stats;
+			if (!scanner_stable(context, path, &sub_stats)) {
 				is_stable = false; /* Propagate instability from subdirectories */
 			}
 
 			/* Update maximum tree depth based on subdirectory scan results */
-			if (subdir_stats.depth + 1 > stats->depth) {
-				stats->depth = subdir_stats.depth + 1;
+			if (sub_stats.depth + 1 > stats->depth) {
+				stats->depth = sub_stats.depth + 1;
 			}
 
 			/* Check for temp files */
-			stats->has_temps |= subdir_stats.has_temps;
+			stats->temp_files |= sub_stats.temp_files;
 
 			/* Update recursive stats by summing up from subdirectories */
-			stats->tree_files += subdir_stats.tree_files;
-			stats->tree_dirs += subdir_stats.tree_dirs;
-			stats->tree_size += subdir_stats.tree_size;
+			stats->tree_files += sub_stats.tree_files;
+			stats->tree_dirs += sub_stats.tree_dirs;
+			stats->tree_size += sub_stats.tree_size;
 
 			/* Update max_depth considering subdirectory's max depth */
-			if (subdir_stats.max_depth + 1 > stats->max_depth) {
-				stats->max_depth = subdir_stats.max_depth + 1;
+			if (sub_stats.max_depth + 1 > stats->max_depth) {
+				stats->max_depth = sub_stats.max_depth + 1;
 			}
 
-			if (subdir_stats.last_mtime > stats->last_mtime) {
-				stats->last_mtime = subdir_stats.last_mtime;
+			if (sub_stats.last_mtime > stats->last_mtime) {
+				stats->last_mtime = sub_stats.last_mtime;
 			}
 		}
 	}
 
 	/* Ensure recursive stats include direct stats at this level */
-	stats->tree_files += stats->file_count;
-	stats->tree_dirs += stats->dir_count;
-	stats->tree_size += stats->direct_size;
+	stats->tree_files += stats->local_files;
+	stats->tree_dirs += stats->local_dirs;
+	stats->tree_size += stats->local_size;
 
 	/* If max_depth is not set, use depth */
 	if (stats->max_depth == 0 && stats->depth > 0) {
@@ -325,9 +350,9 @@ bool scanner_stable(entity_state_t *context_state, const char *dir_path, dir_sta
 }
 
 /* Synchronize activity states for all watches on a given path */
-void scanner_sync(monitor_t *monitor, path_state_t *path_state, entity_state_t *trigger_state) {
-	if (!path_state || !trigger_state || states_corrupted(trigger_state)) {
-		if (trigger_state && states_corrupted(trigger_state)) {
+void scanner_sync(monitor_t *monitor, node_t *node, entity_t *source) {
+	if (!node || !source || state_corrupted(source)) {
+		if (source && state_corrupted(source)) {
 			log_message(WARNING, "Skipping synchronization due to corrupted trigger state");
 		}
 		return;
@@ -340,15 +365,15 @@ void scanner_sync(monitor_t *monitor, path_state_t *path_state, entity_state_t *
 	
 	pthread_mutex_lock(&monitor->states->mutex);
 
-	struct timespec sync_time = trigger_state->activity ? trigger_state->activity->tree_activity : trigger_state->last_update;
-	bool watch_active = trigger_state->activity ? trigger_state->activity->activity_active : false;
-	int max_unstable_count = trigger_state->stability ? trigger_state->stability->unstable_count : 0;
+	struct timespec sync_time = source->scanner ? source->scanner->latest_time : source->last_time;
+	bool watch_active = source->scanner ? source->scanner->active : false;
+	int max_unstable_count = source->stability ? source->stability->unstable_count : 0;
 
 	/* First pass: Find the most recent activity time and active status */
-	for (entity_state_t *state = path_state->entity_head; state; state = state->path_next) {
-		if (states_corrupted(state) || state == trigger_state) continue;
+	for (entity_t *state = node->entities; state; state = state->next) {
+		if (state_corrupted(state) || state == source) continue;
 
-		struct timespec state_tree_time = state->activity ? state->activity->tree_activity : state->last_update;
+		struct timespec state_tree_time = state->scanner ? state->scanner->latest_time : state->last_time;
 		if (state_tree_time.tv_sec > sync_time.tv_sec ||
 		    (state_tree_time.tv_sec == sync_time.tv_sec &&
 		     state_tree_time.tv_nsec > sync_time.tv_nsec)) {
@@ -357,9 +382,9 @@ void scanner_sync(monitor_t *monitor, path_state_t *path_state, entity_state_t *
 
 		/* If trigger state is active, merge values from other states.
 		 * Otherwise, we are resetting, so we don't merge. */
-		bool trigger_active = trigger_state->activity ? trigger_state->activity->activity_active : false;
-		if (trigger_active) {
-			bool state_active = state->activity ? state->activity->activity_active : false;
+		bool source_active = source->scanner ? source->scanner->active : false;
+		if (source_active) {
+			bool state_active = state->scanner ? state->scanner->active : false;
 			watch_active = watch_active || state_active;
 			int state_unstable = state->stability ? state->stability->unstable_count : 0;
 			if (state_unstable > max_unstable_count) {
@@ -369,75 +394,75 @@ void scanner_sync(monitor_t *monitor, path_state_t *path_state, entity_state_t *
 	}
 
 	/* Also update the trigger state's instability count to the max value */
-	if (trigger_state->stability) {
-		trigger_state->stability->unstable_count = max_unstable_count;
+	if (source->stability) {
+		source->stability->unstable_count = max_unstable_count;
 	}
 
 	/* Second pass: Update all states with consistent values */
-	for (entity_state_t *state = path_state->entity_head; state; state = state->path_next) {
-		if (states_corrupted(state)) continue;
+	for (entity_t *state = node->entities; state; state = state->next) {
+		if (state_corrupted(state)) continue;
 
-		if (state != trigger_state) {
+		if (state != source) {
 			log_message(DEBUG, "Synchronizing state for watch %s", state->watch->name);
 
 			/* Always share universal directory state regardless of watch configuration */
-			state->exists = trigger_state->exists;
-			state->last_update = trigger_state->last_update;
-			state->wall_time = trigger_state->wall_time;
+			state->exists = source->exists;
+			state->last_time = source->last_time;
+			state->wall_time = source->wall_time;
 			
 			/* Update activity state */
-			if (!state->activity && watch_active) {
-				state->activity = activity_state_create(state->path_state->path);
+			if (!state->scanner && watch_active) {
+				state->scanner = scanner_create(state->node->path);
 			}
-			if (state->activity) {
-				state->activity->tree_activity = sync_time;
-				state->activity->activity_active = watch_active;
+			if (state->scanner) {
+				state->scanner->latest_time = sync_time;
+				state->scanner->active = watch_active;
 			}
 			
 			/* Update stability state */
 			if (!state->stability && max_unstable_count > 0) {
-				state->stability = stability_state_create();
+				state->stability = stability_create();
 			}
 			if (state->stability) {
 				state->stability->unstable_count = max_unstable_count;
 			}
 
-			if (state->type == ENTITY_DIRECTORY && trigger_state->type == ENTITY_DIRECTORY) {
+			if (state->kind == ENTITY_DIRECTORY && source->kind == ENTITY_DIRECTORY) {
 				/* Only share directory statistics if scanning configurations are compatible */
-				bool stats_compatible = (state->watch->recursive == trigger_state->watch->recursive &&
-				                         state->watch->hidden == trigger_state->watch->hidden);
+				bool stats_compatible = (state->watch->recursive == source->watch->recursive &&
+				                         state->watch->hidden == source->watch->hidden);
 
-				if (stats_compatible && trigger_state->stability) {
+				if (stats_compatible && source->stability) {
 					/* Compatible watches: share statistics directly */
 					if (!state->stability) {
-						state->stability = stability_state_create();
+						state->stability = stability_create();
 					}
 					if (state->stability) {
-						state->stability->dir_stats = trigger_state->stability->dir_stats;
-						state->stability->prev_stats = trigger_state->stability->prev_stats;
-						state->stability->checks_count = trigger_state->stability->checks_count;
-						state->stability->checks_failed = trigger_state->stability->checks_failed;
-						state->stability->required_checks = trigger_state->stability->required_checks;
+						state->stability->stats = source->stability->stats;
+						state->stability->prev_stats = source->stability->prev_stats;
+						state->stability->checks_count = source->stability->checks_count;
+						state->stability->checks_failed = source->stability->checks_failed;
+						state->stability->checks_required = source->stability->checks_required;
 					}
-					if (trigger_state->stability && state->stability) {
-						state->stability->cumulative_file = trigger_state->stability->cumulative_file;
-						state->stability->cumulative_dirs = trigger_state->stability->cumulative_dirs;
-						state->stability->cumulative_depth = trigger_state->stability->cumulative_depth;
-						state->stability->cumulative_size = trigger_state->stability->cumulative_size;
-						state->stability->stability_lost = trigger_state->stability->stability_lost;
+					if (source->stability && state->stability) {
+						state->stability->delta_files = source->stability->delta_files;
+						state->stability->delta_dirs = source->stability->delta_dirs;
+						state->stability->delta_depth = source->stability->delta_depth;
+						state->stability->delta_size = source->stability->delta_size;
+						state->stability->stability_lost = source->stability->stability_lost;
 					}
 					log_message(DEBUG, "Shared directory statistics with compatible watch %s", state->watch->name);
 				} else {
 					/* Incompatible watches: rescan to get accurate statistics */
-					dir_stats_t new_stats;
-					if (scanner_scan(state->path_state->path, &new_stats)) {
+					stats_t new_stats;
+					if (scanner_scan(state->node->path, &new_stats)) {
 						/* Save previous stats for comparison and update with fresh scan */
 						if (!state->stability) {
-							state->stability = stability_state_create();
+							state->stability = stability_create();
 						}
 						if (state->stability) {
-							state->stability->prev_stats = state->stability->dir_stats;
-							state->stability->dir_stats = new_stats;
+							state->stability->prev_stats = state->stability->stats;
+							state->stability->stats = new_stats;
 						}
 						scanner_update(state);
 						log_message(DEBUG, "Rescanned directory for incompatible watch %s (recursive=%s, hidden=%s)", 
@@ -456,19 +481,19 @@ void scanner_sync(monitor_t *monitor, path_state_t *path_state, entity_state_t *
 }
 
 /* Record basic activity in circular buffer and update state */
-static void scanner_record(entity_state_t *state, operation_type_t op) {
+static void scanner_record(entity_t *state, optype_t op) {
 	/* Create activity state if needed */
-	if (!state->activity) {
-		state->activity = activity_state_create(state->path_state->path);
-		if (!state->activity) return;
+	if (!state->scanner) {
+		state->scanner = scanner_create(state->node->path);
+		if (!state->scanner) return;
 	}
 	
 	/* Store in circular buffer */
-	state->activity->recent_activity[state->activity->activity_index].timestamp = state->last_update;
-	state->activity->recent_activity[state->activity->activity_index].operation = op;
-	state->activity->activity_index = (state->activity->activity_index + 1) % MAX_SAMPLES;
-	if (state->activity->activity_count < MAX_SAMPLES) {
-		state->activity->activity_count++;
+	state->scanner->samples[state->scanner->sample_index].timestamp = state->last_time;
+	state->scanner->samples[state->scanner->sample_index].operation = op;
+	state->scanner->sample_index = (state->scanner->sample_index + 1) % MAX_SAMPLES;
+	if (state->scanner->sample_count < MAX_SAMPLES) {
+		state->scanner->sample_count++;
 	}
 
 	/* Reset stability check counter when new activity occurs */
@@ -477,29 +502,29 @@ static void scanner_record(entity_state_t *state, operation_type_t op) {
 	}
 
 	/* Update activity timestamp for this state, which is the basis for tree activity time */
-	state->activity->tree_activity = state->last_update;
+	state->scanner->latest_time = state->last_time;
 
 	/* Update the last activity path */
-	free(state->activity->active_path);
-	state->activity->active_path = strdup(state->path_state->path);
+	free(state->scanner->active_path);
+	state->scanner->active_path = strdup(state->node->path);
 }
 
 /* Update directory stats when content changes */
-static void scanner_update_stats(entity_state_t *state, operation_type_t op) {
-	if (op == OP_DIR_CONTENT_CHANGED && state->type == ENTITY_DIRECTORY) {
+static void scanner_update_stats(entity_t *state, optype_t op) {
+	if (op == OP_DIR_CONTENT_CHANGED && state->kind == ENTITY_DIRECTORY) {
 		/* Update directory stats immediately to reflect the change */
-		dir_stats_t new_stats;
-		if (scanner_scan(state->path_state->path, &new_stats)) {
+		stats_t new_stats;
+		if (scanner_scan(state->node->path, &new_stats)) {
 			/* Create stability state if needed */
 			if (!state->stability) {
-				state->stability = stability_state_create();
+				state->stability = stability_create();
 				if (!state->stability) return;
 			}
 			
 			/* Save previous stats for comparison */
-			state->stability->prev_stats = state->stability->dir_stats;
+			state->stability->prev_stats = state->stability->stats;
 			/* Update with new stats */
-			state->stability->dir_stats = new_stats;
+			state->stability->stats = new_stats;
 
 			/* Update cumulative changes */
 			scanner_update(state);
@@ -507,16 +532,16 @@ static void scanner_update_stats(entity_state_t *state, operation_type_t op) {
 
 		if (state->stability) {
 			log_message(DEBUG, "Directory stats for %s: files=%d, dirs=%d, max_depth=%d (was: files=%d, dirs=%d, max_depth=%d)",
-			            		state->path_state->path, state->stability->dir_stats.tree_files, state->stability->dir_stats.tree_dirs,
-			            		state->stability->dir_stats.max_depth, state->stability->prev_stats.tree_files, state->stability->prev_stats.tree_dirs,
-			            		state->stability->prev_stats.max_depth);
+			            		state->node->path, state->stability->stats.tree_files, state->stability->stats.tree_dirs,
+			            		state->stability->stats.max_depth, state->stability->prev_stats.tree_files,
+								state->stability->prev_stats.tree_dirs, state->stability->prev_stats.max_depth);
 		}
 	}
 }
 
 /* Propagate activity to all parent directories between entity and root */
-static void scanner_propagate(monitor_t *monitor, entity_state_t *state, entity_state_t *root, operation_type_t op, dir_stats_t *root_stats) {
-	char *path_copy = strdup(state->path_state->path);
+static void scanner_propagate(monitor_t *monitor, entity_t *state, entity_t *root, optype_t op, stats_t *root_stats) {
+	char *path_copy = strdup(state->node->path);
 	if (path_copy) {
 		/* Get parent directory path */
 		char *last_slash = strrchr(path_copy, '/');
@@ -529,79 +554,78 @@ static void scanner_propagate(monitor_t *monitor, entity_state_t *state, entity_
 			}
 
 			/* Update state for this parent directory */
-			entity_state_t *parent_state = state_table_get(monitor->states, path_copy, ENTITY_DIRECTORY, state->watch);
-			if (parent_state) {
+			entity_t *parent = state_get(monitor->states, path_copy, ENTITY_DIRECTORY, state->watch);
+			if (parent) {
 				/* Create activity state if needed */
-				if (!parent_state->activity) {
-					parent_state->activity = activity_state_create(parent_state->path_state->path);
+				if (!parent->scanner) {
+					parent->scanner = scanner_create(parent->node->path);
 				}
-				if (parent_state->activity) {
-					parent_state->activity->tree_activity = state->last_update;
-					free(parent_state->activity->active_path);
-					parent_state->activity->active_path = strdup(state->path_state->path);
-					parent_state->activity->activity_active = true;
+				if (parent->scanner) {
+					parent->scanner->latest_time = state->last_time;
+					free(parent->scanner->active_path);
+					parent->scanner->active_path = strdup(state->node->path);
+					parent->scanner->active = true;
 				}
 				
 				/* Create stability state if needed */
-				if (!parent_state->stability) {
-					parent_state->stability = stability_state_create();
+				if (!parent->stability) {
+					parent->stability = stability_create();
 				}
-				if (parent_state->stability) {
-					parent_state->stability->checks_count = 0;
+				if (parent->stability) {
+					parent->stability->checks_count = 0;
 				}
 
 				/* Reset stability_lost flag when activity becomes active to prevent repeated penalties */
-				if (parent_state->stability) {
-					parent_state->stability->stability_lost = false;
+				if (parent->stability) {
+					parent->stability->stability_lost = false;
 				}
 
 				/* Update directory stats for parent if this is a content change */
-				if (op == OP_DIR_CONTENT_CHANGED && parent_state->type == ENTITY_DIRECTORY) {
+				if (op == OP_DIR_CONTENT_CHANGED && parent->kind == ENTITY_DIRECTORY) {
 					/* For recursive watches within the same scope, propagate incremental changes */
-					bool within_recursive_scope = (root_stats && 
-					                               parent_state->watch->recursive &&
-					                               parent_state->watch == root->watch &&
+					bool in_scope = (root_stats && parent->watch->recursive &&
+					                               parent->watch == root->watch &&
 					                               strlen(path_copy) >= strlen(root->watch->path));
 					
-					if (within_recursive_scope && root->stability && parent_state->stability) {
-						if (parent_state != root) {
+					if (in_scope && root->stability && parent->stability) {
+						if (parent != root) {
 							/* Calculate incremental changes from root's current update */
-							int root_file_change = root->stability->dir_stats.tree_files - root->stability->prev_stats.tree_files;
-							int root_dir_change = root->stability->dir_stats.tree_dirs - root->stability->prev_stats.tree_dirs;
-							int root_depth_change = root->stability->dir_stats.max_depth - root->stability->prev_stats.max_depth;
-							ssize_t root_size_change = (ssize_t)root->stability->dir_stats.tree_size - (ssize_t)root->stability->prev_stats.tree_size;
+							int root_files = root->stability->stats.tree_files - root->stability->prev_stats.tree_files;
+							int root_dirs = root->stability->stats.tree_dirs - root->stability->prev_stats.tree_dirs;
+							int root_depth = root->stability->stats.max_depth - root->stability->prev_stats.max_depth;
+							ssize_t root_size = (ssize_t)root->stability->stats.tree_size - (ssize_t)root->stability->prev_stats.tree_size;
 							
 							/* Apply incremental changes to parent while preserving its absolute state */
-							parent_state->stability->prev_stats = parent_state->stability->dir_stats;
-							parent_state->stability->dir_stats.tree_files += root_file_change;
-							parent_state->stability->dir_stats.tree_dirs += root_dir_change;
-							parent_state->stability->dir_stats.max_depth = (root_depth_change > 0) ? 
-								parent_state->stability->dir_stats.max_depth + root_depth_change : 
-								parent_state->stability->dir_stats.max_depth;
-							parent_state->stability->dir_stats.tree_size += root_size_change;
+							parent->stability->prev_stats = parent->stability->stats;
+							parent->stability->stats.tree_files += root_files;
+							parent->stability->stats.tree_dirs += root_dirs;
+							parent->stability->stats.max_depth = (root_depth > 0) ? 
+								parent->stability->stats.max_depth + root_depth : 
+								parent->stability->stats.max_depth;
+							parent->stability->stats.tree_size += root_size;
 
 							/* Update cumulative changes */
-							scanner_update(parent_state);
+							scanner_update(parent);
 						}
 					} else {
 						/* Fall back to scanning for non-recursive or cross-scope parents */
-						dir_stats_t parent_new_stats;
-						if (scanner_scan(parent_state->path_state->path, &parent_new_stats)) {
-							if (!parent_state->stability) {
-								parent_state->stability = stability_state_create();
+						stats_t parent_new_stats;
+						if (scanner_scan(parent->node->path, &parent_new_stats)) {
+							if (!parent->stability) {
+								parent->stability = stability_create();
 							}
-							if (parent_state->stability) {
-								parent_state->stability->prev_stats = parent_state->stability->dir_stats;
-								parent_state->stability->dir_stats = parent_new_stats;
+							if (parent->stability) {
+								parent->stability->prev_stats = parent->stability->stats;
+								parent->stability->stats = parent_new_stats;
 
 								/* Update cumulative changes */
-								scanner_update(parent_state);
+								scanner_update(parent);
 							}
 						}
 					}
 				}
 
-				scanner_sync(monitor, parent_state->path_state, parent_state);
+				scanner_sync(monitor, parent->node, parent);
 			}
 
 			/* Move to next parent directory */
@@ -612,24 +636,24 @@ static void scanner_propagate(monitor_t *monitor, entity_state_t *state, entity_
 }
 
 /* Handle activity recording for recursive watches */
-static void scanner_handle_recursive(monitor_t *monitor, entity_state_t *state, operation_type_t op) {
+static void scanner_handle_recursive(monitor_t *monitor, entity_t *state, optype_t op) {
 	/* First, find the root state */
-	entity_state_t *root = stability_root(monitor, state);
+	entity_t *root = stability_root(monitor, state);
 	if (root) {
 		/* Update the root's tree activity time and path */
-		if (!root->activity) {
-			root->activity = activity_state_create(root->path_state->path);
+		if (!root->scanner) {
+			root->scanner = scanner_create(root->node->path);
 		}
-		if (root->activity) {
-			root->activity->tree_activity = state->last_update;
-			free(root->activity->active_path);
-			root->activity->active_path = strdup(state->path_state->path);
-			root->activity->activity_active = true;
+		if (root->scanner) {
+			root->scanner->latest_time = state->last_time;
+			free(root->scanner->active_path);
+			root->scanner->active_path = strdup(state->node->path);
+			root->scanner->active = true;
 		}
 
 		/* Reset stability_lost flag when activity becomes active to prevent repeated penalties */
 		if (!root->stability) {
-			root->stability = stability_state_create();
+			root->stability = stability_create();
 		}
 		if (root->stability) {
 			root->stability->stability_lost = false;
@@ -640,42 +664,42 @@ static void scanner_handle_recursive(monitor_t *monitor, entity_state_t *state, 
 		scanner_update_stats(root, op);
 
 		/* Synchronize with other watches for the same path */
-		scanner_sync(monitor, root->path_state, root);
+		scanner_sync(monitor, root->node, root);
 
 		/* Now propagate activity to all parent directories between this entity and root */
-		dir_stats_t *root_stats = root->stability ? &root->stability->dir_stats : NULL;
+		stats_t *root_stats = root->stability ? &root->stability->stats : NULL;
 		scanner_propagate(monitor, state, root, op, root_stats);
 	}
 }
 
 /* Handle activity when state is the root path itself */
-static void scanner_handle_root(monitor_t *monitor, entity_state_t *state, operation_type_t op) {
+static void scanner_handle_root(monitor_t *monitor, entity_t *state, optype_t op) {
 	/* This is the root itself */
-	if (!state->activity) {
-		state->activity = activity_state_create(state->path_state->path);
+	if (!state->scanner) {
+		state->scanner = scanner_create(state->node->path);
 	}
-	if (state->activity) {
-		state->activity->tree_activity = state->last_update;
-		free(state->activity->active_path);
-		state->activity->active_path = strdup(state->path_state->path);
+	if (state->scanner) {
+		state->scanner->latest_time = state->last_time;
+		free(state->scanner->active_path);
+		state->scanner->active_path = strdup(state->node->path);
 	}
 
 	/* Update directory stats immediately for content changes to root */
 	scanner_update_stats(state, op);
 
 	/* Always sync the current state */
-	scanner_sync(monitor, state->path_state, state);
+	scanner_sync(monitor, state->node, state);
 }
 
 /* Record a new activity event in the entity's history */
-void scanner_track(monitor_t *monitor, entity_state_t *state, operation_type_t op) {
+void scanner_track(monitor_t *monitor, entity_t *state, optype_t op) {
 	if (!state) return;
 
 	/* Check for duplicate tracking to avoid re-processing the same event */
-	if (state->last_op_time.tv_sec == state->last_update.tv_sec &&
-	    state->last_op_time.tv_nsec == state->last_update.tv_nsec) {
+	if (state->op_time.tv_sec == state->last_time.tv_sec &&
+	    state->op_time.tv_nsec == state->last_time.tv_nsec) {
 		log_message(DEBUG, "Skipping duplicate track for %s (op=%d)",
-		        			state->path_state ? state->path_state->path : "NULL", op);
+		        			state->node ? state->node->path : "NULL", op);
 		return;
 	}
 
@@ -683,7 +707,7 @@ void scanner_track(monitor_t *monitor, entity_state_t *state, operation_type_t o
 	scanner_record(state, op);
 
 	/* If the event is on a directory that is the root of any watch, handle it */
-	if (state->type == ENTITY_DIRECTORY && strcmp(state->path_state->path, state->watch->path) == 0) {
+	if (state->kind == ENTITY_DIRECTORY && strcmp(state->node->path, state->watch->path) == 0) {
 		scanner_handle_root(monitor, state, op);
 	}
 	/* Otherwise, if it's a recursive watch, it must be a sub-path event */
@@ -692,10 +716,10 @@ void scanner_track(monitor_t *monitor, entity_state_t *state, operation_type_t o
 	}
 
 	/* Always sync the current state */
-	scanner_sync(monitor, state->path_state, state);
+	scanner_sync(monitor, state->node, state);
 
 	/* Record the timestamp of this operation to prevent duplicates */
-	state->last_op_time = state->last_update;
+	state->op_time = state->last_time;
 }
 
 /* Calculate base quiet period based on recent change magnitude */
@@ -729,30 +753,30 @@ static long scanner_base_period(int recent_files, int recent_dirs, int recent_de
 }
 
 /* Calculate current activity magnitude (changes from reference state) for responsive adjustments */
-static void calculate_recent_activity(entity_state_t *state, int *recent_files, int *recent_dirs, int *recent_depth, ssize_t *recent_size) {
+static void calculate_recent_activity(entity_t *state, int *recent_files, int *recent_dirs, int *recent_depth, ssize_t *recent_size) {
 	/* Calculate changes from the previous scan state to measure the current rate of change */
 	if (state->stability) {
-		*recent_files = abs(state->stability->dir_stats.tree_files - state->stability->prev_stats.tree_files);
-		*recent_dirs = abs(state->stability->dir_stats.tree_dirs - state->stability->prev_stats.tree_dirs);
-		*recent_depth = abs(state->stability->dir_stats.max_depth - state->stability->prev_stats.max_depth);
-		*recent_size = labs((ssize_t)state->stability->dir_stats.tree_size - (ssize_t)state->stability->prev_stats.tree_size);
+		*recent_depth = abs(state->stability->stats.max_depth - state->stability->prev_stats.max_depth);
+		*recent_files = abs(state->stability->stats.tree_files - state->stability->prev_stats.tree_files);
+		*recent_dirs = abs(state->stability->stats.tree_dirs - state->stability->prev_stats.tree_dirs);
+		*recent_size = labs((ssize_t)state->stability->stats.tree_size - (ssize_t)state->stability->prev_stats.tree_size);
 	} else {
+		*recent_depth = 0;
 		*recent_files = 0;
 		*recent_dirs = 0;
-		*recent_depth = 0;
 		*recent_size = 0;
 	}
 }
 
 /* Apply stability, depth, and size adjustments to quiet period */
-static long scanner_adjust(entity_state_t *state, long base_ms) {
+static long scanner_adjust(entity_t *state, long base_ms) {
 	long required_ms = base_ms;
-	int total_entries = 0;
+	int tree_entries = 0;
 	int tree_depth = 0;
 	
 	if (state->stability) {
-		total_entries = state->stability->dir_stats.tree_files + state->stability->dir_stats.tree_dirs;
-		tree_depth = state->stability->dir_stats.max_depth > 0 ? state->stability->dir_stats.max_depth : state->stability->dir_stats.depth;
+		tree_entries = state->stability->stats.tree_files + state->stability->stats.tree_dirs;
+		tree_depth = state->stability->stats.max_depth > 0 ? state->stability->stats.max_depth : state->stability->stats.depth;
 	}
 	
 	/* Use current activity magnitude for responsiveness */
@@ -772,7 +796,7 @@ static long scanner_adjust(entity_state_t *state, long base_ms) {
 	
 	/* Log recent activity calculation for debugging */
 	log_message(DEBUG, "Recent activity calculation for %s: files=%d, dirs=%d, depth=%d, size=%s, size_weight=%d (total_change=%d)", 
-	            		state->path_state->path, recent_files, recent_dirs, recent_depth, 
+	            		state->node->path, recent_files, recent_dirs, recent_depth, 
 	            		format_size(recent_size, true), size_weight, recent_change);
 
 	/* If stability was previously achieved and then lost, increase quiet period */
@@ -790,9 +814,9 @@ static long scanner_adjust(entity_state_t *state, long base_ms) {
 	}
 
 	/* Directory size complexity factor - based on recent activity */
-	if (total_entries > 100) {
+	if (tree_entries > 100) {
 		float size_factor = (recent_change <= 3) ? 0.3 : 0.7;
-		int size_addition = (int) (250 * size_factor * (total_entries / 200.0));
+		int size_addition = (int) (250 * size_factor * (tree_entries / 200.0));
 		/* Cap the size adjustment for small operations */
 		if (recent_change <= 1 && size_addition > 300) size_addition = 300;
 		required_ms += size_addition;
@@ -802,7 +826,7 @@ static long scanner_adjust(entity_state_t *state, long base_ms) {
 }
 
 /* Apply exponential backoff for consecutive instability */
-static long scanner_backoff(entity_state_t *state, long required_ms) {
+static long scanner_backoff(entity_t *state, long required_ms) {
 	int unstable_count = state->stability ? state->stability->unstable_count : 0;
 	
 	if (unstable_count < 3) {  /* Only apply backoff after 3 consecutive unstable counts */
@@ -830,16 +854,16 @@ static long scanner_backoff(entity_state_t *state, long required_ms) {
 }
 
 /* Apply final limits and complexity multiplier */
-static long scanner_limit_period(entity_state_t *state, long required_ms) {
+static long scanner_limit_period(entity_t *state, long required_ms) {
 	/* Set reasonable limits */
 	if (required_ms < 100) required_ms = 100;
 
 	/* Dynamic cap based on operation characteristics */
-	long max_period = 60000; /* Default 60 seconds */
+	long maximum_quiet = 60000; /* Default 60 seconds */
 
-	if (required_ms > max_period) {
-		log_message(DEBUG, "Capping quiet period for %s from %ld ms to %ld ms", state->path_state->path, required_ms, max_period);
-		required_ms = max_period;
+	if (required_ms > maximum_quiet) {
+		log_message(DEBUG, "Capping quiet period for %s from %ld ms to %ld ms", state->node->path, required_ms, maximum_quiet);
+		required_ms = maximum_quiet;
 	}
 
 	/* Apply complexity multiplier from watch config */
@@ -847,32 +871,32 @@ static long scanner_limit_period(entity_state_t *state, long required_ms) {
 		long pre_multiplier = required_ms;
 		required_ms = (long) (required_ms * state->watch->complexity);
 		log_message(DEBUG, "Applied complexity multiplier %.2f to %s: %ld ms -> %ld ms",
-							state->watch->complexity, state->path_state->path, pre_multiplier, required_ms);
+							state->watch->complexity, state->node->path, pre_multiplier, required_ms);
 	}
 
 	return required_ms;
 }
 
 /* Determine the required quiet period based on state type and activity */
-long scanner_delay(entity_state_t *state) {
+long scanner_delay(entity_t *state) {
 	if (!state) return QUIET_PERIOD_MS;
 
 	long required_ms = QUIET_PERIOD_MS;
 
 	/* Use a longer base period for directories */
-	if (state->type == ENTITY_DIRECTORY) {
+	if (state->kind == ENTITY_DIRECTORY) {
 		/* Default quiet period */
 		required_ms = DIR_QUIET_PERIOD_MS; /* Default 1000ms */
 
 		/* For active directories, use adaptive complexity measurement */
-		bool activity_active = state->activity ? state->activity->activity_active : false;
-		if (activity_active) {
+		bool active = state->scanner ? state->scanner->active : false;
+		if (active) {
 			/* Extract complexity indicators */
-			int total_entries = 0;
+			int tree_entries = 0;
 			int tree_depth = 0;
 			if (state->stability) {
-				total_entries = state->stability->dir_stats.tree_files + state->stability->dir_stats.tree_dirs;
-				tree_depth = state->stability->dir_stats.max_depth > 0 ? state->stability->dir_stats.max_depth : state->stability->dir_stats.depth;
+				tree_entries = state->stability->stats.tree_files + state->stability->stats.tree_dirs;
+				tree_depth = state->stability->stats.max_depth > 0 ? state->stability->stats.max_depth : state->stability->stats.depth;
 			}
 
 			/* Get recent activity to drive the base period calculation */
@@ -889,27 +913,28 @@ long scanner_delay(entity_state_t *state) {
 			/* Apply exponential backoff for consecutive instability */
 			required_ms = scanner_backoff(state, required_ms);
 
-			int cumulative_file = state->stability ? state->stability->cumulative_file : 0;
-			int cumulative_dirs = state->stability ? state->stability->cumulative_dirs : 0;
-			int cumulative_depth = state->stability ? state->stability->cumulative_depth : 0;
-			ssize_t cumulative_size = state->stability ? state->stability->cumulative_size : 0;
+			int delta_files = state->stability ? state->stability->delta_files : 0;
+			int delta_dirs = state->stability ? state->stability->delta_dirs : 0;
+			int delta_depth = state->stability ? state->stability->delta_depth : 0;
+			ssize_t delta_size = state->stability ? state->stability->delta_size : 0;
 			
 			log_message(DEBUG, "Quiet period for %s: %ld ms (cumulative: %+d files, %+d dirs, %+d depth, %s size) (total: %d entries, %d depth)",
-			        			state->path_state->path, required_ms, cumulative_file, cumulative_dirs,
-								cumulative_depth, format_size(cumulative_size, true), total_entries, tree_depth);
+			        			state->node->path, required_ms, delta_files, delta_dirs,
+								delta_depth, format_size(delta_size, true), tree_entries, tree_depth);
 		} else {
 			/* For inactive directories, just log the base period with recursive stats */
-			int total_entries = 0;
+			int tree_entries = 0;
 			int tree_depth = 0;
-			int subdir_count = 0;
+			int num_subdir = 0;
 			if (state->stability) {
-				total_entries = state->stability->dir_stats.tree_files + state->stability->dir_stats.tree_dirs;
-				tree_depth = state->stability->dir_stats.max_depth > 0 ? state->stability->dir_stats.max_depth : state->stability->dir_stats.depth;
-				subdir_count = state->stability->dir_stats.tree_dirs;
+				tree_entries = state->stability->stats.tree_files + state->stability->stats.tree_dirs;
+				tree_depth = state->stability->stats.max_depth > 0 ? state->stability->stats.max_depth :
+					state->stability->stats.depth;
+				num_subdir = state->stability->stats.tree_dirs;
 			}
 
 			log_message(DEBUG, "Using base quiet period for %s: %ld ms (recursive entries: %d, depth: %d, subdirs: %d)",
-			    				state->path_state->path, required_ms, total_entries, tree_depth, subdir_count);
+			    				state->node->path, required_ms, tree_entries, tree_depth, num_subdir);
 		}
 	}
 
@@ -918,59 +943,59 @@ long scanner_delay(entity_state_t *state) {
 }
 
 /* Check if enough quiet time has passed since the last activity */
-bool scanner_ready(monitor_t *monitor, entity_state_t *state, struct timespec *now, long required_quiet) {
-	if (!state || !now) return true; /* Cannot check, assume elapsed */
+bool scanner_ready(monitor_t *monitor, entity_t *state, struct timespec *current_time, long required_quiet) {
+	if (!state || !current_time) return true; /* Cannot check, assume elapsed */
 
-	struct timespec *activity_time = NULL;
-	const char *source_path = state->path_state->path;
+	struct timespec *scanner_timestamp = NULL;
+	const char *source_path = state->node->path;
 
 	/* Determine which timestamp to check against */
-	if (state->type == ENTITY_DIRECTORY && state->watch && state->watch->recursive) {
+	if (state->kind == ENTITY_DIRECTORY && state->watch && state->watch->recursive) {
 		/* For recursive directory watches, always check the root's tree time */
-		entity_state_t *root = stability_root(monitor, state);
+		entity_t *root = stability_root(monitor, state);
 		if (root) {
-			activity_time = root->activity ? &root->activity->tree_activity : &root->last_update;
-			source_path = root->path_state->path;
+			scanner_timestamp = root->scanner ? &root->scanner->latest_time : &root->last_time;
+			source_path = root->node->path;
 		} else {
-			log_message(WARNING, "Cannot find root state for %s, falling back to local activity", state->path_state->path);
+			log_message(WARNING, "Cannot find root state for %s, falling back to local activity", state->node->path);
 			/* Fallback: use local activity if root not found */
-			if (!state->activity || state->activity->activity_count == 0) return true;
-			int latest_idx = (state->activity->activity_index + MAX_SAMPLES - 1) % MAX_SAMPLES;
-			activity_time = &state->activity->recent_activity[latest_idx].timestamp;
+			if (!state->scanner || state->scanner->sample_count == 0) return true;
+			int latest_idx = (state->scanner->sample_index + MAX_SAMPLES - 1) % MAX_SAMPLES;
+			scanner_timestamp = &state->scanner->samples[latest_idx].timestamp;
 		}
 	} else {
 		/* For files or non-recursive dirs, use local activity time */
-		if (!state->activity || state->activity->activity_count == 0) return true;
-		int latest_idx = (state->activity->activity_index + MAX_SAMPLES - 1) % MAX_SAMPLES;
-		activity_time = &state->activity->recent_activity[latest_idx].timestamp;
+		if (!state->scanner || state->scanner->sample_count == 0) return true;
+		int latest_idx = (state->scanner->sample_index + MAX_SAMPLES - 1) % MAX_SAMPLES;
+		scanner_timestamp = &state->scanner->samples[latest_idx].timestamp;
 	}
 
 	/* Check for valid timestamp */
-	if (!activity_time || (activity_time->tv_sec == 0 && activity_time->tv_nsec == 0)) {
-		log_message(DEBUG, "No valid activity timestamp for %s, quiet period assumed elapsed", state->path_state->path);
+	if (!scanner_timestamp || (scanner_timestamp->tv_sec == 0 && scanner_timestamp->tv_nsec == 0)) {
+		log_message(DEBUG, "No valid activity timestamp for %s, quiet period assumed elapsed", state->node->path);
 		return true;
 	}
 
 	/* Calculate elapsed time */
 	long elapsed_ms;
-	if (now->tv_sec < activity_time->tv_sec ||
-	    (now->tv_sec == activity_time->tv_sec && now->tv_nsec < activity_time->tv_nsec)) {
+	if (current_time->tv_sec < scanner_timestamp->tv_sec ||
+	    (current_time->tv_sec == scanner_timestamp->tv_sec && current_time->tv_nsec < scanner_timestamp->tv_nsec)) {
 		elapsed_ms = -1; /* Clock went backwards */
 	} else {
-		struct timespec diff;
-		diff.tv_sec = now->tv_sec - activity_time->tv_sec;
-		if (now->tv_nsec >= activity_time->tv_nsec) {
-			diff.tv_nsec = now->tv_nsec - activity_time->tv_nsec;
+		struct timespec time_diff;
+		time_diff.tv_sec = current_time->tv_sec - scanner_timestamp->tv_sec;
+		if (current_time->tv_nsec >= scanner_timestamp->tv_nsec) {
+			time_diff.tv_nsec = current_time->tv_nsec - scanner_timestamp->tv_nsec;
 		} else {
-			diff.tv_sec--;
-			diff.tv_nsec = 1000000000 + now->tv_nsec - activity_time->tv_nsec;
+			time_diff.tv_sec--;
+			time_diff.tv_nsec = 1000000000 + current_time->tv_nsec - scanner_timestamp->tv_nsec;
 		}
-		elapsed_ms = diff.tv_sec * 1000 + diff.tv_nsec / 1000000;
+		elapsed_ms = time_diff.tv_sec * 1000 + time_diff.tv_nsec / 1000000;
 	}
 
 	if (elapsed_ms < 0) {
 		log_message(WARNING, "Clock appears to have moved backwards for %s, assuming quiet period elapsed",
-		            		  state->path_state->path);
+		            		  state->node->path);
 		return true;
 	}
 
@@ -978,10 +1003,10 @@ bool scanner_ready(monitor_t *monitor, entity_state_t *state, struct timespec *n
 
 	if (!elapsed) {
 		log_message(DEBUG, "Quiet period check for %s: %ld ms elapsed < %ld ms required (using time from %s)",
-		            		state->path_state->path, elapsed_ms, required_quiet, source_path);
+		            		state->node->path, elapsed_ms, required_quiet, source_path);
 	} else {
 		log_message(DEBUG, "Quiet period elapsed for %s: %ld ms >= %ld ms required",
-		        			state->path_state->path, elapsed_ms, required_quiet);
+		        			state->node->path, elapsed_ms, required_quiet);
 	}
 
 	return elapsed;
@@ -990,8 +1015,8 @@ bool scanner_ready(monitor_t *monitor, entity_state_t *state, struct timespec *n
 /* Find the most recently modified file in a directory */
 char *scanner_newest(const char *dir_path) {
 	DIR *dir;
-	struct dirent *entry;
-	struct stat st;
+	struct dirent *dirent;
+	struct stat info;
 	char path[PATH_MAX];
 	char *newest_file = NULL;
 	time_t newest_time = 0;
@@ -1001,20 +1026,20 @@ char *scanner_newest(const char *dir_path) {
 		return NULL;
 	}
 
-	while ((entry = readdir(dir))) {
-		if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+	while ((dirent = readdir(dir))) {
+		if (strcmp(dirent->d_name, ".") == 0 || strcmp(dirent->d_name, "..") == 0) {
 			continue;
 		}
 		
 		/* Skip .DS_Store files created by macOS */
-		if (strcmp(entry->d_name, ".DS_Store") == 0) {
+		if (strcmp(dirent->d_name, ".DS_Store") == 0) {
 			continue;
 		}
 
-		snprintf(path, sizeof(path), "%s/%s", dir_path, entry->d_name);
-		if (stat(path, &st) == 0) {
+		snprintf(path, sizeof(path), "%s/%s", dir_path, dirent->d_name);
+		if (stat(path, &info) == 0) {
 			/* Consider both modification time and change time */
-			time_t latest_time = (st.st_mtime > st.st_ctime) ? st.st_mtime : st.st_ctime;
+			time_t latest_time = (info.st_mtime > info.st_ctime) ? info.st_mtime : info.st_ctime;
 			if (latest_time > newest_time) {
 				newest_time = latest_time;
 				free(newest_file);
@@ -1030,8 +1055,8 @@ char *scanner_newest(const char *dir_path) {
 /* Find all files modified since a specific time */
 char *scanner_modified(const char *base_path, time_t since_time, bool recursive, bool basename) {
 	DIR *dir;
-	struct dirent *entry;
-	struct stat st;
+	struct dirent *dirent;
+	struct stat info;
 	char path[PATH_MAX];
 	char *result = NULL;
 	size_t result_size = 0;
@@ -1054,32 +1079,32 @@ char *scanner_modified(const char *base_path, time_t since_time, bool recursive,
 		return NULL;
 	}
 
-	while ((entry = readdir(dir))) {
-		if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+	while ((dirent = readdir(dir))) {
+		if (strcmp(dirent->d_name, ".") == 0 || strcmp(dirent->d_name, "..") == 0) {
 			continue;
 		}
 		
 		/* Skip .DS_Store files created by macOS */
-		if (strcmp(entry->d_name, ".DS_Store") == 0) {
+		if (strcmp(dirent->d_name, ".DS_Store") == 0) {
 			continue;
 		}
 
-		snprintf(path, sizeof(path), "%s/%s", base_path, entry->d_name);
-		if (stat(path, &st) != 0) {
+		snprintf(path, sizeof(path), "%s/%s", base_path, dirent->d_name);
+		if (stat(path, &info) != 0) {
 			continue;
 		}
 
-		if (S_ISREG(st.st_mode)) {
+		if (S_ISREG(info.st_mode)) {
 			/* Consider both modification time and change time */
-			time_t latest_time = (st.st_mtime > st.st_ctime) ? st.st_mtime : st.st_ctime;
+			time_t latest_time = (info.st_mtime > info.st_ctime) ? info.st_mtime : info.st_ctime;
 			if (latest_time > since_time) {
 				/* Add this file to the result */
-				const char *output_name = basename ? entry->d_name : path;
+				const char *output_name = basename ? dirent->d_name : path;
 				size_t name_len = strlen(output_name);
-				size_t needed = result_size + name_len + 2; /* +2 for newline and null terminator */
+				size_t required_size = result_size + name_len + 2; /* +2 for newline and null terminator */
 				
-				if (needed > result_capacity) {
-					result_capacity = needed * 2;
+				if (required_size > result_capacity) {
+					result_capacity = required_size * 2;
 					char *new_result = realloc(result, result_capacity);
 					if (!new_result) {
 						free(result);
@@ -1096,15 +1121,15 @@ char *scanner_modified(const char *base_path, time_t since_time, bool recursive,
 				strcpy(result + result_size, output_name);
 				result_size += name_len;
 			}
-		} else if (S_ISDIR(st.st_mode) && recursive) {
+		} else if (S_ISDIR(info.st_mode) && recursive) {
 			/* Recursively scan subdirectory */
 			char *subdir_result = scanner_modified(path, since_time, recursive, basename);
 			if (subdir_result && strlen(subdir_result) > 0) {
 				size_t subdir_len = strlen(subdir_result);
-				size_t needed = result_size + subdir_len + 2; /* +2 for newline and null terminator */
+				size_t required_size = result_size + subdir_len + 2; /* +2 for newline and null terminator */
 				
-				if (needed > result_capacity) {
-					result_capacity = needed * 2;
+				if (required_size > result_capacity) {
+					result_capacity = required_size * 2;
 					char *new_result = realloc(result, result_capacity);
 					if (!new_result) {
 						free(result);
@@ -1128,29 +1153,4 @@ char *scanner_modified(const char *base_path, time_t since_time, bool recursive,
 
 	closedir(dir);
 	return result;
-}
-
-/* Create an activity state */
-activity_state_t *activity_state_create(const char *path) {
-	activity_state_t *activity = calloc(1, sizeof(activity_state_t));
-	if (!activity) {
-		log_message(ERROR, "Failed to allocate activity state");
-		return NULL;
-	}
-	
-	activity->activity_count = 0;
-	activity->activity_index = 0;
-	activity->activity_active = false;
-	activity->active_path = path ? strdup(path) : NULL;
-	clock_gettime(CLOCK_MONOTONIC, &activity->tree_activity);
-	
-	return activity;
-}
-
-/* Destroy an activity state */
-void activity_state_destroy(activity_state_t *activity) {
-	if (activity) {
-		free(activity->active_path);
-		free(activity);
-	}
 }

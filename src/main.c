@@ -38,7 +38,7 @@ int main(int argc, char *argv[]) {
 	int c;
 	int option_index = 0;
 	int log_level = NOTICE;
-	char *config_file = NULL;
+	char *config_path = NULL;
 	int daemon_mode = 0;
 
 	/* Get program name */
@@ -50,7 +50,7 @@ int main(int argc, char *argv[]) {
 	}
 
 	/* Set up signal handlers */
-	if (!daemon_setup_signals()) {
+	if (!daemon_signals()) {
 		log_message(CRITICAL, "Failed to set up signal handlers");
 		log_close();
 		return EXIT_FAILURE;
@@ -69,7 +69,7 @@ int main(int argc, char *argv[]) {
 	while ((c = getopt_long(argc, argv, "c:dl:b:h", long_options, &option_index)) != -1) {
 		switch (c) {
 			case 'c':
-				config_file = optarg;
+				config_path = optarg;
 				break;
 			case 'd':
 				daemon_mode = 1;
@@ -96,8 +96,8 @@ int main(int argc, char *argv[]) {
 	}
 
 	/* Use default config file if not specified */
-	if (config_file == NULL) {
-		config_file = DEFAULT_CONFIG_FILE;
+	if (config_path == NULL) {
+		config_path = DEFAULT_CONFIG_FILE;
 	}
 
 	/* Initialize logging */
@@ -116,8 +116,8 @@ int main(int argc, char *argv[]) {
 	config->syslog_level = log_level;
 
 	/* Parse configuration file */
-	if (!config_parse_file(config, config_file)) {
-		log_message(ERROR, "Failed to parse configuration file: %s", config_file);
+	if (!config_parse(config, config_path)) {
+		log_message(ERROR, "Failed to parse configuration file: %s", config_path);
 		config_destroy(config);
 		log_close();
 		return EXIT_FAILURE;
@@ -145,7 +145,6 @@ int main(int argc, char *argv[]) {
 		return EXIT_FAILURE;
 	}
 
-
 	/* Create monitor */
 	monitor = monitor_create(config);
 	if (monitor == NULL) {
@@ -169,7 +168,7 @@ int main(int argc, char *argv[]) {
 	g_monitor = monitor;
 
 	/* Set monitor reference for daemon signal handler */
-	daemon_set_monitor(monitor);
+	daemon_monitor(monitor);
 
 	/* Start monitor */
 	if (!monitor_start(monitor)) {
@@ -181,7 +180,7 @@ int main(int argc, char *argv[]) {
 	}
 
 	/* Clean up */
-	daemon_set_monitor(NULL);
+	daemon_monitor(NULL);
 	monitor_destroy(monitor);
 	command_cleanup();
 	log_close();

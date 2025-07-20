@@ -15,7 +15,7 @@ static monitor_t *g_monitor = NULL;
 
 /* Signal handling state */
 static volatile sig_atomic_t running = 1;
-static volatile sig_atomic_t reload_requested = 0;
+static volatile sig_atomic_t reload = 0;
 
 /* Signal handler */
 static void signal_handler(int sig) {
@@ -32,11 +32,11 @@ static void signal_handler(int sig) {
 			}
 			break;
 		case SIGHUP:
-			reload_requested = 1;
+			reload = 1;
 			/* Request reload if monitor is available */
 			if (g_monitor != NULL) {
 				log_message(INFO, "Received SIGHUP, requesting configuration reload");
-				g_monitor->reload_requested = true;
+				g_monitor->reload = true;
 				log_message(DEBUG, "Configuration reload requested");
 			} else {
 				log_message(WARNING, "Received SIGHUP but monitor is not available");
@@ -48,7 +48,7 @@ static void signal_handler(int sig) {
 }
 
 /* Set up signal handlers */
-bool daemon_setup_signals(void) {
+bool daemon_signals(void) {
 	struct sigaction sa;
 
 	/* Set up signal handlers */
@@ -75,7 +75,7 @@ bool daemon_setup_signals(void) {
 }
 
 /* Set monitor reference for signal handler */
-void daemon_set_monitor(monitor_t *monitor) {
+void daemon_monitor(monitor_t *monitor) {
 	g_monitor = monitor;
 	if (monitor != NULL) {
 		log_message(DEBUG, "Daemon: monitor reference updated");

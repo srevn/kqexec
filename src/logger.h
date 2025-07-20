@@ -6,7 +6,7 @@
 #include <sys/select.h>
 
 /* Log levels (matching syslog levels) */
-typedef enum {
+typedef enum loglevel {
 	EMERG = LOG_EMERG,                     /* System is unusable */
 	ALERT = LOG_ALERT,                     /* Action must be taken immediately */
 	CRITICAL = LOG_CRIT,                   /* Critical conditions */
@@ -15,12 +15,12 @@ typedef enum {
 	NOTICE = LOG_NOTICE,                   /* Normal but significant condition */
 	INFO = LOG_INFO,                       /* Informational */
 	DEBUG = LOG_DEBUG                      /* Debug-level messages */
-} log_level_t;
+} loglevel_t;
 
 /* Function prototypes */
-void log_init(const char *ident, int facility, log_level_t level, int use_console);
+void log_init(const char *ident, int facility, loglevel_t level, int use_console);
 void log_close(void);
-void log_message(log_level_t level, const char *format, ...);
+void log_message(loglevel_t level, const char *format, ...);
 const char *format_size(ssize_t size, bool show_sign);
 
 #endif /* LOGGER_H */

@@ -20,15 +20,6 @@
 #include "events.h"
 #include "scanner.h"
 
-/* Maximum number of events to process at once */
-#define MAX_EVENTS 64
-
-/* Maximum path length */
-#define MAX_PATH_LEN 1024
-
-/* Define max allowed failures before giving up */
-#define MAX_FAILED_CHECKS 3
-
 /* Create a new file/directory monitor */
 monitor_t *monitor_create(config_t *config) {
 	monitor_t *monitor;
@@ -47,24 +38,24 @@ monitor_t *monitor_create(config_t *config) {
 	monitor->config = config;
 	monitor->kq = -1;
 	monitor->watches = NULL;
-	monitor->watch_count = 0;
+	monitor->num_watches = 0;
 	monitor->running = false;
-	monitor->reload_requested = false;
+	monitor->reload = false;
 
 	/* Store config file path for reloading */
-	if (config->config_file != NULL) {
-		monitor->config_file = strdup(config->config_file);
+	if (config->config_path != NULL) {
+		monitor->config_path = strdup(config->config_path);
 	}
 
 	/* Initialize the deferred check queue */
 	monitor->check_queue = queue_create(16); /* Initial capacity of 16 */
 
 	/* Initialize state table */
-	monitor->states = state_table_create(PATH_HASH_SIZE);
+	monitor->states = state_create(PATH_HASH_SIZE);
 	if (!monitor->states) {
 		log_message(ERROR, "Failed to create state table for monitor");
 		queue_destroy(monitor->check_queue);
-		free(monitor->config_file);
+		free(monitor->config_path);
 		free(monitor);
 		return NULL;
 	}
@@ -77,19 +68,19 @@ monitor_t *monitor_create(config_t *config) {
 	return monitor;
 }
 
-/* Free resources used by a watch_info structure */
-static void watch_destroy(watch_info_t *info) {
-	if (info == NULL) {
+/* Free resources used by a watcher structure */
+static void watcher_destroy(watcher_t *watcher) {
+	if (watcher == NULL) {
 		return;
 	}
 
 	/* Only close the file descriptor if it's not shared with other watches */
-	if (info->wd >= 0 && !info->shared_fd) {
-		close(info->wd);
+	if (watcher->wd >= 0 && !watcher->shared_fd) {
+		close(watcher->wd);
 	}
 
-	free(info->path);
-	free(info);
+	free(watcher->path);
+	free(watcher);
 }
 
 /* Destroy a monitor and free all associated resources */
@@ -104,12 +95,12 @@ void monitor_destroy(monitor_t *monitor) {
 	}
 
 	/* Free watches */
-	for (int i = 0; i < monitor->watch_count; i++) {
-		watch_destroy(monitor->watches[i]);
+	for (int i = 0; i < monitor->num_watches; i++) {
+		watcher_destroy(monitor->watches[i]);
 	}
 
 	free(monitor->watches);
-	free(monitor->config_file);
+	free(monitor->config_path);
 
 	/* Clean up the check queue */
 	queue_destroy(monitor->check_queue);
@@ -123,7 +114,7 @@ void monitor_destroy(monitor_t *monitor) {
 	}
 
 	/* Clean up state table */
-	state_table_destroy(monitor->states);
+	state_destroy(monitor->states);
 
 	/* Destroy the configuration */
 	config_destroy(monitor->config);
@@ -131,40 +122,40 @@ void monitor_destroy(monitor_t *monitor) {
 	free(monitor);
 }
 
-/* Initialize inode and device information for a watch_info */
-static bool watch_stat(watch_info_t *info) {
-	struct stat st;
-	if (fstat(info->wd, &st) == -1) {
-		log_message(ERROR, "Failed to fstat file descriptor %d for %s: %s", info->wd, info->path, strerror(errno));
+/* Initialize inode and device information for a watcher */
+static bool watcher_stat(watcher_t *watcher) {
+	struct stat info;
+	if (fstat(watcher->wd, &info) == -1) {
+		log_message(ERROR, "Failed to fstat file descriptor %d for %s: %s", watcher->wd, watcher->path, strerror(errno));
 		return false;
 	}
 
-	info->inode = st.st_ino;
-	info->device = st.st_dev;
-	info->last_validation = time(NULL);
+	watcher->inode = info.st_ino;
+	watcher->device = info.st_dev;
+	watcher->validated = time(NULL);
 	return true;
 }
 
-/* Add a watch info to the monitor's array */
-static bool watch_add(monitor_t *monitor, watch_info_t *info) {
-	watch_info_t **new_watches;
+/* Add a watcher to the monitor's array */
+static bool watcher_add(monitor_t *monitor, watcher_t *watcher) {
+	watcher_t **new_watches;
 
-	new_watches = realloc(monitor->watches, (monitor->watch_count + 1) * sizeof(watch_info_t *));
+	new_watches = realloc(monitor->watches, (monitor->num_watches + 1) * sizeof(watcher_t *));
 	if (new_watches == NULL) {
-		log_message(ERROR, "Failed to allocate memory for watch info");
+		log_message(ERROR, "Failed to allocate memory for watcher");
 		return false;
 	}
 
 	monitor->watches = new_watches;
-	monitor->watches[monitor->watch_count] = info;
-	monitor->watch_count++;
+	monitor->watches[monitor->num_watches] = watcher;
+	monitor->num_watches++;
 
 	return true;
 }
 
-/* Find a watch info entry by path */
-static watch_info_t *watch_find(monitor_t *monitor, const char *path) {
-	for (int i = 0; i < monitor->watch_count; i++) {
+/* Find a watcher entry by path */
+static watcher_t *watcher_find(monitor_t *monitor, const char *path) {
+	for (int i = 0; i < monitor->num_watches; i++) {
 		if (strcmp(monitor->watches[i]->path, path) == 0) {
 			return monitor->watches[i];
 		}
@@ -174,26 +165,26 @@ static watch_info_t *watch_find(monitor_t *monitor, const char *path) {
 }
 
 /* Set up kqueue monitoring for a file or directory */
-static bool monitor_kqueue(monitor_t *monitor, watch_info_t *info) {
+static bool monitor_kqueue(monitor_t *monitor, watcher_t *watcher) {
 	struct kevent changes[1];
 	int flags = 0;
 
 	/* Set up flags based on consolidated events */
-	if (info->watch->events & EVENT_STRUCTURE) {
+	if (watcher->watch->filter & EVENT_STRUCTURE) {
 		flags |= NOTE_WRITE | NOTE_EXTEND;
 	}
-	if (info->watch->events & EVENT_METADATA) {
+	if (watcher->watch->filter & EVENT_METADATA) {
 		flags |= NOTE_ATTRIB | NOTE_LINK;
 	}
-	if (info->watch->events & EVENT_CONTENT) {
+	if (watcher->watch->filter & EVENT_CONTENT) {
 		flags |= NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE | NOTE_WRITE;
 	}
 
 	/* Register for events */
-	EV_SET(&changes[0], info->wd, EVFILT_VNODE, EV_ADD | EV_CLEAR, flags, 0, info);
+	EV_SET(&changes[0], watcher->wd, EVFILT_VNODE, EV_ADD | EV_CLEAR, flags, 0, watcher);
 
 	if (kevent(monitor->kq, changes, 1, NULL, 0, NULL) == -1) {
-		log_message(ERROR, "Failed to register kqueue events for %s: %s", info->path, strerror(errno));
+		log_message(ERROR, "Failed to register kqueue events for %s: %s", watcher->path, strerror(errno));
 		return false;
 	}
 
@@ -214,9 +205,9 @@ static bool path_hidden(const char *path) {
 }
 
 /* Recursively add watches for a directory and its subdirectories */
-bool monitor_tree(monitor_t *monitor, const char *dir_path, watch_entry_t *watch) {
+bool monitor_tree(monitor_t *monitor, const char *dir_path, watch_t *watch) {
 	DIR *dir;
-	struct dirent *entry;
+	struct dirent *dirent;
 
 	/* Proactively validate the path to handle re-creations before adding watches */
 	monitor_sync(monitor, dir_path);
@@ -227,9 +218,9 @@ bool monitor_tree(monitor_t *monitor, const char *dir_path, watch_entry_t *watch
 		return true; /* Not an error, just skipping */
 	}
 
-	/* Check if a watch_info for this path and watch already exists */
+	/* Check if a watcher for this path and watch already exists */
 	bool already_exists = false;
-	for (int i = 0; i < monitor->watch_count; i++) {
+	for (int i = 0; i < monitor->num_watches; i++) {
 		if (strcmp(monitor->watches[i]->path, dir_path) == 0 && monitor->watches[i]->watch == watch) {
 			already_exists = true;
 			break;
@@ -237,29 +228,29 @@ bool monitor_tree(monitor_t *monitor, const char *dir_path, watch_entry_t *watch
 	}
 
 	if (!already_exists) {
-		watch_info_t *existing_info = watch_find(monitor, dir_path);
-		if (existing_info != NULL) {
+		watcher_t *existing_watcher = watcher_find(monitor, dir_path);
+		if (existing_watcher != NULL) {
 			/* Reuse the existing file descriptor */
-			int fd = existing_info->wd;
-			watch_info_t *info = calloc(1, sizeof(watch_info_t));
-			if (info == NULL) {
-				log_message(ERROR, "Failed to allocate memory for watch info");
+			int fd = existing_watcher->wd;
+			watcher_t *watcher = calloc(1, sizeof(watcher_t));
+			if (watcher == NULL) {
+				log_message(ERROR, "Failed to allocate memory for watcher");
 				return false;
 			}
 
-			info->wd = fd;
-			info->path = strdup(dir_path);
-			info->watch = watch;
-			info->shared_fd = true;
-			existing_info->shared_fd = true;
+			watcher->wd = fd;
+			watcher->path = strdup(dir_path);
+			watcher->watch = watch;
+			watcher->shared_fd = true;
+			existing_watcher->shared_fd = true;
 
-			if (!watch_stat(info)) {
-				watch_destroy(info);
+			if (!watcher_stat(watcher)) {
+				watcher_destroy(watcher);
 				return false;
 			}
 
-			if (!watch_add(monitor, info)) {
-				watch_destroy(info);
+			if (!watcher_add(monitor, watcher)) {
+				watcher_destroy(watcher);
 				return false;
 			}
 
@@ -272,38 +263,37 @@ bool monitor_tree(monitor_t *monitor, const char *dir_path, watch_entry_t *watch
 				return false;
 			}
 
-			watch_info_t *info = calloc(1, sizeof(watch_info_t));
-			if (info == NULL) {
-				log_message(ERROR, "Failed to allocate memory for watch info");
+			watcher_t *watcher = calloc(1, sizeof(watcher_t));
+			if (watcher == NULL) {
+				log_message(ERROR, "Failed to allocate memory for watcher");
 				close(fd);
 				return false;
 			}
 
-			info->wd = fd;
-			info->path = strdup(dir_path);
-			info->watch = watch;
-			info->shared_fd = false;
+			watcher->wd = fd;
+			watcher->path = strdup(dir_path);
+			watcher->watch = watch;
+			watcher->shared_fd = false;
 
-			if (!watch_stat(info)) {
-				watch_destroy(info);
+			if (!watcher_stat(watcher)) {
+				watcher_destroy(watcher);
 				close(fd);
 				return false;
 			}
 
-			if (!watch_add(monitor, info)) {
-				watch_destroy(info);
+			if (!watcher_add(monitor, watcher)) {
+				watcher_destroy(watcher);
 				close(fd);
 				return false;
 			}
 
-			if (!monitor_kqueue(monitor, info)) {
-				/* The watch_info is already in the monitor's list, so it will be cleaned up on monitor_destroy */
+			if (!monitor_kqueue(monitor, watcher)) {
 				return false;
 			}
 			log_message(DEBUG, "Added new watch for directory: %s", dir_path);
 
 			/* Establish baseline state */
-			state_table_get(monitor->states, dir_path, ENTITY_DIRECTORY, watch);
+			state_get(monitor->states, dir_path, ENTITY_DIRECTORY, watch);
 		}
 	}
 
@@ -314,29 +304,29 @@ bool monitor_tree(monitor_t *monitor, const char *dir_path, watch_entry_t *watch
 	}
 
 	if (watch->recursive) {
-		while ((entry = readdir(dir)) != NULL) {
+		while ((dirent = readdir(dir)) != NULL) {
 			char path[MAX_PATH_LEN];
-			struct stat st;
+			struct stat info;
 
 			/* Skip . and .. */
-			if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+			if (strcmp(dirent->d_name, ".") == 0 || strcmp(dirent->d_name, "..") == 0) {
 				continue;
 			}
 
 			/* Skip hidden files/directories unless hidden is true */
-			if (!watch->hidden && entry->d_name[0] == '.') {
-				log_message(DEBUG, "Skipping hidden file/directory: %s/%s", dir_path, entry->d_name);
+			if (!watch->hidden && dirent->d_name[0] == '.') {
+				log_message(DEBUG, "Skipping hidden file/directory: %s/%s", dir_path, dirent->d_name);
 				continue;
 			}
 
-			snprintf(path, sizeof(path), "%s/%s", dir_path, entry->d_name);
+			snprintf(path, sizeof(path), "%s/%s", dir_path, dirent->d_name);
 
-			if (stat(path, &st) == -1) {
+			if (stat(path, &info) == -1) {
 				log_message(WARNING, "Failed to stat %s: %s", path, strerror(errno));
 				continue;
 			}
 
-			if (S_ISDIR(st.st_mode)) {
+			if (S_ISDIR(info.st_mode)) {
 				/* Recursively add subdirectory */
 				if (!monitor_tree(monitor, path, watch)) {
 					log_message(WARNING, "Failed to add recursive watch for %s", path);
@@ -351,8 +341,8 @@ bool monitor_tree(monitor_t *monitor, const char *dir_path, watch_entry_t *watch
 }
 
 /* Add a watch for a file or directory based on a watch entry */
-bool monitor_add(monitor_t *monitor, watch_entry_t *watch) {
-	struct stat st;
+bool monitor_add(monitor_t *monitor, watch_t *watch) {
+	struct stat info;
 
 	if (monitor == NULL || watch == NULL) {
 		log_message(ERROR, "Invalid arguments to monitor_add_watch");
@@ -360,40 +350,40 @@ bool monitor_add(monitor_t *monitor, watch_entry_t *watch) {
 	}
 
 	/* Check if we already have a watch for this path, and reuse the file descriptor if we do */
-	watch_info_t *existing_info = watch_find(monitor, watch->path);
-	if (existing_info != NULL) {
+	watcher_t *existing_watcher = watcher_find(monitor, watch->path);
+	if (existing_watcher != NULL) {
 		log_message(INFO, "Adding additional watch for %s (watch: %s)", watch->path, watch->name);
 
-		/* Create a new watch_info that reuses the file descriptor */
-		watch_info_t *info = calloc(1, sizeof(watch_info_t));
-		if (info == NULL) {
-			log_message(ERROR, "Failed to allocate memory for watch info");
+		/* Create a new watcher that reuses the file descriptor */
+		watcher_t *watcher = calloc(1, sizeof(watcher_t));
+		if (watcher == NULL) {
+			log_message(ERROR, "Failed to allocate memory for watcher");
 			return false;
 		}
 
 		/* Reuse the existing file descriptor */
-		info->wd = existing_info->wd;
-		info->path = strdup(watch->path);
-		info->watch = watch;
-		info->shared_fd = true; /* Mark that this FD is shared */
+		watcher->wd = existing_watcher->wd;
+		watcher->path = strdup(watch->path);
+		watcher->watch = watch;
+		watcher->shared_fd = true; /* Mark that this FD is shared */
 
-		if (!watch_stat(info)) {
-			watch_destroy(info);
+		if (!watcher_stat(watcher)) {
+			watcher_destroy(watcher);
 			return false;
 		}
 
-		if (!watch_add(monitor, info)) {
-			watch_destroy(info);
+		if (!watcher_add(monitor, watcher)) {
+			watcher_destroy(watcher);
 			return false;
 		}
 
-		/* Update the existing info to also mark it as shared */
-		existing_info->shared_fd = true;
+		/* Update the existing watcher to also mark it as shared */
+		existing_watcher->shared_fd = true;
 
 		/* For directories with recursive monitoring, we still need to discover subdirectories */
-		if (watch->type == WATCH_DIRECTORY && watch->recursive) {
-			struct stat st;
-			if (stat(watch->path, &st) == 0 && S_ISDIR(st.st_mode)) {
+		if (watch->target == WATCH_DIRECTORY && watch->recursive) {
+			struct stat info;
+			if (stat(watch->path, &info) == 0 && S_ISDIR(info.st_mode)) {
 				monitor_tree(monitor, watch->path, watch); /* true = skip existing main dir */
 			}
 		}
@@ -403,25 +393,25 @@ bool monitor_add(monitor_t *monitor, watch_entry_t *watch) {
 	}
 
 	/* Get file/directory stats */
-	if (stat(watch->path, &st) == -1) {
+	if (stat(watch->path, &info) == -1) {
 		log_message(ERROR, "Failed to stat %s: %s", watch->path, strerror(errno));
 		return false;
 	}
 
 	/* Handle directories (possibly recursively) */
-	if (S_ISDIR(st.st_mode)) {
-		if (watch->type != WATCH_DIRECTORY) {
+	if (S_ISDIR(info.st_mode)) {
+		if (watch->target != WATCH_DIRECTORY) {
 			log_message(WARNING, "%s is a directory but configured as a file", watch->path);
-			watch->type = WATCH_DIRECTORY;
+			watch->target = WATCH_DIRECTORY;
 		}
 
 		return monitor_tree(monitor, watch->path, watch); /* false = don't skip existing */
 	}
 	/* Handle regular files */
-	else if (S_ISREG(st.st_mode)) {
-		if (watch->type != WATCH_FILE) {
+	else if (S_ISREG(info.st_mode)) {
+		if (watch->target != WATCH_FILE) {
 			log_message(WARNING, "%s is a file but configured as a directory", watch->path);
-			watch->type = WATCH_FILE;
+			watch->target = WATCH_FILE;
 		}
 
 		int fd = open(watch->path, O_RDONLY);
@@ -430,33 +420,33 @@ bool monitor_add(monitor_t *monitor, watch_entry_t *watch) {
 			return false;
 		}
 
-		watch_info_t *info = calloc(1, sizeof(watch_info_t));
-		if (info == NULL) {
-			log_message(ERROR, "Failed to allocate memory for watch info");
+		watcher_t *watcher = calloc(1, sizeof(watcher_t));
+		if (watcher == NULL) {
+			log_message(ERROR, "Failed to allocate memory for watcher");
 			close(fd);
 			return false;
 		}
 
-		info->wd = fd;
-		info->path = strdup(watch->path);
-		info->watch = watch;
-		info->shared_fd = false; /* Initially not shared */
+		watcher->wd = fd;
+		watcher->path = strdup(watch->path);
+		watcher->watch = watch;
+		watcher->shared_fd = false; /* Initially not shared */
 
-		if (!watch_stat(info)) {
-			watch_destroy(info);
+		if (!watcher_stat(watcher)) {
+			watcher_destroy(watcher);
 			close(fd);
 			return false;
 		}
 
-		if (!watch_add(monitor, info)) {
-			watch_destroy(info);
+		if (!watcher_add(monitor, watcher)) {
+			watcher_destroy(watcher);
 			return false;
 		}
 
 		/* Establish baseline state */
-		state_table_get(monitor->states, info->path, ENTITY_FILE, watch);
+		state_get(monitor->states, watcher->path, ENTITY_FILE, watch);
 
-		return monitor_kqueue(monitor, info);
+		return monitor_kqueue(monitor, watcher);
 	}
 	/* Unsupported file type */
 	else {
@@ -466,10 +456,10 @@ bool monitor_add(monitor_t *monitor, watch_entry_t *watch) {
 }
 
 /* Create a watch entry for the configuration file */
-static watch_entry_t *config_entry(const char *config_file_path) {
+static watch_t *config_entry(const char *config_file_path) {
 	if (!config_file_path) return NULL;
 
-	watch_entry_t *config_watch = calloc(1, sizeof(watch_entry_t));
+	watch_t *config_watch = calloc(1, sizeof(watch_t));
 	if (config_watch == NULL) {
 		log_message(ERROR, "Failed to allocate memory for config file watch");
 		return NULL;
@@ -477,8 +467,8 @@ static watch_entry_t *config_entry(const char *config_file_path) {
 
 	config_watch->name = strdup("__config_file__");
 	config_watch->path = strdup(config_file_path);
-	config_watch->type = WATCH_FILE;
-	config_watch->events = EVENT_CONTENT;
+	config_watch->target = WATCH_FILE;
+	config_watch->filter = EVENT_CONTENT;
 	config_watch->command = strdup("__config_reload__");
 	config_watch->log_output = false;
 	config_watch->buffer_output = false;
@@ -516,24 +506,24 @@ bool monitor_setup(monitor_t *monitor) {
 	}
 
 	/* Add watches for each entry in the configuration */
-	for (int i = 0; i < monitor->config->watch_count; i++) {
+	for (int i = 0; i < monitor->config->num_watches; i++) {
 		if (!monitor_add(monitor, monitor->config->watches[i])) {
 			log_message(WARNING, "Failed to add watch for %s, skipping", monitor->config->watches[i]->path);
 		}
 	}
 
 	/* Check if we have at least one active watch */
-	if (monitor->watch_count == 0) {
+	if (monitor->num_watches == 0) {
 		log_message(ERROR, "No valid watches could be set up, aborting");
 		return false;
 	}
 
 	/* Add config file watch for hot reload by adding it to the config structure */
-	if (monitor->config_file != NULL) {
-		watch_entry_t *config_watch = config_entry(monitor->config_file);
+	if (monitor->config_path != NULL) {
+		watch_t *config_watch = config_entry(monitor->config_path);
 		if (config_watch) {
 			/* Add to config structure so it gets managed properly */
-			watch_entry_t **new_watches = realloc(monitor->config->watches, (monitor->config->watch_count + 1) * sizeof(watch_entry_t *));
+			watch_t **new_watches = realloc(monitor->config->watches, (monitor->config->num_watches + 1) * sizeof(watch_t *));
 			if (new_watches == NULL) {
 				log_message(WARNING, "Failed to add config watch to config structure");
 				free(config_watch->name);
@@ -542,15 +532,15 @@ bool monitor_setup(monitor_t *monitor) {
 				free(config_watch);
 			} else {
 				monitor->config->watches = new_watches;
-				monitor->config->watches[monitor->config->watch_count] = config_watch;
-				monitor->config->watch_count++;
+				monitor->config->watches[monitor->config->num_watches] = config_watch;
+				monitor->config->num_watches++;
 
 				if (!monitor_add(monitor, config_watch)) {
-					log_message(WARNING, "Failed to add config file watch for %s", monitor->config_file);
+					log_message(WARNING, "Failed to add config file watch for %s", monitor->config_path);
 					/* Remove from config since it wasn't added to monitor */
-					monitor->config->watch_count--;
+					monitor->config->num_watches--;
 				} else {
-					log_message(DEBUG, "Added config file watch for %s", monitor->config_file);
+					log_message(DEBUG, "Added config file watch for %s", monitor->config_path);
 				}
 			}
 		}
@@ -566,8 +556,8 @@ bool monitor_poll(monitor_t *monitor) {
 	struct timespec timeout, *p_timeout;
 
 	/* Check for reload request */
-	if (monitor->reload_requested) {
-		monitor->reload_requested = false;
+	if (monitor->reload) {
+		monitor->reload = false;
 		if (!monitor_reload(monitor)) {
 			log_message(ERROR, "Failed to reload configuration, continuing with existing config");
 		}
@@ -606,23 +596,23 @@ bool monitor_poll(monitor_t *monitor) {
 		log_message(DEBUG, "Processing %d new kqueue events", nev);
 		
 		/* Initialize sync request for collecting paths that need validation */
-		sync_request_t sync_request;
-		sync_request_init(&sync_request);
+		syncreq_t syncreq;
+		syncreq_init(&syncreq);
 		
 		/* Process events and collect sync requests */
-		events_handle(monitor, events, nev, &after_kevent_time, &sync_request);
+		events_handle(monitor, events, nev, &after_kevent_time, &syncreq);
 		
 		/* Handle any sync requests */
-		if (sync_request.count > 0) {
-			log_message(DEBUG, "Processing %d sync requests", sync_request.count);
-			for (int i = 0; i < sync_request.count; i++) {
-				log_message(DEBUG, "Validating watch for path: %s", sync_request.paths[i]);
-				monitor_sync(monitor, sync_request.paths[i]);
+		if (syncreq.count > 0) {
+			log_message(DEBUG, "Processing %d sync requests", syncreq.count);
+			for (int i = 0; i < syncreq.count; i++) {
+				log_message(DEBUG, "Validating watch for path: %s", syncreq.paths[i]);
+				monitor_sync(monitor, syncreq.paths[i]);
 			}
 		}
 		
 		/* Clean up sync request */
-		sync_request_cleanup(&sync_request);
+		syncreq_cleanup(&syncreq);
 	} else {
 		/* nev == 0 means timeout occurred */
 		if (p_timeout) {
@@ -640,7 +630,7 @@ bool monitor_poll(monitor_t *monitor) {
 	events_delayed(monitor);
 
 	/* Clean up expired command intents */
-	command_intent_expire();
+	intent_expire();
 
 	return true; /* Continue monitoring */
 }
@@ -654,7 +644,7 @@ bool monitor_start(monitor_t *monitor) {
 
 	monitor->running = true;
 
-	log_message(NOTICE, "Starting file monitor with %d watches", monitor->watch_count);
+	log_message(NOTICE, "Starting file monitor with %d watches", monitor->num_watches);
 
 	/* Main event loop */
 	while (monitor->running) {
@@ -669,13 +659,13 @@ bool monitor_start(monitor_t *monitor) {
 
 /* Process a reload request */
 bool monitor_reload(monitor_t *monitor) {
-	if (monitor == NULL || monitor->config_file == NULL) {
+	if (monitor == NULL || monitor->config_path == NULL) {
 		log_message(ERROR, "Invalid monitor or missing configuration file for reload");
 		return false;
 	}
 
-	log_message(INFO, "Reloading configuration from %s", monitor->config_file);
-	log_message(DEBUG, "Current configuration has %d watches", monitor->watch_count);
+	log_message(INFO, "Reloading configuration from %s", monitor->config_path);
+	log_message(DEBUG, "Current configuration has %d watches", monitor->num_watches);
 
 	/* Save existing config to compare later */
 	config_t *old_config = monitor->config;
@@ -692,19 +682,19 @@ bool monitor_reload(monitor_t *monitor) {
 	new_config->syslog_level = old_config->syslog_level;
 
 	/* Parse configuration file */
-	if (!config_parse_file(new_config, monitor->config_file)) {
-		log_message(ERROR, "Failed to parse new config, keeping old one: %s", monitor->config_file);
+	if (!config_parse(new_config, monitor->config_path)) {
+		log_message(ERROR, "Failed to parse new config, keeping old one: %s", monitor->config_path);
 		config_destroy(new_config);
 		/* Re-validate the watch on the config file to detect subsequent changes */
-		monitor_sync(monitor, monitor->config_file);
+		monitor_sync(monitor, monitor->config_path);
 		return false;
 	}
 
 	/* Add config file watch to the new config so it gets re-added */
-	if (monitor->config_file != NULL) {
-		watch_entry_t *config_watch = config_entry(monitor->config_file);
+	if (monitor->config_path != NULL) {
+		watch_t *config_watch = config_entry(monitor->config_path);
 		if (config_watch) {
-			watch_entry_t **new_entries = realloc(new_config->watches, (new_config->watch_count + 1) * sizeof(watch_entry_t *));
+			watch_t **new_entries = realloc(new_config->watches, (new_config->num_watches + 1) * sizeof(watch_t *));
 			if (new_entries == NULL) {
 				log_message(WARNING, "Failed to add config watch to new config structure");
 				free(config_watch->name);
@@ -713,15 +703,15 @@ bool monitor_reload(monitor_t *monitor) {
 				free(config_watch);
 			} else {
 				new_config->watches = new_entries;
-				new_config->watches[new_config->watch_count] = config_watch;
-				new_config->watch_count++;
+				new_config->watches[new_config->num_watches] = config_watch;
+				new_config->num_watches++;
 			}
 		}
 	}
 
 	/* Reset the state management system */
-	state_table_destroy(monitor->states);
-	monitor->states = state_table_create(PATH_HASH_SIZE);
+	state_destroy(monitor->states);
+	monitor->states = state_create(PATH_HASH_SIZE);
 	if (!monitor->states) {
 		log_message(ERROR, "Failed to recreate state table during reload");
 		return false;
@@ -744,64 +734,64 @@ bool monitor_reload(monitor_t *monitor) {
 	}
 
 	/* Save old watches to be destroyed later */
-	watch_info_t **old_watches_list = monitor->watches;
-	int old_watch_count = monitor->watch_count;
+	watcher_t **stale_watches = monitor->watches;
+	int stale_count = monitor->num_watches;
 
 	/* Reset monitor's watch list to be populated with new watches */
 	monitor->watches = NULL;
-	monitor->watch_count = 0;
+	monitor->num_watches = 0;
 
 	/* Add watches from the new configuration (including the config file watch) */
-	for (int i = 0; i < new_config->watch_count; i++) {
+	for (int i = 0; i < new_config->num_watches; i++) {
 		if (!monitor_add(monitor, new_config->watches[i])) {
 			log_message(WARNING, "Failed to add watch for %s", new_config->watches[i]->path);
 		}
 	}
 
 	/* Destroy the old watches */
-	for (int i = 0; i < old_watch_count; i++) {
-		watch_destroy(old_watches_list[i]);
+	for (int i = 0; i < stale_count; i++) {
+		watcher_destroy(stale_watches[i]);
 	}
-	free(old_watches_list);
+	free(stale_watches);
 
 	/* Replace old config with new one */
 	config_destroy(old_config);
 	monitor->config = new_config;
 
 	/* After reloading, explicitly validate the config file watch to handle editor atomic saves */
-	monitor_sync(monitor, monitor->config_file);
+	monitor_sync(monitor, monitor->config_path);
 
-	log_message(INFO, "Configuration reload complete: %d active watches", monitor->watch_count);
+	log_message(INFO, "Configuration reload complete: %d active watches", monitor->num_watches);
 	return true;
 }
 
 /* Remove all watches for subdirectories of a given parent path */
-bool monitor_prune(monitor_t *monitor, const char *parent_path) {
-	if (!monitor || !parent_path) {
+bool monitor_prune(monitor_t *monitor, const char *parent) {
+	if (!monitor || !parent) {
 		return false;
 	}
 
-	int parent_len = strlen(parent_path);
+	int parent_len = strlen(parent);
 	bool changed = false;
 
-	for (int i = monitor->watch_count - 1; i >= 0; i--) {
-		watch_info_t *info = monitor->watches[i];
-		if (!info || !info->path) continue;
+	for (int i = monitor->num_watches - 1; i >= 0; i--) {
+		watcher_t *watcher = monitor->watches[i];
+		if (!watcher || !watcher->path) continue;
 
 		/* Check if it's a subdirectory */
-		if ((int) strlen(info->path) > parent_len &&
-		    strncmp(info->path, parent_path, parent_len) == 0 &&
-		    info->path[parent_len] == '/') {
-			log_message(DEBUG, "Removing stale subdirectory watch: %s", info->path);
+		if ((int) strlen(watcher->path) > parent_len &&
+		    strncmp(watcher->path, parent, parent_len) == 0 &&
+		    watcher->path[parent_len] == '/') {
+			log_message(DEBUG, "Removing stale subdirectory watch: %s", watcher->path);
 
-			/* Destroy the watch info (closes FD if not shared) */
-			watch_destroy(info);
+			/* Destroy the watcher (closes FD if not shared) */
+			watcher_destroy(watcher);
 
 			/* Remove from array by shifting */
-			for (int j = i; j < monitor->watch_count - 1; j++) {
+			for (int j = i; j < monitor->num_watches - 1; j++) {
 				monitor->watches[j] = monitor->watches[j + 1];
 			}
-			monitor->watch_count--;
+			monitor->num_watches--;
 			changed = true;
 		}
 	}
@@ -815,75 +805,75 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 		return false;
 	}
 
-	struct stat st;
-	bool path_exists = (stat(path, &st) == 0);
+	struct stat info;
+	bool path_exists = (stat(path, &info) == 0);
 	bool list_modified = false;
 
-	/* Find all watch_info entries for this exact path */
-	for (int i = 0; i < monitor->watch_count; i++) {
-		watch_info_t *info = monitor->watches[i];
-		if (info && info->path && strcmp(info->path, path) == 0) {
+	/* Find all watcher entries for this exact path */
+	for (int i = 0; i < monitor->num_watches; i++) {
+		watcher_t *watcher = monitor->watches[i];
+		if (watcher && watcher->path && strcmp(watcher->path, path) == 0) {
 			if (!path_exists) {
 				/* Path does not exist - it was deleted */
 				log_message(DEBUG, "Path deleted: %s. Removing watch.", path);
 
 				/* If it was a recursive directory, remove all subdirectory watches */
-				if (info->watch->type == WATCH_DIRECTORY && info->watch->recursive) {
+				if (watcher->watch->target == WATCH_DIRECTORY && watcher->watch->recursive) {
 					monitor_prune(monitor, path);
 				}
 
 				/* Remove this watch */
-				watch_destroy(info);
-				for (int j = i; j < monitor->watch_count - 1; j++) {
+				watcher_destroy(watcher);
+				for (int j = i; j < monitor->num_watches - 1; j++) {
 					monitor->watches[j] = monitor->watches[j + 1];
 				}
-				monitor->watch_count--;
+				monitor->num_watches--;
 				i--; /* Adjust index after removal */
 				list_modified = true;
 
-			} else if (info->inode != st.st_ino || info->device != st.st_dev) {
+			} else if (watcher->inode != info.st_ino || watcher->device != info.st_dev) {
 				/* Path exists but inode/device changed - it was recreated */
 				log_message(DEBUG, "Path recreated: %s. Refreshing watch.", path);
 
 				/* Close old file descriptor if not shared */
-				if (!info->shared_fd && info->wd >= 0) {
-					close(info->wd);
+				if (!watcher->shared_fd && watcher->wd >= 0) {
+					close(watcher->wd);
 				}
 
 				/* Open new file descriptor */
 				int new_fd = open(path, O_RDONLY);
 				if (new_fd == -1) {
 					log_message(ERROR, "Failed to open recreated path %s: %s", path, strerror(errno));
-					/* Treat as deleted for now */
-					watch_destroy(info);
-					for (int j = i; j < monitor->watch_count - 1; j++) {
+					/* Treat as deleted for current_time */
+					watcher_destroy(watcher);
+					for (int j = i; j < monitor->num_watches - 1; j++) {
 						monitor->watches[j] = monitor->watches[j + 1];
 					}
-					monitor->watch_count--;
+					monitor->num_watches--;
 					i--;
 					list_modified = true;
 					continue;
 				}
 
-				info->wd = new_fd;
-				info->inode = st.st_ino;
-				info->device = st.st_dev;
-				info->shared_fd = false; /* It's a new FD */
+				watcher->wd = new_fd;
+				watcher->inode = info.st_ino;
+				watcher->device = info.st_dev;
+				watcher->shared_fd = false; /* It's a new FD */
 
 				/* Re-register with kqueue */
-				monitor_kqueue(monitor, info);
+				monitor_kqueue(monitor, watcher);
 
 				/* If it was a recursive directory, rescan subdirectories */
-				if (info->watch->type == WATCH_DIRECTORY && info->watch->recursive) {
+				if (watcher->watch->target == WATCH_DIRECTORY && watcher->watch->recursive) {
 					log_message(DEBUG, "Re-scanning subdirectories for recreated path: %s", path);
 					monitor_prune(monitor, path);
-					monitor_tree(monitor, path, info->watch);
+					monitor_tree(monitor, path, watcher->watch);
 				}
 				list_modified = true;
 
 			} else {
 				/* Path is valid and unchanged */
-				info->last_validation = time(NULL);
+				watcher->validated = time(NULL);
 			}
 		}
 	}
