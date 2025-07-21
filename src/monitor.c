@@ -476,7 +476,7 @@ static watch_t *monitor_config(const char *config_file_path) {
 	config_watch->hidden = false;
 	config_watch->environment = false;
 	config_watch->complexity = 1.0;
-	config_watch->processing_delay = 0;
+	config_watch->processing_delay = 100;
 
 	/* Check for strdup failures, which can return NULL on error */
 	if (!config_watch->name || !config_watch->path || !config_watch->command) {
