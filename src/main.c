@@ -17,9 +17,6 @@
 /* Program name */
 static const char *program_name;
 
-/* Global monitor pointer */
-monitor_t *g_monitor = NULL;
-
 /* Print usage */
 static void print_usage(void) {
 	fprintf(stderr, "Usage: %s [options]\n", program_name);
@@ -163,9 +160,6 @@ int main(int argc, char *argv[]) {
 		log_close();
 		return EXIT_FAILURE;
 	}
-
-	/* Store global reference for signal handler */
-	g_monitor = monitor;
 
 	/* Set monitor reference for daemon signal handler */
 	daemon_monitor(monitor);
