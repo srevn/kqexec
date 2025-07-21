@@ -397,42 +397,42 @@ void scanner_sync(monitor_t *monitor, node_t *node, entity_t *source) {
 		source->stability->unstable_count = max_unstable_count;
 	}
 
-	/* Second pass: Update all states with consistent values */
+	/* Second pass: Apply canonical values to ALL entities (including source) */
 	for (entity_t *state = node->entities; state; state = state->next) {
 		if (state_corrupted(state)) continue;
 
-		if (state != source) {
-			log_message(DEBUG, "Synchronizing state for watch %s", state->watch->name);
+		log_message(DEBUG, "Synchronizing state for watch %s", state->watch->name);
 
-			/* Always share universal directory state regardless of watch configuration */
-			state->exists = source->exists;
-			state->last_time = source->last_time;
-			state->wall_time = source->wall_time;
-			
-			/* Update activity state */
-			if (!state->scanner && path_active) {
-				state->scanner = scanner_create(state->node->path);
-			}
-			if (state->scanner) {
-				state->scanner->latest_time = sync_time;
-				state->scanner->active = path_active;
-			}
-			
-			/* Update stability state */
-			if (!state->stability && max_unstable_count > 0) {
-				state->stability = stability_create();
-			}
-			if (state->stability) {
-				state->stability->unstable_count = max_unstable_count;
-			}
+		/* Always share universal directory state regardless of watch configuration */
+		state->exists = source->exists;
+		state->last_time = source->last_time;
+		state->wall_time = source->wall_time;
+		
+		/* Update activity state with canonical values */
+		if (!state->scanner && path_active) {
+			state->scanner = scanner_create(state->node->path);
+		}
+		if (state->scanner) {
+			state->scanner->latest_time = sync_time;
+			state->scanner->active = path_active;
+		}
+		
+		/* Update stability state with canonical values */
+		if (!state->stability && max_unstable_count > 0) {
+			state->stability = stability_create();
+		}
+		if (state->stability) {
+			state->stability->unstable_count = max_unstable_count;
+		}
 
-			if (state->kind == ENTITY_DIRECTORY && source->kind == ENTITY_DIRECTORY) {
-				/* Only share directory statistics if scanning configurations are compatible */
-				bool stats_compatible = (state->watch->recursive == source->watch->recursive &&
-				                         state->watch->hidden == source->watch->hidden);
+		/* Synchronize directory statistics - source has canonical stats */
+		if (state->kind == ENTITY_DIRECTORY && source->kind == ENTITY_DIRECTORY) {
+			bool stats_compatible = (state->watch->recursive == source->watch->recursive &&
+			                         state->watch->hidden == source->watch->hidden);
 
-				if (stats_compatible && source->stability) {
-					/* Compatible watches: share statistics directly */
+			if (stats_compatible) {
+				/* Compatible watches: copy stats from source (canonical) to others */
+				if (state != source && source->stability) {
 					if (!state->stability) {
 						state->stability = stability_create();
 					}
@@ -441,26 +441,26 @@ void scanner_sync(monitor_t *monitor, node_t *node, entity_t *source) {
 						*state->stability = *source->stability;
 					}
 					log_message(DEBUG, "Shared directory statistics with compatible watch %s", state->watch->name);
-				} else {
-					/* Incompatible watches: rescan to get accurate statistics */
-					stats_t new_stats;
-					if (scanner_scan(state->node->path, &new_stats)) {
-						/* Save previous stats for comparison and update with fresh scan */
-						if (!state->stability) {
-							state->stability = stability_create();
-						}
-						if (state->stability) {
-							state->stability->prev_stats = state->stability->stats;
-							state->stability->stats = new_stats;
-						}
-						scanner_update(state);
-						log_message(DEBUG, "Rescanned directory for incompatible watch %s (recursive=%s, hidden=%s)", 
-						    				state->watch->name, 
-											state->watch->recursive ? "true" : "false",
-											state->watch->hidden ? "true" : "false");
-					} else {
-						log_message(WARNING, "Failed to rescan directory for watch %s during sync", state->watch->name);
+				}
+			} else {
+				/* Incompatible watches: each needs its own rescan */
+				stats_t new_stats;
+				if (scanner_scan(state->node->path, &new_stats)) {
+					/* Save previous stats for comparison and update with fresh scan */
+					if (!state->stability) {
+						state->stability = stability_create();
 					}
+					if (state->stability) {
+						state->stability->prev_stats = state->stability->stats;
+						state->stability->stats = new_stats;
+					}
+					scanner_update(state);
+					log_message(DEBUG, "Rescanned directory for incompatible watch %s (recursive=%s, hidden=%s)", 
+					    				state->watch->name, 
+										state->watch->recursive ? "true" : "false",
+										state->watch->hidden ? "true" : "false");
+				} else {
+					log_message(WARNING, "Failed to rescan directory for watch %s during sync", state->watch->name);
 				}
 			}
 		}
