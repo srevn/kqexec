@@ -783,10 +783,34 @@ static long scanner_adjust(entity_t *state, long base_ms) {
 	}
 	int recent_change = recent_files + recent_dirs + recent_depth + size_weight;
 	
-	/* Log recent activity calculation for debugging */
+	/* Log recent activity calculation */
 	log_message(DEBUG, "Recent activity for %s: files=%d, dirs=%d, depth=%d, size=%s, size_weight=%d (total_change=%d)", 
 	            		state->node->path, recent_files, recent_dirs, recent_depth, 
 	            		format_size(recent_size, true), size_weight, recent_change);
+
+	if (state->stability) {
+		/* Calculate a cumulative magnitude factor to scale the quiet period */
+		ssize_t cumulative_size = state->stability->delta_size > 0 ? state->stability->delta_size : 0;
+		int cumulative_size_weight = (int)(cumulative_size / (100 * 1024 * 1024)); /* 1 point per 100MB */
+
+		int cumulative_magnitude = abs(state->stability->delta_files) +
+		                           abs(state->stability->delta_dirs) +
+		                           abs(state->stability->delta_depth) +
+		                           cumulative_size_weight;
+
+		/* Only apply the multiplier if the cumulative change is significant */
+		if (cumulative_magnitude > 100) {
+			float magnitude_factor = 1.0 + (cumulative_magnitude / 50.0);
+
+			/* Cap the factor to prevent excessively long quiet periods */
+			if (magnitude_factor > 5.0) {
+				magnitude_factor = 5.0;
+			}
+
+			log_message(DEBUG, "Applying cumulative magnitude factor of %.2f to quiet period", magnitude_factor);
+			required_ms = (long)(required_ms * magnitude_factor);
+		}
+	}
 
 	/* If stability was previously achieved and then lost, increase quiet period */
 	if (state->stability && state->stability->stability_lost) {
@@ -799,7 +823,7 @@ static long scanner_adjust(entity_t *state, long base_ms) {
 	if (tree_depth > 0) {
 		/* Scale down the depth impact for simple operations */
 		float depth_factor = (recent_change <= 1) ? 0.5 : 1.0;
-		required_ms += tree_depth * 150 * depth_factor; /* Reduced from 250ms to 150ms per level */
+		required_ms += tree_depth * 150 * depth_factor; /* 150ms per level */
 	}
 
 	/* Directory size complexity factor - based on recent activity */
@@ -848,7 +872,7 @@ static long scanner_limit(entity_t *state, long required_ms) {
 	if (required_ms < 100) required_ms = 100;
 
 	/* Dynamic cap based on operation characteristics */
-	long maximum_ms = 60000; /* Default 60 seconds */
+	long maximum_ms = 90000; /* Default 90 seconds */
 
 	if (required_ms > maximum_ms) {
 		log_message(DEBUG, "Capping quiet period for %s from %ld ms to %ld ms", state->node->path, required_ms, maximum_ms);
