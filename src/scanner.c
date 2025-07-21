@@ -437,18 +437,8 @@ void scanner_sync(monitor_t *monitor, node_t *node, entity_t *source) {
 						state->stability = stability_create();
 					}
 					if (state->stability) {
-						state->stability->stats = source->stability->stats;
-						state->stability->prev_stats = source->stability->prev_stats;
-						state->stability->checks_count = source->stability->checks_count;
-						state->stability->checks_failed = source->stability->checks_failed;
-						state->stability->checks_required = source->stability->checks_required;
-					}
-					if (source->stability && state->stability) {
-						state->stability->delta_files = source->stability->delta_files;
-						state->stability->delta_dirs = source->stability->delta_dirs;
-						state->stability->delta_depth = source->stability->delta_depth;
-						state->stability->delta_size = source->stability->delta_size;
-						state->stability->stability_lost = source->stability->stability_lost;
+						/* Perform a full copy of the entire stability struct */
+						*state->stability = *source->stability;
 					}
 					log_message(DEBUG, "Shared directory statistics with compatible watch %s", state->watch->name);
 				} else {
