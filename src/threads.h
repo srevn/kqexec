@@ -7,15 +7,15 @@
 #include "monitor.h"
 
 /* Thread pool configuration constants */
-#define MAX_WORKER_THREADS 3               /* Maximum number of worker threads */
-#define MAX_WORK_QUEUE_SIZE 8              /* Maximum number of queued work items */
+#define MAX_WORKER_THREADS 1               /* Maximum number of worker threads */
+#define MAX_WORK_QUEUE_SIZE 4              /* Maximum number of queued work items */
 
-/* Work item for thread pool */
+/* Work task for thread pool */
 typedef struct task {
 	monitor_t *monitor;                    /* Monitor instance */
 	watch_t *watch;                        /* Watch configuration (copied) */
 	event_t *event;                        /* Event data (copied) */
-	struct task *next;                     /* Next item in queue */
+	struct task *next;                     /* Next task in queue */
 } task_t;
 
 /* Thread pool structure */
@@ -35,6 +35,6 @@ typedef struct threads {
 threads_t* threads_create(void);
 void threads_destroy(threads_t *threads);
 bool threads_submit(threads_t *threads, monitor_t *monitor, const watch_t *watch, const event_t *event);
-void threads_wait_all(threads_t *threads);
+void threads_wait(threads_t *threads);
 
 #endif /* THREADS_H */

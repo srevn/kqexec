@@ -7,7 +7,7 @@
 #include "logger.h"
 
 /* Deep copy a watch entry for thread safety */
-static watch_t *copy_watch_entry(const watch_t *watch) {
+static watch_t *threads_copy_watch(const watch_t *watch) {
 	if (!watch) return NULL;
 
 	watch_t *copy = calloc(1, sizeof(watch_t));
@@ -30,7 +30,7 @@ static watch_t *copy_watch_entry(const watch_t *watch) {
 }
 
 /* Free a copied watch entry */
-static void free_watch_entry(watch_t *watch) {
+static void threads_free_watch(watch_t *watch) {
 	if (!watch) return;
 
 	free(watch->name);
@@ -40,7 +40,7 @@ static void free_watch_entry(watch_t *watch) {
 }
 
 /* Deep copy a file event for thread safety */
-static event_t *copy_file_event(const event_t *event) {
+static event_t *threads_copy_event(const event_t *event) {
 	if (!event) return NULL;
 
 	event_t *copy = calloc(1, sizeof(event_t));
@@ -56,7 +56,7 @@ static event_t *copy_file_event(const event_t *event) {
 }
 
 /* Free a copied file event */
-static void free_file_event(event_t *event) {
+static void threads_free_event(event_t *event) {
 	if (!event) return;
 
 	free((char *) event->path);
@@ -64,46 +64,46 @@ static void free_file_event(event_t *event) {
 }
 
 /* Worker thread function */
-static void *worker_thread(void *arg) {
-	threads_t *pool = (threads_t *) arg;
+static void *threads_worker(void *arg) {
+	threads_t *threads = (threads_t *) arg;
 
 	while (true) {
-		task_t *item = NULL;
+		task_t *task = NULL;
 
-		/* Get work item from queue */
-		pthread_mutex_lock(&pool->queue_mutex);
+		/* Get work task from queue */
+		pthread_mutex_lock(&threads->queue_mutex);
 
-		while (pool->queue_head == NULL && !pool->shutdown) {
-			pthread_cond_wait(&pool->work_available, &pool->queue_mutex);
+		while (threads->queue_head == NULL && !threads->shutdown) {
+			pthread_cond_wait(&threads->work_available, &threads->queue_mutex);
 		}
 
-		if (pool->shutdown) {
-			pthread_mutex_unlock(&pool->queue_mutex);
+		if (threads->shutdown) {
+			pthread_mutex_unlock(&threads->queue_mutex);
 			break;
 		}
 
-		/* Dequeue work item */
-		item = pool->queue_head;
-		pool->queue_head = item->next;
-		if (pool->queue_head == NULL) {
-			pool->queue_tail = NULL;
+		/* Dequeue work task */
+		task = threads->queue_head;
+		threads->queue_head = task->next;
+		if (threads->queue_head == NULL) {
+			threads->queue_tail = NULL;
 		}
-		pool->queue_size--;
+		threads->queue_size--;
 
-		pthread_mutex_unlock(&pool->queue_mutex);
+		pthread_mutex_unlock(&threads->queue_mutex);
 
 		/* Execute the command */
-		if (item) {
-			command_execute(item->monitor, item->watch, item->event, true);
+		if (task) {
+			command_execute(task->monitor, task->watch, task->event, false);
 
-			/* Clean up work item */
-			free_watch_entry(item->watch);
-			free_file_event(item->event);
-			free(item);
+			/* Clean up work task */
+			threads_free_watch(task->watch);
+			threads_free_event(task->event);
+			free(task);
 		}
 
 		/* Signal that work is done */
-		pthread_cond_signal(&pool->work_done);
+		pthread_cond_signal(&threads->work_done);
 	}
 
 	return NULL;
@@ -148,7 +148,7 @@ threads_t* threads_create(void) {
 	/* Create worker threads */
 	threads->thread_count = MAX_WORKER_THREADS;
 	for (int i = 0; i < MAX_WORKER_THREADS; i++) {
-		if (pthread_create(&threads->threads[i], NULL, worker_thread, threads) != 0) {
+		if (pthread_create(&threads->threads[i], NULL, threads_worker, threads) != 0) {
 			log_message(ERROR, "Failed to create worker thread %d", i);
 			threads->thread_count = i;
 			threads_destroy(threads);
@@ -176,13 +176,13 @@ void threads_destroy(threads_t *threads) {
 	}
 
 	/* Clean up remaining work items */
-	task_t *item = threads->queue_head;
-	while (item) {
-		task_t *next = item->next;
-		free_watch_entry(item->watch);
-		free_file_event(item->event);
-		free(item);
-		item = next;
+	task_t *task = threads->queue_head;
+	while (task) {
+		task_t *next = task->next;
+		threads_free_watch(task->watch);
+		threads_free_event(task->event);
+		free(task);
+		task = next;
 	}
 
 	/* Destroy synchronization objects */
@@ -202,23 +202,23 @@ bool threads_submit(threads_t *threads, monitor_t *monitor, const watch_t *watch
 		return false;
 	}
 
-	/* Create work item */
-	task_t *item = calloc(1, sizeof(task_t));
-	if (!item) {
-		log_message(ERROR, "Failed to allocate memory for work item");
+	/* Create work task */
+	task_t *task = calloc(1, sizeof(task_t));
+	if (!task) {
+		log_message(ERROR, "Failed to allocate memory for work task");
 		return false;
 	}
 
-	item->monitor = monitor;
-	item->watch = copy_watch_entry(watch);
-	item->event = copy_file_event(event);
-	item->next = NULL;
+	task->monitor = monitor;
+	task->watch = threads_copy_watch(watch);
+	task->event = threads_copy_event(event);
+	task->next = NULL;
 
-	if (!item->watch || !item->event) {
-		log_message(ERROR, "Failed to copy watch/event data for work item");
-		free_watch_entry(item->watch);
-		free_file_event(item->event);
-		free(item);
+	if (!task->watch || !task->event) {
+		log_message(ERROR, "Failed to copy watch/event data for work task");
+		threads_free_watch(task->watch);
+		threads_free_event(task->event);
+		free(task);
 		return false;
 	}
 
@@ -228,19 +228,19 @@ bool threads_submit(threads_t *threads, monitor_t *monitor, const watch_t *watch
 	if (threads->queue_size >= MAX_WORK_QUEUE_SIZE) {
 		pthread_mutex_unlock(&threads->queue_mutex);
 		log_message(WARNING, "Work queue is full, dropping command execution for %s", event->path);
-		free_watch_entry(item->watch);
-		free_file_event(item->event);
-		free(item);
+		threads_free_watch(task->watch);
+		threads_free_event(task->event);
+		free(task);
 		return false;
 	}
 
 	/* Add to tail of queue */
 	if (threads->queue_tail) {
-		threads->queue_tail->next = item;
+		threads->queue_tail->next = task;
 	} else {
-		threads->queue_head = item;
+		threads->queue_head = task;
 	}
-	threads->queue_tail = item;
+	threads->queue_tail = task;
 	threads->queue_size++;
 
 	/* Signal workers */
@@ -254,7 +254,7 @@ bool threads_submit(threads_t *threads, monitor_t *monitor, const watch_t *watch
 }
 
 /* Wait for all queued work to complete */
-void threads_wait_all(threads_t *threads) {
+void threads_wait(threads_t *threads) {
 	if (!threads) return;
 
 	pthread_mutex_lock(&threads->queue_mutex);

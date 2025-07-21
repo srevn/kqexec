@@ -22,11 +22,15 @@
 /* Module-scoped threads reference */
 static threads_t *command_threads = NULL;
 
-/* Command configuration */
+/* Maximum length of command */
 #define MAX_CMD_LEN 4096
+
+/* Global array of active command intents */
 #define MAX_INTENTS 10
 static int intent_count = 0;
 static intent_t intents[MAX_INTENTS];
+
+/* Debounce time in milliseconds */
 static int debounce_ms = DEFAULT_DEBOUNCE_TIME_MS;
 
 /* SIGCHLD handler to reap child processes and mark command intents as complete */
@@ -560,22 +564,22 @@ char *command_placeholders(monitor_t *monitor, const watch_t *watch, const char 
 }
 
 /* Add line to output buffer */
-static bool buffer_append(char ***buffer, int *count, int *capacity, const char *line) {
-	if (*count >= *capacity) {
-		int new_capacity = *capacity == 0 ? 16 : *capacity * 2;
+static bool buffer_append(char ***buffer, int *buffer_count, int *buffer_capacity, const char *line) {
+	if (*buffer_count >= *buffer_capacity) {
+		int new_capacity = *buffer_capacity == 0 ? 16 : *buffer_capacity * 2;
 		char **new_buffer = realloc(*buffer, new_capacity * sizeof(char *));
 		if (!new_buffer) {
 			return false;
 		}
 		*buffer = new_buffer;
-		*capacity = new_capacity;
+		*buffer_capacity = new_capacity;
 	}
 
-	(*buffer)[*count] = strdup(line);
-	if (!(*buffer)[*count]) {
+	(*buffer)[*buffer_count] = strdup(line);
+	if (!(*buffer)[*buffer_count]) {
 		return false;
 	}
-	(*count)++;
+	(*buffer_count)++;
 	return true;
 }
 
@@ -591,14 +595,14 @@ static void buffer_flush(const watch_t *watch, char **buffer, int buffer_count) 
 }
 
 /* Command execution synchronous or asynchronous */
-bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *event, bool synchronous) {
+bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *event, bool async) {
 	if (watch == NULL || event == NULL) {
 		log_message(ERROR, "Invalid arguments to command_execute");
 		return false;
 	}
 
 	/* For asynchronous execution, delegate to thread pool */
-	if (!synchronous) {
+	if (async) {
 		return threads_submit(command_threads, monitor, watch, event);
 	}
 
@@ -915,7 +919,7 @@ void command_environment(monitor_t *monitor, const watch_t *watch, const event_t
 void command_cleanup(threads_t *threads) {
 	/* Wait for all pending commands to complete */
 	if (threads) {
-		threads_wait_all(threads);
+		threads_wait(threads);
 	}
 
 	/* Clean up command intents */

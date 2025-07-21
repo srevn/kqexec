@@ -12,7 +12,7 @@ typedef struct check {
 	struct timespec next_check;            /* When this directory needs checking */
 	watch_t **watches;                     /* Array of watches for this path */
 	int num_watches;                       /* Number of watches for this path */
-	int watch_capacity;                    /* Allocated capacity for watches array */
+	int watches_capacity;                  /* Allocated capacity for watches array */
 	bool verifying;                        /* True if in verification phase (skip quiet period checks) */
 	long scheduled_quiet;                  /* Quiet period used when scheduling this check */
 } check_t;
@@ -21,7 +21,7 @@ typedef struct check {
 typedef struct queue {
 	check_t *items;                        /* Min-heap of deferred checks */
 	int size;                              /* Current number of entries */
-	int capacity;                          /* Allocated capacity */
+	int items_capacity;                    /* Allocated capacity */
 } queue_t;
 
 /* Queue lifecycle management */
@@ -34,7 +34,7 @@ void queue_upsert(queue_t *queue, const char *path, watch_t *watch, struct times
 void queue_remove(queue_t *queue, const char *path);
 
 /* Check entry management */
-bool queue_watch_add(check_t *entry, watch_t *watch);
+bool queue_add(check_t *check, watch_t *watch);
 
 /* Time comparison and heap operations */
 int time_compare(struct timespec *a, struct timespec *b);

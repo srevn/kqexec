@@ -9,7 +9,7 @@
 typedef enum loglevel {
 	EMERG = LOG_EMERG,                     /* System is unusable */
 	ALERT = LOG_ALERT,                     /* Action must be taken immediately */
-	CRITICAL = LOG_CRIT,                   /* Critical conditions */
+	CRIT = LOG_CRIT,                       /* Critical conditions */
 	ERROR = LOG_ERR,                       /* Error conditions */
 	WARNING = LOG_WARNING,                 /* Warning conditions */
 	NOTICE = LOG_NOTICE,                   /* Normal but significant condition */

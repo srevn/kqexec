@@ -11,7 +11,7 @@
 /* Monitor configuration */
 #define MAX_WATCHES 128
 #define MAX_PATH_LEN 1024
-#define MAX_FAILED_CHECKS 3
+#define MAX_CHECKS_FAILED 3
 #define MAX_EVENTS 64
 
 /* Watched file/directory information */
@@ -27,7 +27,6 @@ typedef struct watcher {
 
 /* Structure to hold monitoring context */
 typedef struct monitor {
-	/* Core components */
 	int kq;                                /* Kqueue descriptor */
 	config_t *config;                      /* Configuration */
 	state_t *states;                       /* State table for this monitor */

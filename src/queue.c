@@ -9,40 +9,28 @@
 #include "config.h"
 #include "logger.h"
 
-/* Add a watch to a queue entry */
-bool queue_watch_add(check_t *entry, watch_t *watch) {
-	if (!entry || !watch) {
-		log_message(ERROR, "Invalid parameters for queue_watch_add");
-		return false;
+/* Initialize the priority queue */
+queue_t *queue_create(int initial_capacity) {
+	if (initial_capacity < 8) initial_capacity = 8;
+
+	queue_t *queue = calloc(1, sizeof(queue_t));
+	if (!queue) {
+		log_message(ERROR, "Failed to allocate memory for queue structure");
+		return NULL;
 	}
 
-	/* Check if this watch is already in the array */
-	for (int i = 0; i < entry->num_watches; i++) {
-		if (entry->watches && entry->watches[i] == watch) {
-			return true; /* Already present */
-		}
+	/* Allocate memory for the queue items and zero it out */
+	queue->items = calloc(initial_capacity, sizeof(check_t));
+	if (!queue->items) {
+		log_message(ERROR, "Failed to allocate memory for deferred check queue");
+		free(queue);
+		return NULL;
 	}
 
-	/* Ensure capacity */
-	if (entry->num_watches >= entry->watch_capacity) {
-		int new_capacity = entry->watch_capacity == 0 ? 4 : entry->watch_capacity * 2;
-		watch_t **new_watches = realloc(entry->watches, new_capacity * sizeof(watch_t *));
-		if (!new_watches) {
-			log_message(ERROR, "Failed to resize watches array in queue entry");
-			return false;
-		}
-		entry->watches = new_watches;
-		entry->watch_capacity = new_capacity;
-
-		/* Zero out new memory */
-		if (entry->num_watches < new_capacity) {
-			memset(&entry->watches[entry->num_watches], 0, (new_capacity - entry->num_watches) * sizeof(watch_t *));
-		}
-	}
-
-	/* Add the new watch */
-	entry->watches[entry->num_watches++] = watch;
-	return true;
+	queue->size = 0;
+	queue->items_capacity = initial_capacity;
+	log_message(DEBUG, "Initialized deferred check queue with capacity %d", initial_capacity);
+	return queue;
 }
 
 /* Cleanup the priority queue */
@@ -70,28 +58,41 @@ void queue_destroy(queue_t *queue) {
 	log_message(DEBUG, "Cleaned up deferred check queue");
 }
 
-/* Initialize the priority queue */
-queue_t *queue_create(int initial_capacity) {
-	if (initial_capacity < 8) initial_capacity = 8;
 
-	queue_t *queue = calloc(1, sizeof(queue_t));
-	if (!queue) {
-		log_message(ERROR, "Failed to allocate memory for queue structure");
-		return NULL;
+/* Add a watch to a queue entry */
+bool queue_add(check_t *check, watch_t *watch) {
+	if (!check || !watch) {
+		log_message(ERROR, "Invalid parameters for queue_add");
+		return false;
 	}
 
-	/* Allocate memory for the queue items and zero it out */
-	queue->items = calloc(initial_capacity, sizeof(check_t));
-	if (!queue->items) {
-		log_message(ERROR, "Failed to allocate memory for deferred check queue");
-		free(queue);
-		return NULL;
+	/* Check if this watch is already in the array */
+	for (int i = 0; i < check->num_watches; i++) {
+		if (check->watches && check->watches[i] == watch) {
+			return true; /* Already present */
+		}
 	}
 
-	queue->size = 0;
-	queue->capacity = initial_capacity;
-	log_message(DEBUG, "Initialized deferred check queue with capacity %d", initial_capacity);
-	return queue;
+	/* Ensure capacity */
+	if (check->num_watches >= check->watches_capacity) {
+		int new_capacity = check->watches_capacity == 0 ? 4 : check->watches_capacity * 2;
+		watch_t **new_watches = realloc(check->watches, new_capacity * sizeof(watch_t *));
+		if (!new_watches) {
+			log_message(ERROR, "Failed to resize watches array in queue entry");
+			return false;
+		}
+		check->watches = new_watches;
+		check->watches_capacity = new_capacity;
+
+		/* Zero out new memory */
+		if (check->num_watches < new_capacity) {
+			memset(&check->watches[check->num_watches], 0, (new_capacity - check->num_watches) * sizeof(watch_t *));
+		}
+	}
+
+	/* Add the new watch */
+	check->watches[check->num_watches++] = watch;
+	return true;
 }
 
 /* Compare two timespec values for priority queue ordering */
@@ -218,15 +219,15 @@ void queue_upsert(queue_t *queue, const char *path,
 
 	if (queue_index >= 0) {
 		/* Entry exists - update it */
-		check_t *entry = &queue->items[queue_index];
+		check_t *check = &queue->items[queue_index];
 
 		/* Add this watch if not already present */
-		if (!queue_watch_add(entry, watch)) {
+		if (!queue_add(check, watch)) {
 			log_message(WARNING, "Failed to add watch to existing queue entry for %s", path);
 		}
 
 		/* Update check time - always update to the new time */
-		entry->next_check = next_check;
+		check->next_check = next_check;
 
 		/* Restore heap property by trying both up and down heapify */
 		heap_up(queue->items, queue_index);
@@ -240,8 +241,8 @@ void queue_upsert(queue_t *queue, const char *path,
 	/* Entry not found, add new one */
 
 	/* Ensure capacity */
-	if (queue->size >= queue->capacity) {
-		int old_capacity = queue->capacity;
+	if (queue->size >= queue->items_capacity) {
+		int old_capacity = queue->items_capacity;
 		int new_capacity = old_capacity == 0 ? 8 : old_capacity * 2;
 		check_t *new_items = realloc(queue->items, new_capacity * sizeof(check_t));
 		if (!new_items) {
@@ -249,7 +250,7 @@ void queue_upsert(queue_t *queue, const char *path,
 			return;
 		}
 		queue->items = new_items;
-		queue->capacity = new_capacity;
+		queue->items_capacity = new_capacity;
 
 		/* Zero out new memory */
 		if (new_capacity > old_capacity) {
@@ -274,12 +275,12 @@ void queue_upsert(queue_t *queue, const char *path,
 	queue->items[new_index].next_check = next_check;
 	queue->items[new_index].watches = NULL;
 	queue->items[new_index].num_watches = 0;
-	queue->items[new_index].watch_capacity = 0;
+	queue->items[new_index].watches_capacity = 0;
 	queue->items[new_index].verifying = false;
 	queue->items[new_index].scheduled_quiet = 0;
 
 	/* Add the watch */
-	if (!queue_watch_add(&queue->items[new_index], watch)) {
+	if (!queue_add(&queue->items[new_index], watch)) {
 		log_message(ERROR, "Failed to add watch to new queue entry");
 		free(queue->items[new_index].path);
 		queue->items[new_index].path = NULL;

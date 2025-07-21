@@ -36,7 +36,7 @@ int main(int argc, char *argv[]) {
 	threads_t *threads;
 	int c;
 	int option_index = 0;
-	int log_level = NOTICE;
+	int loglevel = NOTICE;
 	char *config_path = NULL;
 	int daemon_mode = 0;
 
@@ -50,7 +50,7 @@ int main(int argc, char *argv[]) {
 
 	/* Set up signal handlers */
 	if (!daemon_signals()) {
-		log_message(CRITICAL, "Failed to set up signal handlers");
+		log_message(ERROR, "Failed to set up signal handlers");
 		log_close();
 		return EXIT_FAILURE;
 	}
@@ -74,9 +74,9 @@ int main(int argc, char *argv[]) {
 				daemon_mode = 1;
 				break;
 			case 'l':
-				log_level = atoi(optarg);
-				if (log_level < 0 || log_level > 7) {
-					fprintf(stderr, "Invalid log level: %d (valid range: 0-7)\n", log_level);
+				loglevel = atoi(optarg);
+				if (loglevel < 0 || loglevel > 7) {
+					fprintf(stderr, "Invalid log level: %d (valid range: 0-7)\n", loglevel);
 					return EXIT_FAILURE;
 				}
 				break;
@@ -100,7 +100,7 @@ int main(int argc, char *argv[]) {
 	}
 
 	/* Initialize logging */
-	log_init(program_name, LOG_DAEMON, log_level, !daemon_mode);
+	log_init(program_name, LOG_DAEMON, loglevel, !daemon_mode);
 
 	/* Create configuration */
 	config = config_create();
@@ -112,7 +112,7 @@ int main(int argc, char *argv[]) {
 
 	/* Set daemon mode */
 	config->daemon_mode = daemon_mode;
-	config->syslog_level = log_level;
+	config->syslog_level = loglevel;
 
 	/* Parse configuration file */
 	if (!config_parse(config, config_path)) {
@@ -125,7 +125,7 @@ int main(int argc, char *argv[]) {
 	/* Start daemon if requested */
 	if (config->daemon_mode) {
 		if (!daemon_start(config)) {
-			log_message(CRITICAL, "Failed to start daemon");
+			log_message(ERROR, "Failed to start daemon");
 			config_destroy(config);
 			log_close();
 			return EXIT_FAILURE;
@@ -133,13 +133,13 @@ int main(int argc, char *argv[]) {
 
 		/* Re-initialize logging without console output after daemonizing */
 		log_close();
-		log_init(program_name, LOG_DAEMON, log_level, 0);
+		log_init(program_name, LOG_DAEMON, loglevel, 0);
 	}
 
 	/* Create thread pool */
 	threads = threads_create();
 	if (threads == NULL) {
-		log_message(CRITICAL, "Failed to create thread pool");
+		log_message(ERROR, "Failed to create thread pool");
 		config_destroy(config);
 		log_close();
 		return EXIT_FAILURE;
@@ -147,7 +147,7 @@ int main(int argc, char *argv[]) {
 
 	/* Initialize command subsystem */
 	if (!command_init(threads)) {
-		log_message(CRITICAL, "Failed to initialize command subsystem");
+		log_message(ERROR, "Failed to initialize command subsystem");
 		threads_destroy(threads);
 		config_destroy(config);
 		log_close();
@@ -157,7 +157,7 @@ int main(int argc, char *argv[]) {
 	/* Create monitor */
 	monitor = monitor_create(config);
 	if (monitor == NULL) {
-		log_message(CRITICAL, "Failed to create monitor");
+		log_message(ERROR, "Failed to create monitor");
 		command_cleanup(threads);
 		threads_destroy(threads);
 		config_destroy(config);
@@ -167,7 +167,7 @@ int main(int argc, char *argv[]) {
 
 	/* Set up monitor */
 	if (!monitor_setup(monitor)) {
-		log_message(CRITICAL, "Failed to set up monitor");
+		log_message(ERROR, "Failed to set up monitor");
 		monitor_destroy(monitor);
 		command_cleanup(threads);
 		threads_destroy(threads);
@@ -180,7 +180,7 @@ int main(int argc, char *argv[]) {
 
 	/* Start monitor */
 	if (!monitor_start(monitor)) {
-		log_message(CRITICAL, "Failed to start monitor");
+		log_message(ERROR, "Failed to start monitor");
 		monitor_destroy(monitor);
 		command_cleanup(threads);
 		threads_destroy(threads);

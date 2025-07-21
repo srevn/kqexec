@@ -20,6 +20,76 @@
 #include "events.h"
 #include "scanner.h"
 
+/* Free resources used by a watcher structure */
+static void watcher_destroy(watcher_t *watcher) {
+	if (watcher == NULL) {
+		return;
+	}
+
+	/* Only close the file descriptor if it's not shared with other watches */
+	if (watcher->wd >= 0 && !watcher->shared_fd) {
+		close(watcher->wd);
+	}
+
+	free(watcher->path);
+	free(watcher);
+}
+
+/* Initialize inode and device information for a watcher */
+static bool watcher_stat(watcher_t *watcher) {
+	struct stat info;
+	if (fstat(watcher->wd, &info) == -1) {
+		log_message(ERROR, "Failed to fstat file descriptor %d for %s: %s", watcher->wd, watcher->path, strerror(errno));
+		return false;
+	}
+
+	watcher->inode = info.st_ino;
+	watcher->device = info.st_dev;
+	watcher->validated = time(NULL);
+	return true;
+}
+
+/* Add a watcher to the monitor's array */
+static bool watcher_add(monitor_t *monitor, watcher_t *watcher) {
+	watcher_t **new_watches;
+
+	new_watches = realloc(monitor->watches, (monitor->num_watches + 1) * sizeof(watcher_t *));
+	if (new_watches == NULL) {
+		log_message(ERROR, "Failed to allocate memory for watcher");
+		return false;
+	}
+
+	monitor->watches = new_watches;
+	monitor->watches[monitor->num_watches] = watcher;
+	monitor->num_watches++;
+
+	return true;
+}
+
+/* Find a watcher entry by path */
+static watcher_t *watcher_find(monitor_t *monitor, const char *path) {
+	for (int i = 0; i < monitor->num_watches; i++) {
+		if (strcmp(monitor->watches[i]->path, path) == 0) {
+			return monitor->watches[i];
+		}
+	}
+
+	return NULL;
+}
+
+/* Check if a path is a hidden file or directory (starts with dot) */
+static bool path_hidden(const char *path) {
+	const char *basename = strrchr(path, '/');
+	if (basename) {
+		basename++; /* Skip the slash */
+	} else {
+		basename = path; /* No slash, use the whole path */
+	}
+
+	/* Check if the basename starts with a dot (hidden) */
+	return basename[0] == '.';
+}
+
 /* Create a new file/directory monitor */
 monitor_t *monitor_create(config_t *config) {
 	monitor_t *monitor;
@@ -68,21 +138,6 @@ monitor_t *monitor_create(config_t *config) {
 	return monitor;
 }
 
-/* Free resources used by a watcher structure */
-static void watcher_destroy(watcher_t *watcher) {
-	if (watcher == NULL) {
-		return;
-	}
-
-	/* Only close the file descriptor if it's not shared with other watches */
-	if (watcher->wd >= 0 && !watcher->shared_fd) {
-		close(watcher->wd);
-	}
-
-	free(watcher->path);
-	free(watcher);
-}
-
 /* Destroy a monitor and free all associated resources */
 void monitor_destroy(monitor_t *monitor) {
 	if (monitor == NULL) {
@@ -122,50 +177,8 @@ void monitor_destroy(monitor_t *monitor) {
 	free(monitor);
 }
 
-/* Initialize inode and device information for a watcher */
-static bool watcher_stat(watcher_t *watcher) {
-	struct stat info;
-	if (fstat(watcher->wd, &info) == -1) {
-		log_message(ERROR, "Failed to fstat file descriptor %d for %s: %s", watcher->wd, watcher->path, strerror(errno));
-		return false;
-	}
-
-	watcher->inode = info.st_ino;
-	watcher->device = info.st_dev;
-	watcher->validated = time(NULL);
-	return true;
-}
-
-/* Add a watcher to the monitor's array */
-static bool watcher_add(monitor_t *monitor, watcher_t *watcher) {
-	watcher_t **new_watches;
-
-	new_watches = realloc(monitor->watches, (monitor->num_watches + 1) * sizeof(watcher_t *));
-	if (new_watches == NULL) {
-		log_message(ERROR, "Failed to allocate memory for watcher");
-		return false;
-	}
-
-	monitor->watches = new_watches;
-	monitor->watches[monitor->num_watches] = watcher;
-	monitor->num_watches++;
-
-	return true;
-}
-
-/* Find a watcher entry by path */
-static watcher_t *watcher_find(monitor_t *monitor, const char *path) {
-	for (int i = 0; i < monitor->num_watches; i++) {
-		if (strcmp(monitor->watches[i]->path, path) == 0) {
-			return monitor->watches[i];
-		}
-	}
-
-	return NULL;
-}
-
 /* Set up kqueue monitoring for a file or directory */
-static bool monitor_kqueue(monitor_t *monitor, watcher_t *watcher) {
+static bool monitor_kq(monitor_t *monitor, watcher_t *watcher) {
 	struct kevent changes[1];
 	int flags = 0;
 
@@ -189,19 +202,6 @@ static bool monitor_kqueue(monitor_t *monitor, watcher_t *watcher) {
 	}
 
 	return true;
-}
-
-/* Check if a path is a hidden file or directory (starts with dot) */
-static bool path_hidden(const char *path) {
-	const char *basename = strrchr(path, '/');
-	if (basename) {
-		basename++; /* Skip the slash */
-	} else {
-		basename = path; /* No slash, use the whole path */
-	}
-
-	/* Check if the basename starts with a dot (hidden) */
-	return basename[0] == '.';
 }
 
 /* Recursively add watches for a directory and its subdirectories */
@@ -287,7 +287,7 @@ bool monitor_tree(monitor_t *monitor, const char *dir_path, watch_t *watch) {
 				return false;
 			}
 
-			if (!monitor_kqueue(monitor, watcher)) {
+			if (!monitor_kq(monitor, watcher)) {
 				return false;
 			}
 			log_message(DEBUG, "Added new watch for directory: %s", dir_path);
@@ -446,7 +446,7 @@ bool monitor_add(monitor_t *monitor, watch_t *watch) {
 		/* Establish baseline state */
 		state_get(monitor->states, watcher->path, ENTITY_FILE, watch);
 
-		return monitor_kqueue(monitor, watcher);
+		return monitor_kq(monitor, watcher);
 	}
 	/* Unsupported file type */
 	else {
@@ -456,7 +456,7 @@ bool monitor_add(monitor_t *monitor, watch_t *watch) {
 }
 
 /* Create a watch entry for the configuration file */
-static watch_t *config_entry(const char *config_file_path) {
+static watch_t *monitor_config(const char *config_file_path) {
 	if (!config_file_path) return NULL;
 
 	watch_t *config_watch = calloc(1, sizeof(watch_t));
@@ -520,7 +520,7 @@ bool monitor_setup(monitor_t *monitor) {
 
 	/* Add config file watch for hot reload by adding it to the config structure */
 	if (monitor->config_path != NULL) {
-		watch_t *config_watch = config_entry(monitor->config_path);
+		watch_t *config_watch = monitor_config(monitor->config_path);
 		if (config_watch) {
 			/* Add to config structure so it gets managed properly */
 			watch_t **new_watches = realloc(monitor->config->watches, (monitor->config->num_watches + 1) * sizeof(watch_t *));
@@ -596,23 +596,22 @@ bool monitor_poll(monitor_t *monitor) {
 		log_message(DEBUG, "Processing %d new kqueue events", nev);
 		
 		/* Initialize sync request for collecting paths that need validation */
-		syncreq_t syncreq;
-		syncreq_init(&syncreq);
+		sync_t sync;
+		events_sync_init(&sync);
 		
 		/* Process events and collect sync requests */
-		events_handle(monitor, events, nev, &after_kevent_time, &syncreq);
+		events_handle(monitor, events, nev, &after_kevent_time, &sync);
 		
 		/* Handle any sync requests */
-		if (syncreq.count > 0) {
-			log_message(DEBUG, "Processing %d sync requests", syncreq.count);
-			for (int i = 0; i < syncreq.count; i++) {
-				log_message(DEBUG, "Validating watch for path: %s", syncreq.paths[i]);
-				monitor_sync(monitor, syncreq.paths[i]);
+		if (sync.paths_count > 0) {
+			for (int i = 0; i < sync.paths_count; i++) {
+				log_message(DEBUG, "Validating watch for path: %s", sync.paths[i]);
+				monitor_sync(monitor, sync.paths[i]);
 			}
 		}
 		
 		/* Clean up sync request */
-		syncreq_cleanup(&syncreq);
+		events_sync_cleanup(&sync);
 	} else {
 		/* nev == 0 means timeout occurred */
 		if (p_timeout) {
@@ -692,7 +691,7 @@ bool monitor_reload(monitor_t *monitor) {
 
 	/* Add config file watch to the new config so it gets re-added */
 	if (monitor->config_path != NULL) {
-		watch_t *config_watch = config_entry(monitor->config_path);
+		watch_t *config_watch = monitor_config(monitor->config_path);
 		if (config_watch) {
 			watch_t **new_entries = realloc(new_config->watches, (new_config->num_watches + 1) * sizeof(watch_t *));
 			if (new_entries == NULL) {
@@ -861,7 +860,7 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 				watcher->shared_fd = false; /* It's a new FD */
 
 				/* Re-register with kqueue */
-				monitor_kqueue(monitor, watcher);
+				monitor_kq(monitor, watcher);
 
 				/* If it was a recursive directory, rescan subdirectories */
 				if (watcher->watch->target == WATCH_DIRECTORY && watcher->watch->recursive) {

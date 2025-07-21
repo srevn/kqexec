@@ -47,11 +47,11 @@ typedef struct delayed {
 } delayed_t;
 
 /* Sync request structure for collecting paths that need validation */
-typedef struct syncreq {
+typedef struct sync {
 	char **paths;                          /* Array of paths needing sync */
-	int count;                             /* Current number of paths */
-	int capacity;                          /* Allocated capacity */
-} syncreq_t;
+	int paths_count;                       /* Current number of paths */
+	int paths_capacity;                    /* Allocated capacity */
+} sync_t;
 
 /* Event lifecycle management */
 void events_schedule(monitor_t *monitor, watch_t *watch, event_t *event, kind_t kind);
@@ -59,17 +59,17 @@ void events_delayed(monitor_t *monitor);
 int events_timeout(monitor_t *monitor, struct timespec *current_time);
 
 /* Event processing */
-bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, struct timespec *time, syncreq_t *syncreq);
+bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, struct timespec *time, sync_t *sync);
 bool events_process(monitor_t *monitor, watch_t *watch, event_t *event, kind_t kind);
 struct timespec *timeout_calculate(monitor_t *monitor, struct timespec *timeout, struct timespec *current_time);
 
 /* Sync request management */
-void syncreq_init(syncreq_t *syncreq);
-bool syncreq_add(syncreq_t *syncreq, const char *path);
-void syncreq_cleanup(syncreq_t *syncreq);
+void events_sync_init(sync_t *sync);
+bool events_sync_add(sync_t *sync, const char *path);
+void events_sync_cleanup(sync_t *sync);
 
 /* Event to operation translation */
-optype_t determine_operation(entity_t *state, filter_t filter);
-filter_t operation_to_event_type(optype_t op);
+optype_t events_operation(entity_t *state, filter_t filter);
+filter_t operation_to_filter(optype_t optype);
 
 #endif /* EVENTS_H */

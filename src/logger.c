@@ -7,21 +7,17 @@
 #include <stdbool.h>
 #include "logger.h"
 
-/* Global log level */
-static loglevel_t current_log_level = NOTICE;
-
-/* Flag indicating whether syslog is initialized */
+/* Global flags */
+static loglevel_t current_loglevel = NOTICE;
 static int syslog_initialized = 0;
-
-/* Flag indicating whether to use console output */
 static int console_output = 0;
 
 /* Mutex for thread-safe logging */
 static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* Initialize logging */
-void log_init(const char *ident, int facility, loglevel_t level, int use_console) {
-	current_log_level = level;
+void log_init(const char *ident, int facility, loglevel_t loglevel, int use_console) {
+	current_loglevel = loglevel;
 	console_output = use_console;
 
 	/* Open syslog connection */
@@ -38,11 +34,11 @@ void log_close(void) {
 }
 
 /* Log a message */
-void log_message(loglevel_t level, const char *format, ...) {
+void log_message(loglevel_t loglevel, const char *format, ...) {
 	va_list args;
 
 	/* Check if we should log this message */
-	if (level > current_log_level) {
+	if (loglevel > current_loglevel) {
 		return;
 	}
 
@@ -55,7 +51,7 @@ void log_message(loglevel_t level, const char *format, ...) {
 	if (syslog_initialized) {
 		va_list syslog_args;
 		va_copy(syslog_args, args);
-		vsyslog(level, format, syslog_args);
+		vsyslog(loglevel, format, syslog_args);
 		va_end(syslog_args);
 	}
 
@@ -74,14 +70,14 @@ void log_message(loglevel_t level, const char *format, ...) {
 		fprintf(stderr, "[%s] ", timestamp);
 
 		/* Print log level */
-		switch (level) {
+		switch (loglevel) {
 			case EMERG:
 				fprintf(stderr, "[EMERG] ");
 				break;
 			case ALERT:
 				fprintf(stderr, "[ALERT] ");
 				break;
-			case CRITICAL:
+			case CRIT:
 				fprintf(stderr, "[CRIT] ");
 				break;
 			case ERROR:

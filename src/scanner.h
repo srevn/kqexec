@@ -23,7 +23,7 @@ typedef struct sample {
 
 /* Scanner state tracking structure */
 typedef struct scanner {
-	sample_t samples [MAX_SAMPLES];        /* Circular buffer of recent events */
+	sample_t samples[MAX_SAMPLES];         /* Circular buffer of recent events */
 	bool active;                           /* Whether there is ongoing activity */
 	int sample_count;                      /* Number of samples in the buffer */
 	int sample_index;                      /* Current index in the circular buffer */
@@ -55,13 +55,13 @@ void scanner_destroy(scanner_t *scanner);
 /* Directory statistics and scanning */
 bool scanner_scan(const char *dir_path, stats_t *stats);
 bool scanner_stable(entity_t *context, const char *dir_path, stats_t *stats);
-bool scanner_compare(stats_t *prev, stats_t *current);
+bool scanner_compare(stats_t *prev_stats, stats_t *current_stats);
 char *scanner_newest(const char *dir_path);
 char *scanner_modified(const char *base_path, time_t since_time, bool recursive, bool basename);
 void scanner_update(entity_t *state);
 
 /* Activity tracking and timing */
-void scanner_track(monitor_t *monitor, entity_t *state, optype_t op);
+void scanner_track(monitor_t *monitor, entity_t *state, optype_t optype);
 void scanner_sync(monitor_t *monitor, node_t *node, entity_t *source);
 long scanner_delay(entity_t *state);
 bool scanner_ready(monitor_t *monitor, entity_t *state, struct timespec *current_time, long required_quiet);

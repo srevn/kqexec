@@ -15,62 +15,62 @@
 #include "scanner.h"
 
 /* Initialize a sync request structure */
-void syncreq_init(syncreq_t *syncreq) {
-	if (!syncreq) return;
-	syncreq->paths = NULL;
-	syncreq->count = 0;
-	syncreq->capacity = 0;
+void events_sync_init(sync_t *sync) {
+	if (!sync) return;
+	sync->paths = NULL;
+	sync->paths_count = 0;
+	sync->paths_capacity = 0;
 }
 
 /* Add a path to the sync request */
-bool syncreq_add(syncreq_t *syncreq, const char *path) {
-	if (!syncreq || !path) return false;
+bool events_sync_add(sync_t *sync, const char *path) {
+	if (!sync || !path) return false;
 	
 	/* Check if path already exists to avoid duplicates */
-	for (int i = 0; i < syncreq->count; i++) {
-		if (strcmp(syncreq->paths[i], path) == 0) {
+	for (int i = 0; i < sync->paths_count; i++) {
+		if (strcmp(sync->paths[i], path) == 0) {
 			return true; /* Already exists, no need to add */
 		}
 	}
 	
 	/* Expand array if needed */
-	if (syncreq->count >= syncreq->capacity) {
-		int new_capacity = syncreq->capacity == 0 ? 4 : syncreq->capacity * 2;
-		char **new_paths = realloc(syncreq->paths, new_capacity * sizeof(char *));
+	if (sync->paths_count >= sync->paths_capacity) {
+		int new_capacity = sync->paths_capacity == 0 ? 4 : sync->paths_capacity * 2;
+		char **new_paths = realloc(sync->paths, new_capacity * sizeof(char *));
 		if (!new_paths) {
 			log_message(ERROR, "Failed to allocate memory for sync request paths");
 			return false;
 		}
-		syncreq->paths = new_paths;
-		syncreq->capacity = new_capacity;
+		sync->paths = new_paths;
+		sync->paths_capacity = new_capacity;
 	}
 	
 	/* Add the path */
-	syncreq->paths[syncreq->count] = strdup(path);
-	if (!syncreq->paths[syncreq->count]) {
+	sync->paths[sync->paths_count] = strdup(path);
+	if (!sync->paths[sync->paths_count]) {
 		log_message(ERROR, "Failed to duplicate path for sync request: %s", path);
 		return false;
 	}
-	syncreq->count++;
+	sync->paths_count++;
 	
 	log_message(DEBUG, "Added path to sync request: %s", path);
 	return true;
 }
 
 /* Clean up a sync request structure */
-void syncreq_cleanup(syncreq_t *syncreq) {
-	if (!syncreq) return;
+void events_sync_cleanup(sync_t *sync) {
+	if (!sync) return;
 	
-	if (syncreq->paths) {
-		for (int i = 0; i < syncreq->count; i++) {
-			free(syncreq->paths[i]);
+	if (sync->paths) {
+		for (int i = 0; i < sync->paths_count; i++) {
+			free(sync->paths[i]);
 		}
-		free(syncreq->paths);
+		free(sync->paths);
 	}
 	
-	syncreq->paths = NULL;
-	syncreq->count = 0;
-	syncreq->capacity = 0;
+	sync->paths = NULL;
+	sync->paths_count = 0;
+	sync->paths_capacity = 0;
 }
 
 /* Schedule an event for delayed processing */
@@ -181,22 +181,22 @@ int events_timeout(monitor_t *monitor, struct timespec *current_time) {
 		(current_time->tv_sec == earliest.tv_sec && current_time->tv_nsec > earliest.tv_nsec)) {
 		timeout_ms = 0; /* Already overdue */
 	} else {
-		struct timespec time_diff;
-		time_diff.tv_sec = earliest.tv_sec - current_time->tv_sec;
+		struct timespec diff_time;
+		diff_time.tv_sec = earliest.tv_sec - current_time->tv_sec;
 		if (earliest.tv_nsec >= current_time->tv_nsec) {
-			time_diff.tv_nsec = earliest.tv_nsec - current_time->tv_nsec;
+			diff_time.tv_nsec = earliest.tv_nsec - current_time->tv_nsec;
 		} else {
-			time_diff.tv_sec--;
-			time_diff.tv_nsec = 1000000000 + earliest.tv_nsec - current_time->tv_nsec;
+			diff_time.tv_sec--;
+			diff_time.tv_nsec = 1000000000 + earliest.tv_nsec - current_time->tv_nsec;
 		}
-		timeout_ms = time_diff.tv_sec * 1000 + time_diff.tv_nsec / 1000000;
+		timeout_ms = diff_time.tv_sec * 1000 + diff_time.tv_nsec / 1000000;
 	}
 
 	return timeout_ms > 0 ? (int) timeout_ms : 0;
 }
 
-/* Convert kqueue flags to event type bitmask */
-static filter_t flags_to_event_type(uint32_t flags) {
+/* Convert kqueue flags to filter type bitmask */
+static filter_t flags_to_filter(uint32_t flags) {
 	filter_t event = EVENT_NONE;
 
 	/* Content changes */
@@ -218,7 +218,7 @@ static filter_t flags_to_event_type(uint32_t flags) {
 }
 
 /* Handle kqueue events */
-bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, struct timespec *time, syncreq_t *syncreq) {
+bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, struct timespec *time, sync_t *sync) {
 	if (!monitor || !events || event_count <= 0) {
 		return false;
 	}
@@ -242,7 +242,7 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 				event_t event;
 				memset(&event, 0, sizeof(event));
 				event.path = watcher->path;
-				event.type = flags_to_event_type(events[i].fflags);
+				event.type = flags_to_filter(events[i].fflags);
 				event.time = *time;
 				clock_gettime(CLOCK_REALTIME, &event.wall_time);
 				event.user_id = getuid();
@@ -250,13 +250,14 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 				kind_t kind = (watcher->watch->target == WATCH_FILE) ? ENTITY_FILE : ENTITY_DIRECTORY;
 
 				log_message(DEBUG, "Event: path=%s, flags=0x%x -> type=%s (watch: %s)",
-									watcher->path, events[i].fflags, filter_to_string(event.type), watcher->watch->name);
+									watcher->path, events[i].fflags, filter_to_string(event.type),
+									watcher->watch->name);
 
 				/* Proactive validation for directory events on NOTE_WRITE */
 				if (watcher->watch->target == WATCH_DIRECTORY && (events[i].fflags & NOTE_WRITE)) {
-					log_message(DEBUG, "Write event on dir %s, requesting sync validation.", watcher->path);
-					if (syncreq) {
-						syncreq_add(syncreq, watcher->path);
+					log_message(DEBUG, "Write event on dir %s, requesting validation", watcher->path);
+					if (sync) {
+						events_sync_add(sync, watcher->path);
 					}
 				}
 
@@ -350,8 +351,8 @@ struct timespec* timeout_calculate(monitor_t *monitor, struct timespec *timeout,
 }
 
 /* Convert operation type to corresponding event type */
-filter_t operation_to_event_type(optype_t op) {
-	switch (op) {
+filter_t operation_to_filter(optype_t optype) {
+	switch (optype) {
 		case OP_FILE_CONTENT_CHANGED:
 		case OP_DIR_CONTENT_CHANGED:  return EVENT_STRUCTURE;
 		case OP_FILE_CREATED:
@@ -366,7 +367,7 @@ filter_t operation_to_event_type(optype_t op) {
 }
 
 /* Determine operation type based on entity state and event type */
-optype_t determine_operation(entity_t *state, filter_t filter) {
+optype_t events_operation(entity_t *state, filter_t filter) {
 	if (!state) return OP_NONE;
 
 	/* Update state change flags based on the new event type */
@@ -498,15 +499,15 @@ bool events_process(monitor_t *monitor, watch_t *watch, event_t *event, kind_t k
 	state->wall_time = event->wall_time;
 
 	/* Determine the logical operation */
-	optype_t op = determine_operation(state, event->type);
-	if (op == OP_NONE) {
+	optype_t optype = events_operation(state, event->type);
+	if (optype == OP_NONE) {
 		return false; /* No relevant change detected */
 	}
 
-	log_message(DEBUG, "Determined operation type %d for %s", op, state->node->path);
+	log_message(DEBUG, "Determined operation type %d for %s", optype, state->node->path);
 
 	/* Check if operation is included in watch mask */
-	filter_t filter_for_mask = operation_to_event_type(op);
+	filter_t filter_for_mask = operation_to_filter(optype);
 	if ((watch->filter & filter_for_mask) == 0) {
 		log_message(DEBUG, "Operation maps to event type %s, which is not in watch mask for %s",
 		        			filter_to_string(filter_for_mask), watch->name);
@@ -514,7 +515,7 @@ bool events_process(monitor_t *monitor, watch_t *watch, event_t *event, kind_t k
 	}
 
 	/* Check debounce/deferral logic */
-	if (stability_ready(monitor, state, op, command_get_debounce_time())) {
+	if (stability_ready(monitor, state, optype, command_get_debounce_time())) {
 		/* Execute command immediately (only for non-directory-content changes) */
 		event_t synthetic_event = {
 			.path = state->node->path,
@@ -525,9 +526,9 @@ bool events_process(monitor_t *monitor, watch_t *watch, event_t *event, kind_t k
 		};
 
 		log_message(INFO, "Executing command for %s (watch: %s, operation: %d)",
-		    			   state->node->path, watch->name, op);
+		    			   state->node->path, watch->name, optype);
 
-		if (command_execute(monitor, watch, &synthetic_event, false)) {
+		if (command_execute(monitor, watch, &synthetic_event, true)) {
 			log_message(INFO, "Command execution successful for %s", state->node->path);
 
 			/* Update last command time and reset change flags */
@@ -542,7 +543,7 @@ bool events_process(monitor_t *monitor, watch_t *watch, event_t *event, kind_t k
 			return false;
 		}
 	} else {
-		log_message(DEBUG, "Command for %s (op %d) deferred or debounced", state->node->path, op);
+		log_message(DEBUG, "Command for %s (optype %d) deferred or debounced", state->node->path, optype);
 		return false;
 	}
 }

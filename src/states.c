@@ -19,25 +19,8 @@
 #include "events.h"
 #include "scanner.h"
 
-/* Check if entity state is corrupted by verifying magic number */
-bool state_corrupted(const entity_t *state) {
-	if (!state) return true;
-	
-	if ((uintptr_t)state < 0x1000 || ((uintptr_t)state & 0x7) != 0) {
-		log_message(WARNING, "Entity state appears to be invalid pointer: %p", state);
-		return true;
-	}
-	
-	if (state->magic != ENTITY_STATE_MAGIC) {
-		log_message(WARNING, "Entity state corruption detected: magic=0x%x, expected=0x%x",
-							  state->magic, ENTITY_STATE_MAGIC);
-		return true;
-	}
-	return false;
-}
-
 /* Hash function for a path string */
-static unsigned int state_hash_path(const char *path, size_t bucket_count) {
+static unsigned int state_hash(const char *path, size_t bucket_count) {
 	unsigned int hash = 5381; /* djb2 hash initial value */
 	if (!path) return 0;
 	
@@ -133,9 +116,25 @@ void state_destroy(state_t *table) {
 	log_message(DEBUG, "State table destroyed");
 }
 
+/* Check if entity state is corrupted by verifying magic number */
+bool state_corrupted(const entity_t *state) {
+	if (!state) return true;
+	
+	if ((uintptr_t)state < 0x1000 || ((uintptr_t)state & 0x7) != 0) {
+		log_message(WARNING, "Entity state appears to be invalid pointer: %p", state);
+		return true;
+	}
+	
+	if (state->magic != ENTITY_STATE_MAGIC) {
+		log_message(WARNING, "Entity state corruption detected: magic=0x%x, expected=0x%x",
+							  state->magic, ENTITY_STATE_MAGIC);
+		return true;
+	}
+	return false;
+}
 
 /* Initialize activity tracking for a new entity state */
-static void state_init_tracking(entity_t *state, watch_t *watch) {
+static void state_track(entity_t *state, watch_t *watch) {
 	if (!state) return;
 
 	state->watch = watch;
@@ -187,7 +186,7 @@ entity_t *state_get(state_t *table, const char *path, kind_t kind, watch_t *watc
 		return NULL;
 	}
 
-	unsigned int hash = state_hash_path(path, table->bucket_count);
+	unsigned int hash = state_hash(path, table->bucket_count);
 	
 	/* Lock the mutex*/
 	pthread_mutex_lock(&table->mutex);
@@ -272,7 +271,7 @@ entity_t *state_get(state_t *table, const char *path, kind_t kind, watch_t *watc
 	clock_gettime(CLOCK_REALTIME, &state->wall_time);
 	state->trigger = NULL;
 
-	state_init_tracking(state, watch);
+	state_track(state, watch);
 	state->command_time = 0;
 	state->op_time.tv_sec = 0;
 	state->op_time.tv_nsec = 0;
@@ -321,4 +320,3 @@ entity_t *state_get(state_t *table, const char *path, kind_t kind, watch_t *watc
 	pthread_mutex_unlock(&table->mutex);
 	return state;
 }
-
