@@ -176,7 +176,7 @@ void stability_defer(monitor_t *monitor, entity_t *state) {
 	int existing_index = queue_find(monitor->check_queue, root->node->path);
 	
 	if (existing_index >= 0) {
-		/* A check is already pending. Use maximum of locked-in period and new calculation. */
+		/* A check is already pending. Use maximum of locked-in period and new calculation */
 		check_t *check = &monitor->check_queue->items[existing_index];
 		long locked_quiet = check->scheduled_quiet;
 		
@@ -587,7 +587,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 		/* Check if it's time to process this check */
 		if (current_time->tv_sec < check->next_check.tv_sec ||
 		    (current_time->tv_sec == check->next_check.tv_sec && current_time->tv_nsec < check->next_check.tv_nsec)) {
-			/* Not yet time for this check. Since it's a min-heap, no other checks are ready. */
+			/* Not yet time for this check. Since it's a min-heap, no other checks are ready */
 			break;
 		}
 
@@ -655,7 +655,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 				scanner_update(root);
 			}
 
-			/* We stay in verification mode, but reset the check count since the scope has changed. */
+			/* We stay in verification mode, but reset the check count since the scope has changed */
 			root->stability->checks_count = 0;
 			root->stability->checks_required = 0; /* Recalculate required checks */
 

@@ -21,14 +21,30 @@
 #include "scanner.h"
 
 /* Free resources used by a watcher structure */
-static void watcher_destroy(watcher_t *watcher) {
+static void watcher_destroy(monitor_t *monitor, watcher_t *watcher) {
 	if (watcher == NULL) {
 		return;
 	}
 
-	/* Only close the file descriptor if it's not shared with other watches */
-	if (watcher->wd >= 0 && !watcher->shared_fd) {
-		close(watcher->wd);
+	/* Close the file descriptor if this is the last watcher using it */
+	if (watcher->wd >= 0) {
+		bool should_close = !watcher->shared_fd;
+		
+		if (watcher->shared_fd && monitor) {
+			/* Count other watchers using this FD */
+			int fd_users = 0;
+			for (int i = 0; i < monitor->num_watches; i++) {
+				watcher_t *other = monitor->watches[i];
+				if (other && other != watcher && other->wd == watcher->wd) {
+					fd_users++;
+				}
+			}
+			should_close = (fd_users == 0);
+		}
+		
+		if (should_close) {
+			close(watcher->wd);
+		}
 	}
 
 	free(watcher->path);
@@ -151,7 +167,7 @@ void monitor_destroy(monitor_t *monitor) {
 
 	/* Free watches */
 	for (int i = 0; i < monitor->num_watches; i++) {
-		watcher_destroy(monitor->watches[i]);
+		watcher_destroy(monitor, monitor->watches[i]);
 	}
 
 	free(monitor->watches);
@@ -245,12 +261,12 @@ bool monitor_tree(monitor_t *monitor, const char *dir_path, watch_t *watch) {
 			existing_watcher->shared_fd = true;
 
 			if (!watcher_stat(watcher)) {
-				watcher_destroy(watcher);
+				watcher_destroy(monitor, watcher);
 				return false;
 			}
 
 			if (!watcher_add(monitor, watcher)) {
-				watcher_destroy(watcher);
+				watcher_destroy(monitor, watcher);
 				return false;
 			}
 
@@ -276,13 +292,13 @@ bool monitor_tree(monitor_t *monitor, const char *dir_path, watch_t *watch) {
 			watcher->shared_fd = false;
 
 			if (!watcher_stat(watcher)) {
-				watcher_destroy(watcher);
+				watcher_destroy(monitor, watcher);
 				close(fd);
 				return false;
 			}
 
 			if (!watcher_add(monitor, watcher)) {
-				watcher_destroy(watcher);
+				watcher_destroy(monitor, watcher);
 				close(fd);
 				return false;
 			}
@@ -368,12 +384,12 @@ bool monitor_add(monitor_t *monitor, watch_t *watch) {
 		watcher->shared_fd = true; /* Mark that this FD is shared */
 
 		if (!watcher_stat(watcher)) {
-			watcher_destroy(watcher);
+			watcher_destroy(monitor, watcher);
 			return false;
 		}
 
 		if (!watcher_add(monitor, watcher)) {
-			watcher_destroy(watcher);
+			watcher_destroy(monitor, watcher);
 			return false;
 		}
 
@@ -433,13 +449,13 @@ bool monitor_add(monitor_t *monitor, watch_t *watch) {
 		watcher->shared_fd = false; /* Initially not shared */
 
 		if (!watcher_stat(watcher)) {
-			watcher_destroy(watcher);
+			watcher_destroy(monitor, watcher);
 			close(fd);
 			return false;
 		}
 
 		if (!watcher_add(monitor, watcher)) {
-			watcher_destroy(watcher);
+			watcher_destroy(monitor, watcher);
 			return false;
 		}
 
@@ -749,7 +765,7 @@ bool monitor_reload(monitor_t *monitor) {
 
 	/* Destroy the old watches */
 	for (int i = 0; i < stale_count; i++) {
-		watcher_destroy(stale_watches[i]);
+		watcher_destroy(monitor, stale_watches[i]);
 	}
 	free(stale_watches);
 
@@ -784,7 +800,7 @@ bool monitor_prune(monitor_t *monitor, const char *parent) {
 			log_message(DEBUG, "Removing stale subdirectory watch: %s", watcher->path);
 
 			/* Destroy the watcher (closes FD if not shared) */
-			watcher_destroy(watcher);
+			watcher_destroy(monitor, watcher);
 
 			/* Remove from array by shifting */
 			for (int j = i; j < monitor->num_watches - 1; j++) {
@@ -822,7 +838,7 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 				}
 
 				/* Remove this watch */
-				watcher_destroy(watcher);
+				watcher_destroy(monitor, watcher);
 				for (int j = i; j < monitor->num_watches - 1; j++) {
 					monitor->watches[j] = monitor->watches[j + 1];
 				}
@@ -844,7 +860,7 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 				if (new_fd == -1) {
 					log_message(ERROR, "Failed to open recreated path %s: %s", path, strerror(errno));
 					/* Treat as deleted for current_time */
-					watcher_destroy(watcher);
+					watcher_destroy(monitor, watcher);
 					for (int j = i; j < monitor->num_watches - 1; j++) {
 						monitor->watches[j] = monitor->watches[j + 1];
 					}

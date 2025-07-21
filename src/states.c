@@ -146,7 +146,7 @@ static void state_track(entity_t *state, watch_t *watch) {
 	state->stability = NULL;
 }
 
-/* Copies all directory-related statistics and tracking fields from a source to a destination state. */
+/* Copies all directory-related statistics and tracking fields from a source to a destination state */
 static void state_copy(entity_t *dest, const entity_t *src) {
 	if (!dest || !src) return;
 
@@ -162,7 +162,7 @@ static void state_copy(entity_t *dest, const entity_t *src) {
 	/* Copy activity state if source has it */
 	if (src->scanner) {
 		if (!dest->scanner) {
-			/* If the destination doesn't have a scanner, create a blank one. */
+			/* If the destination doesn't have a scanner, create a blank one */
 			dest->scanner = scanner_create(NULL);
 			if (!dest->scanner) return;
 		}
