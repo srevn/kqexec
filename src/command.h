@@ -5,6 +5,7 @@
 
 #include "config.h"
 #include "monitor.h"
+#include "threads.h"
 
 /* Command execution configuration */
 #define DEFAULT_DEBOUNCE_TIME_MS 500       /* Default debounce time in milliseconds */
@@ -22,8 +23,8 @@ typedef struct intent {
 } intent_t;
 
 /* Command system lifecycle */
-bool command_init(void);
-void command_cleanup(void);
+bool command_init(threads_t *threads);
+void command_cleanup(threads_t *threads);
 
 /* Debounce configuration */
 int command_get_debounce_time(void);

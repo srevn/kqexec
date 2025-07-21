@@ -7,6 +7,7 @@
 #include "config.h"
 #include "monitor.h"
 #include "command.h"
+#include "threads.h"
 #include "states.h"
 #include "daemon.h"
 #include "logger.h"
@@ -32,6 +33,7 @@ static void print_usage(void) {
 int main(int argc, char *argv[]) {
 	config_t *config;
 	monitor_t *monitor;
+	threads_t *threads;
 	int c;
 	int option_index = 0;
 	int log_level = NOTICE;
@@ -134,9 +136,19 @@ int main(int argc, char *argv[]) {
 		log_init(program_name, LOG_DAEMON, log_level, 0);
 	}
 
+	/* Create thread pool */
+	threads = threads_create();
+	if (threads == NULL) {
+		log_message(CRITICAL, "Failed to create thread pool");
+		config_destroy(config);
+		log_close();
+		return EXIT_FAILURE;
+	}
+
 	/* Initialize command subsystem */
-	if (!command_init()) {
+	if (!command_init(threads)) {
 		log_message(CRITICAL, "Failed to initialize command subsystem");
+		threads_destroy(threads);
 		config_destroy(config);
 		log_close();
 		return EXIT_FAILURE;
@@ -146,7 +158,8 @@ int main(int argc, char *argv[]) {
 	monitor = monitor_create(config);
 	if (monitor == NULL) {
 		log_message(CRITICAL, "Failed to create monitor");
-		command_cleanup();
+		command_cleanup(threads);
+		threads_destroy(threads);
 		config_destroy(config);
 		log_close();
 		return EXIT_FAILURE;
@@ -156,7 +169,8 @@ int main(int argc, char *argv[]) {
 	if (!monitor_setup(monitor)) {
 		log_message(CRITICAL, "Failed to set up monitor");
 		monitor_destroy(monitor);
-		command_cleanup();
+		command_cleanup(threads);
+		threads_destroy(threads);
 		log_close();
 		return EXIT_FAILURE;
 	}
@@ -168,7 +182,8 @@ int main(int argc, char *argv[]) {
 	if (!monitor_start(monitor)) {
 		log_message(CRITICAL, "Failed to start monitor");
 		monitor_destroy(monitor);
-		command_cleanup();
+		command_cleanup(threads);
+		threads_destroy(threads);
 		log_close();
 		return EXIT_FAILURE;
 	}
@@ -176,7 +191,8 @@ int main(int argc, char *argv[]) {
 	/* Clean up */
 	daemon_monitor(NULL);
 	monitor_destroy(monitor);
-	command_cleanup();
+	command_cleanup(threads);
+	threads_destroy(threads);
 	log_close();
 
 	return EXIT_SUCCESS;

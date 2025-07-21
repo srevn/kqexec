@@ -6,9 +6,6 @@
 #include "command.h"
 #include "logger.h"
 
-/* Global thread pool instance */
-static threads_t *g_threads = NULL;
-
 /* Deep copy a watch entry for thread safety */
 static watch_t *copy_watch_entry(const watch_t *watch) {
 	if (!watch) return NULL;
@@ -112,82 +109,74 @@ static void *worker_thread(void *arg) {
 	return NULL;
 }
 
-/* Initialize thread pool */
-bool threads_init(void) {
-	if (g_threads != NULL) {
-		log_message(WARNING, "Thread pool already initialized");
-		return true;
-	}
-
-	g_threads = calloc(1, sizeof(threads_t));
-	if (!g_threads) {
+/* Create thread pool */
+threads_t* threads_create(void) {
+	threads_t *threads = calloc(1, sizeof(threads_t));
+	if (!threads) {
 		log_message(ERROR, "Failed to allocate memory for thread pool");
-		return false;
+		return NULL;
 	}
 
 	/* Initialize mutex and condition variables */
-	if (pthread_mutex_init(&g_threads->queue_mutex, NULL) != 0) {
+	if (pthread_mutex_init(&threads->queue_mutex, NULL) != 0) {
 		log_message(ERROR, "Failed to initialize queue mutex");
-		free(g_threads);
-		g_threads = NULL;
-		return false;
+		free(threads);
+		return NULL;
 	}
 
-	if (pthread_cond_init(&g_threads->work_available, NULL) != 0) {
+	if (pthread_cond_init(&threads->work_available, NULL) != 0) {
 		log_message(ERROR, "Failed to initialize work_available condition");
-		pthread_mutex_destroy(&g_threads->queue_mutex);
-		free(g_threads);
-		g_threads = NULL;
-		return false;
+		pthread_mutex_destroy(&threads->queue_mutex);
+		free(threads);
+		return NULL;
 	}
 
-	if (pthread_cond_init(&g_threads->work_done, NULL) != 0) {
+	if (pthread_cond_init(&threads->work_done, NULL) != 0) {
 		log_message(ERROR, "Failed to initialize work_done condition");
-		pthread_cond_destroy(&g_threads->work_available);
-		pthread_mutex_destroy(&g_threads->queue_mutex);
-		free(g_threads);
-		g_threads = NULL;
-		return false;
+		pthread_cond_destroy(&threads->work_available);
+		pthread_mutex_destroy(&threads->queue_mutex);
+		free(threads);
+		return NULL;
 	}
 
 	/* Initialize queue */
-	g_threads->queue_head = NULL;
-	g_threads->queue_tail = NULL;
-	g_threads->queue_size = 0;
-	g_threads->shutdown = false;
+	threads->queue_head = NULL;
+	threads->queue_tail = NULL;
+	threads->queue_size = 0;
+	threads->shutdown = false;
 
 	/* Create worker threads */
-	g_threads->thread_count = MAX_WORKER_THREADS;
+	threads->thread_count = MAX_WORKER_THREADS;
 	for (int i = 0; i < MAX_WORKER_THREADS; i++) {
-		if (pthread_create(&g_threads->threads[i], NULL, worker_thread, g_threads) != 0) {
+		if (pthread_create(&threads->threads[i], NULL, worker_thread, threads) != 0) {
 			log_message(ERROR, "Failed to create worker thread %d", i);
-			g_threads->thread_count = i;
-			threads_destroy();
-			return false;
+			threads->thread_count = i;
+			threads_destroy(threads);
+			return NULL;
 		}
 	}
 
 	log_message(DEBUG, "Thread pool initialized with %d worker threads", MAX_WORKER_THREADS);
-	return true;
+	return threads;
 }
 
 /* Destroy thread pool */
-void threads_destroy(void) {
-	if (!g_threads) return;
+void threads_destroy(threads_t *threads) {
+	if (!threads) return;
 
 	/* Signal shutdown */
-	pthread_mutex_lock(&g_threads->queue_mutex);
-	g_threads->shutdown = true;
-	pthread_cond_broadcast(&g_threads->work_available);
-	pthread_mutex_unlock(&g_threads->queue_mutex);
+	pthread_mutex_lock(&threads->queue_mutex);
+	threads->shutdown = true;
+	pthread_cond_broadcast(&threads->work_available);
+	pthread_mutex_unlock(&threads->queue_mutex);
 
 	/* Wait for all threads to finish */
-	for (int i = 0; i < g_threads->thread_count; i++) {
-		pthread_join(g_threads->threads[i], NULL);
+	for (int i = 0; i < threads->thread_count; i++) {
+		pthread_join(threads->threads[i], NULL);
 	}
 
 	/* Clean up remaining work items */
-	task_t *item = g_threads->queue_head;
+	task_t *item = threads->queue_head;
 	while (item) {
 		task_t *next = item->next;
 		free_watch_entry(item->watch);
@@ -197,19 +186,18 @@ void threads_destroy(void) {
 	}
 
 	/* Destroy synchronization objects */
-	pthread_cond_destroy(&g_threads->work_done);
-	pthread_cond_destroy(&g_threads->work_available);
-	pthread_mutex_destroy(&g_threads->queue_mutex);
+	pthread_cond_destroy(&threads->work_done);
+	pthread_cond_destroy(&threads->work_available);
+	pthread_mutex_destroy(&threads->queue_mutex);
 
-	free(g_threads);
-	g_threads = NULL;
+	free(threads);
 
 	log_message(DEBUG, "Thread pool destroyed");
 }
 
 /* Submit work to thread pool */
-bool threads_submit(monitor_t *monitor, const watch_t *watch, const event_t *event) {
-	if (!g_threads || !watch || !event) {
+bool threads_submit(threads_t *threads, monitor_t *monitor, const watch_t *watch, const event_t *event) {
+	if (!threads || !watch || !event) {
 		log_message(ERROR, "Invalid parameters for threads_submit");
 		return false;
 	}
@@ -235,10 +223,10 @@ bool threads_submit(monitor_t *monitor, const watch_t *watch, const event_t *eve
 	}
 
 	/* Add to queue */
-	pthread_mutex_lock(&g_threads->queue_mutex);
+	pthread_mutex_lock(&threads->queue_mutex);
 
-	if (g_threads->queue_size >= MAX_WORK_QUEUE_SIZE) {
-		pthread_mutex_unlock(&g_threads->queue_mutex);
+	if (threads->queue_size >= MAX_WORK_QUEUE_SIZE) {
+		pthread_mutex_unlock(&threads->queue_mutex);
 		log_message(WARNING, "Work queue is full, dropping command execution for %s", event->path);
 		free_watch_entry(item->watch);
 		free_file_event(item->event);
@@ -247,31 +235,31 @@ bool threads_submit(monitor_t *monitor, const watch_t *watch, const event_t *eve
 	}
 
 	/* Add to tail of queue */
-	if (g_threads->queue_tail) {
-		g_threads->queue_tail->next = item;
+	if (threads->queue_tail) {
+		threads->queue_tail->next = item;
 	} else {
-		g_threads->queue_head = item;
+		threads->queue_head = item;
 	}
-	g_threads->queue_tail = item;
-	g_threads->queue_size++;
+	threads->queue_tail = item;
+	threads->queue_size++;
 
 	/* Signal workers */
-	pthread_cond_signal(&g_threads->work_available);
-	pthread_mutex_unlock(&g_threads->queue_mutex);
+	pthread_cond_signal(&threads->work_available);
+	pthread_mutex_unlock(&threads->queue_mutex);
 
 	log_message(DEBUG, "Submitted command execution for %s to thread pool (queue size: %d)",
-	    				event->path, g_threads->queue_size);
+	    				event->path, threads->queue_size);
 
 	return true;
 }
 
 /* Wait for all queued work to complete */
-void threads_wait_all(void) {
-	if (!g_threads) return;
+void threads_wait_all(threads_t *threads) {
+	if (!threads) return;
 
-	pthread_mutex_lock(&g_threads->queue_mutex);
-	while (g_threads->queue_size > 0) {
-		pthread_cond_wait(&g_threads->work_done, &g_threads->queue_mutex);
+	pthread_mutex_lock(&threads->queue_mutex);
+	while (threads->queue_size > 0) {
+		pthread_cond_wait(&threads->work_done, &threads->queue_mutex);
 	}
-	pthread_mutex_unlock(&g_threads->queue_mutex);
+	pthread_mutex_unlock(&threads->queue_mutex);
 }

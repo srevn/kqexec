@@ -32,9 +32,9 @@ typedef struct threads {
 } threads_t;
 
 /* Thread pool function prototypes */
-bool threads_init(void);
-void threads_destroy(void);
-bool threads_submit(monitor_t *monitor, const watch_t *watch, const event_t *event);
-void threads_wait_all(void);
+threads_t* threads_create(void);
+void threads_destroy(threads_t *threads);
+bool threads_submit(threads_t *threads, monitor_t *monitor, const watch_t *watch, const event_t *event);
+void threads_wait_all(threads_t *threads);
 
 #endif /* THREADS_H */

@@ -19,15 +19,14 @@
 #include "logger.h"
 #include "scanner.h"
 
-/* Maximum length of command */
-#define MAX_CMD_LEN 4096
+/* Module-scoped threads reference */
+static threads_t *command_threads = NULL;
 
-/* Global array of active command intents */
+/* Command configuration */
+#define MAX_CMD_LEN 4096
 #define MAX_INTENTS 10
 static int intent_count = 0;
 static intent_t intents[MAX_INTENTS];
-
-/* Debounce time in milliseconds */
 static int debounce_ms = DEFAULT_DEBOUNCE_TIME_MS;
 
 /* SIGCHLD handler to reap child processes and mark command intents as complete */
@@ -52,7 +51,15 @@ static void command_sigchld(int sig) {
 }
 
 /* Initialize command subsystem */
-bool command_init(void) {
+bool command_init(threads_t *threads) {
+	if (!threads) {
+		log_message(ERROR, "Invalid threads parameter");
+		return false;
+	}
+
+	/* Store threads reference */
+	command_threads = threads;
+
 	/* Set up SIGCHLD handler */
 	struct sigaction sa;
 	memset(&sa, 0, sizeof(sa));
@@ -60,12 +67,6 @@ bool command_init(void) {
 	sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
 	if (sigaction(SIGCHLD, &sa, NULL) == -1) {
 		log_message(ERROR, "Failed to set up SIGCHLD handler: %s", strerror(errno));
-		return false;
-	}
-
-	/* Initialize thread pool */
-	if (!threads_init()) {
-		log_message(ERROR, "Failed to initialize thread pool");
 		return false;
 	}
 
@@ -598,7 +599,7 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 
 	/* For asynchronous execution, delegate to thread pool */
 	if (!synchronous) {
-		return threads_submit(monitor, watch, event);
+		return threads_submit(command_threads, monitor, watch, event);
 	}
 
 	/* Synchronous execution with robust output capture */
@@ -911,13 +912,15 @@ void command_environment(monitor_t *monitor, const watch_t *watch, const event_t
 }
 
 /* Clean up command subsystem */
-void command_cleanup(void) {
+void command_cleanup(threads_t *threads) {
 	/* Wait for all pending commands to complete */
-	threads_wait_all();
-
-	/* Destroy thread pool */
-	threads_destroy();
+	if (threads) {
+		threads_wait_all(threads);
+	}
 
 	/* Clean up command intents */
 	intent_cleanup();
+
+	/* Clear threads reference */
+	command_threads = NULL;
 }
