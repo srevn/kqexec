@@ -162,13 +162,19 @@ static void state_copy(entity_t *dest, const entity_t *src) {
 	/* Copy activity state if source has it */
 	if (src->scanner) {
 		if (!dest->scanner) {
-			dest->scanner = scanner_create(src->scanner->active_path);
+			/* If the destination doesn't have a scanner, create a blank one. */
+			dest->scanner = scanner_create(NULL);
 			if (!dest->scanner) return;
 		}
-		/* Copy the activity data but preserve the existing active_path */
+		
+		/* Preserve the pointer to the old path */
 		char *saved_path = dest->scanner->active_path;
+
+		/* Perform a full, shallow copy of the entire struct */
 		*dest->scanner = *src->scanner;
-		dest->scanner->active_path = saved_path ? strdup(saved_path) : NULL;
+
+		/* Give the destination its own deep copy of the path pointer */
+		dest->scanner->active_path = src->scanner->active_path ? strdup(src->scanner->active_path) : NULL;
 		free(saved_path);
 	}
 }
