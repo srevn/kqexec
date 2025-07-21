@@ -98,12 +98,13 @@ void events_schedule(monitor_t *monitor, watch_t *watch, event_t *event, kind_t 
 		    existing->event.path && event->path &&
 		    strcmp(existing->event.path, event->path) == 0) {
 			
-			/* Update existing event with new timing and event data */
+			/* Preserve the existing path pointer */
+			char *preserved = existing->event.path;
+			existing->event = *event;
+			existing->event.path = preserved;
+			
+			/* Update the process time for the delayed event */
 			existing->process_time = process_time;
-			existing->event.type = event->type;
-			existing->event.time = event->time;
-			existing->event.wall_time = event->wall_time;
-			existing->event.user_id = event->user_id;
 			
 			log_message(DEBUG, "Updated existing delayed event for %s (watch: %s) to process in %d ms",
 			            		event->path, watch->name, watch->processing_delay);
