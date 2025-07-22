@@ -3,6 +3,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
+#include <limits.h>
 
 #include "config.h"
 #include "logger.h"
@@ -35,6 +36,33 @@ static char *trim(char *str) {
 	*(end + 1) = 0;
 
 	return str;
+}
+
+/* Canonize a file path using realpath(), with graceful fallback */
+static char *canonize_path(const char *path, int line_number) {
+	if (path == NULL) {
+		return NULL;
+	}
+
+	char resolved_path[PATH_MAX];
+	char *result;
+	
+	if (realpath(path, resolved_path) != NULL) {
+		/* Success - path exists and was canonicalized */
+		log_message(DEBUG, "Canonized path '%s' -> '%s' at line %d", path, resolved_path, line_number);
+		result = strdup(resolved_path);
+	} else {
+		/* realpath() failed - log warning and use original path */
+		log_message(WARNING, "Failed to canonicalize path '%s' at line %d: %s (using original path)", 
+		        			  path, line_number, strerror(errno));
+		result = strdup(path);
+	}
+	
+	if (result == NULL) {
+		log_message(ERROR, "Memory allocation failed for path at line %d", line_number);
+	}
+	
+	return result;
 }
 
 /* Parse event type string */
@@ -350,10 +378,20 @@ bool config_parse(config_t *config, const char *filename) {
 
 			if (strcasecmp(key, "file") == 0) {
 				current_watch->target = WATCH_FILE;
-				current_watch->path = strdup(value);
+				current_watch->path = canonize_path(value, line_number);
+				if (current_watch->path == NULL) {
+					config_destroy_watch(current_watch);
+					fclose(fp);
+					return false;
+				}
 			} else if (strcasecmp(key, "directory") == 0) {
 				current_watch->target = WATCH_DIRECTORY;
-				current_watch->path = strdup(value);
+				current_watch->path = canonize_path(value, line_number);
+				if (current_watch->path == NULL) {
+					config_destroy_watch(current_watch);
+					fclose(fp);
+					return false;
+				}
 			} else if (strcasecmp(key, "events") == 0) {
 				if (!config_events(value, &current_watch->filter)) {
 					log_message(ERROR, "Invalid value for %s at line %d: %s", key,
