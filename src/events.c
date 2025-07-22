@@ -220,7 +220,7 @@ int events_timeout(monitor_t *monitor, struct timespec *current_time) {
 static filter_t flags_to_filter(uint32_t flags) {
 	filter_t event = EVENT_NONE;
 
-	/* Content changes */
+	/* Structural changes to directories */
 	if (flags & (NOTE_WRITE | NOTE_EXTEND)) {
 		event |= EVENT_STRUCTURE;
 	}
@@ -230,7 +230,7 @@ static filter_t flags_to_filter(uint32_t flags) {
 		event |= EVENT_METADATA;
 	}
 
-	/* Modification events */
+	/* File content changes */
 	if (flags & (NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE | NOTE_WRITE)) {
 		event |= EVENT_CONTENT;
 	}
