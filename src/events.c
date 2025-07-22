@@ -200,7 +200,7 @@ int events_timeout(monitor_t *monitor, struct timespec *current_time) {
 	long timeout_ms;
 	if (current_time->tv_sec > earliest.tv_sec ||
 		(current_time->tv_sec == earliest.tv_sec && current_time->tv_nsec > earliest.tv_nsec)) {
-		timeout_ms = 0; /* Already overdue */
+		timeout_ms = 1; /* Already overdue */
 	} else {
 		struct timespec diff_time;
 		diff_time.tv_sec = earliest.tv_sec - current_time->tv_sec;
@@ -213,7 +213,7 @@ int events_timeout(monitor_t *monitor, struct timespec *current_time) {
 		timeout_ms = diff_time.tv_sec * 1000 + diff_time.tv_nsec / 1000000;
 	}
 
-	return timeout_ms > 0 ? (int) timeout_ms : 0;
+	return timeout_ms > 0 ? (int) timeout_ms : 1;
 }
 
 /* Convert kqueue flags to filter type bitmask */
