@@ -178,6 +178,16 @@ void stability_defer(monitor_t *monitor, entity_t *state) {
 	if (existing_index >= 0) {
 		/* A check is already pending. Use maximum of locked-in period and new calculation */
 		check_t *check = &monitor->check_queue->items[existing_index];
+
+		/* Add the current watch to the existing check to merge them */
+		if (!queue_add(check, root->watch)) {
+			log_message(WARNING, "Failed to merge watch %s into existing check for %s",
+			            		 root->watch->name, root->node->path);
+		} else {
+			log_message(DEBUG, "Merged watch %s into existing deferred check for %s",
+			            		 root->watch->name, root->node->path);
+		}
+
 		long locked_quiet = check->scheduled_quiet;
 		
 		if (locked_quiet <= 0) {
@@ -498,30 +508,42 @@ bool stability_execute(monitor_t *monitor, check_t *check, entity_t *root, struc
 	int executed_count = 0;
 	const char *active_path = root->scanner->active_path ? root->scanner->active_path : check->path;
 
-	/* Find the most recent file if any command needs it */
+	/* Determine if any command needs the trigger file path (%f or %F) */
+	bool needs_trigger = false;
 	for (int i = 0; i < check->num_watches; i++) {
 		if (strstr(check->watches[i]->command, "%f") || strstr(check->watches[i]->command, "%F")) {
-			free(root->trigger);
-			root->trigger = NULL; /* Clear previous path */
-
-			struct stat info;
-
-			if (stat(active_path, &info) == 0 && S_ISDIR(info.st_mode)) {
-				/* It's a directory, scan it for the most recent file */
-				root->trigger = scanner_newest(active_path);
-			} else {
-				/* It's a file, or doesn't exist; use the path directly */
-				root->trigger = strdup(active_path);
+			needs_trigger = true;
+			break;
+		}
+	}
+	if (!needs_trigger) {
+		for (int i = 0; i < monitor->delayed_count; i++) {
+			delayed_t *delayed = &monitor->delayed_events[i];
+			if (delayed->event.path && strcmp(delayed->event.path, check->path) == 0) {
+				if (strstr(delayed->watch->command, "%f") || strstr(delayed->watch->command, "%F")) {
+					needs_trigger = true;
+					break;
+				}
 			}
-
-			if (root->trigger) {
-				log_message(DEBUG, "Found trigger file for %%f/%%F: %s", root->trigger);
-			}
-			break; /* Only need to find it once */
 		}
 	}
 
-	/* Create synthetic event */
+	/* If needed, find the most recently modified file to use as the trigger */
+	if (needs_trigger) {
+		free(root->trigger);
+		root->trigger = NULL;
+		struct stat info;
+		if (stat(active_path, &info) == 0 && S_ISDIR(info.st_mode)) {
+			root->trigger = scanner_newest(active_path);
+		} else {
+			root->trigger = strdup(active_path);
+		}
+		if (root->trigger) {
+			log_message(DEBUG, "Found trigger file for %%f/%%F: %s", root->trigger);
+		}
+	}
+
+	/* Create a synthetic event to pass to the command execution function */
 	event_t synthetic_event = {
 		.path = (char *)active_path,
 		.type = EVENT_STRUCTURE,
@@ -530,30 +552,64 @@ bool stability_execute(monitor_t *monitor, check_t *check, entity_t *root, struc
 		.user_id = getuid()
 	};
 
-	/* Execute commands for ALL watches of this path */
+	/* Execute commands for the primary watches associated with the stability check */
 	for (int i = 0; i < check->num_watches; i++) {
 		watch_t *watch = check->watches[i];
-
-		/* Get or create state for this specific watch */
 		entity_t *state = state_get(monitor->states, check->path, ENTITY_DIRECTORY, watch);
 		if (!state) {
-			log_message(WARNING, "Unable to get state for %s with watch %s during command execution",
-								  check->path, watch->name);
+			log_message(WARNING, "Unable to get state for %s with watch %s", check->path, watch->name);
 			continue;
 		}
-
-		/* Execute command */
 		log_message(INFO, "Executing deferred command for %s (watch: %s)", check->path, watch->name);
-
 		if (command_execute(monitor, watch, &synthetic_event, true)) {
 			executed_count++;
 			state->command_time = current_time->tv_sec;
-
-			log_message(DEBUG, "Command execution successful for %s (watch: %s)", check->path, watch->name);
 		} else {
 			log_message(WARNING, "Command execution failed for %s (watch: %s)", check->path, watch->name);
 		}
 	}
+
+	/*
+	 * Process and compact the delayed events queue in a single pass.
+	 * We iterate through the list, executing ready events and moving
+	 * non-ready events to fill the gaps.
+	 */
+	int write_idx = 0;
+	for (int read_idx = 0; read_idx < monitor->delayed_count; read_idx++) {
+		delayed_t *delayed = &monitor->delayed_events[read_idx];
+		bool is_ready = false;
+
+		/* Check if the delayed event is for the current stable path and its timer has expired */
+		if (delayed->event.path && strcmp(delayed->event.path, check->path) == 0) {
+			if (current_time->tv_sec > delayed->process_time.tv_sec ||
+			    (current_time->tv_sec == delayed->process_time.tv_sec && current_time->tv_nsec >= delayed->process_time.tv_nsec)) {
+				is_ready = true;
+			}
+		}
+
+		if (is_ready) {
+			/* This event is ready, execute its command */
+			log_message(INFO, "Executing delayed command for %s (watch: %s)", check->path, delayed->watch->name);
+			entity_t *state = state_get(monitor->states, check->path, ENTITY_DIRECTORY, delayed->watch);
+			if (command_execute(monitor, delayed->watch, &synthetic_event, true)) {
+				executed_count++;
+				if(state) state->command_time = current_time->tv_sec;
+			} else {
+				log_message(WARNING, "Delayed command execution failed for %s (watch: %s)", check->path, delayed->watch->name);
+			}
+			/* Free the path and effectively remove it from the array by not copying it */
+			free(delayed->event.path);
+		} else {
+			/* This event is not ready, keep it in the queue */
+			if (write_idx != read_idx) {
+				monitor->delayed_events[write_idx] = monitor->delayed_events[read_idx];
+			}
+			write_idx++;
+		}
+	}
+	/* The new count of delayed events is the number of events we kept */
+	monitor->delayed_count = write_idx;
+
 
 	if (commands_executed) {
 		*commands_executed = executed_count;
@@ -773,6 +829,36 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 
 		/* Remove check from queue after processing all watches */
 		queue_remove(monitor->check_queue, check->path);
+
+		/* Clean up any stale delayed events for this path and its subdirectories */
+		int write_idx = 0;
+		size_t root_path_len = strlen(root->node->path);
+		for (int read_idx = 0; read_idx < monitor->delayed_count; read_idx++) {
+			delayed_t *delayed = &monitor->delayed_events[read_idx];
+			bool is_stale = false;
+			if (delayed->event.path) {
+				if (strncmp(delayed->event.path, root->node->path, root_path_len) == 0) {
+					char next_char = delayed->event.path[root_path_len];
+					if (next_char == '\0' || next_char == '/') {
+						is_stale = true;
+					}
+				}
+			}
+
+			if (is_stale) {
+				/* This is a stale event for the path we just processed, discard it */
+				log_message(DEBUG, "Cleaning up stale delayed event for %s (watch: %s)",
+				            		 delayed->event.path, delayed->watch->name);
+				free(delayed->event.path);
+			} else {
+				/* This event is for a different path, keep it */
+				if (write_idx != read_idx) {
+					monitor->delayed_events[write_idx] = monitor->delayed_events[read_idx];
+				}
+				write_idx++;
+			}
+		}
+		monitor->delayed_count = write_idx;
 	}
 
 	if (items_processed > 0) {

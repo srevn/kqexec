@@ -149,32 +149,44 @@ void events_delayed(monitor_t *monitor) {
 	clock_gettime(CLOCK_MONOTONIC, &current_time);
 
 	int processed = 0;
-	for (int i = 0; i < monitor->delayed_count; i++) {
-		delayed_t *delayed = &monitor->delayed_events[i];
+	int write_idx = 0;
+	for (int read_idx = 0; read_idx < monitor->delayed_count; read_idx++) {
+		delayed_t *delayed = &monitor->delayed_events[read_idx];
 
 		/* Check if this event is ready to process */
 		if (current_time.tv_sec > delayed->process_time.tv_sec ||
 		    (current_time.tv_sec == delayed->process_time.tv_sec && current_time.tv_nsec >= delayed->process_time.tv_nsec)) {
-			log_message(DEBUG, "Processing delayed event for %s (watch: %s)",
-			        			delayed->event.path, delayed->watch->name);
+			
+			/* Special handling for config file reload to bypass stability checks */
+			if (strcmp(delayed->watch->name, "__config_file__") == 0) {
+				log_message(NOTICE, "Configuration changed: %s", delayed->event.path);
+				monitor->reload = true;
+			} else {
+				log_message(DEBUG, "Promoting delayed event for %s (watch: %s) to stability check",
+				        			delayed->event.path, delayed->watch->name);
 
-			/* Process the event */
-			events_process(monitor, delayed->watch, &delayed->event, delayed->kind);
-
-			/* Free the path string */
-			free(delayed->event.path);
-
-			/* Mark as processed */
-			processed++;
-
-			/* Move the last event to this position to avoid gaps */
-			if (i < monitor->delayed_count - 1) {
-				monitor->delayed_events[i] = monitor->delayed_events[monitor->delayed_count - 1];
-				i--; /* Reprocess this position */
+				/* Get the state for this event and promote it to the stability pipeline */
+				entity_t *state = state_get(monitor->states, delayed->event.path, delayed->kind, delayed->watch);
+				if (state) {
+					/* Update timestamps before deferring */
+					state->last_time = delayed->event.time;
+					state->wall_time = delayed->event.wall_time;
+					stability_defer(monitor, state);
+				}
 			}
-			monitor->delayed_count--;
+
+			/* Free the path string and mark as processed */
+			free(delayed->event.path);
+			processed++;
+		} else {
+			/* This event is not ready yet, keep it */
+			if (write_idx != read_idx) {
+				monitor->delayed_events[write_idx] = monitor->delayed_events[read_idx];
+			}
+			write_idx++;
 		}
 	}
+	monitor->delayed_count = write_idx;
 
 	if (processed > 0) {
 		log_message(DEBUG, "Processed %d delayed events", processed);
