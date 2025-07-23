@@ -161,23 +161,21 @@ void events_delayed(monitor_t *monitor) {
 			if (strcmp(delayed->watch->name, "__config_file__") == 0) {
 				log_message(NOTICE, "Configuration changed: %s", delayed->event.path);
 				monitor->reload = true;
+				
+				/* Free the path string and mark as processed */
+				free(delayed->event.path);
+				processed++;
 			} else {
-				log_message(DEBUG, "Promoting delayed event for %s (watch: %s) to stability check",
+				/* Non-config delayed events remain in queue for stability_execute() to handle */
+				log_message(DEBUG, "Delayed event for %s (watch: %s) expired, will be processed when path completes stability",
 				        			delayed->event.path, delayed->watch->name);
-
-				/* Get the state for this event and promote it to the stability pipeline */
-				entity_t *state = state_get(monitor->states, delayed->event.path, delayed->kind, delayed->watch);
-				if (state) {
-					/* Update timestamps before deferring */
-					state->last_time = delayed->event.time;
-					state->wall_time = delayed->event.wall_time;
-					stability_defer(monitor, state);
+				
+				/* Keep this event in the queue */
+				if (write_idx != read_idx) {
+					monitor->delayed_events[write_idx] = monitor->delayed_events[read_idx];
 				}
+				write_idx++;
 			}
-
-			/* Free the path string and mark as processed */
-			free(delayed->event.path);
-			processed++;
 		} else {
 			/* This event is not ready yet, keep it */
 			if (write_idx != read_idx) {
