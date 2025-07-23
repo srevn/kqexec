@@ -579,23 +579,33 @@ bool stability_execute(monitor_t *monitor, check_t *check, entity_t *root, struc
 		delayed_t *delayed = &monitor->delayed_events[read_idx];
 		bool is_ready = false;
 
-		/* Check if the delayed event is for the current stable path and its timer has expired */
-		if (delayed->event.path && strcmp(delayed->event.path, check->path) == 0) {
-			if (current_time->tv_sec > delayed->process_time.tv_sec ||
-			    (current_time->tv_sec == delayed->process_time.tv_sec && current_time->tv_nsec >= delayed->process_time.tv_nsec)) {
-				is_ready = true;
+		/* Never process config events here - they are handled separately */
+		if (delayed->watch && strcmp(delayed->watch->name, "__config_file__") == 0) {
+			is_ready = false;
+		} else if (delayed->event.path) {
+			/* Check if event is for the stable directory or its subdirectories */
+			size_t check_path_len = strlen(check->path);
+			if (strncmp(delayed->event.path, check->path, check_path_len) == 0) {
+				char next_char = delayed->event.path[check_path_len];
+				if (next_char == '\0' || next_char == '/') {
+					/* Path matches - check if minimum delay has elapsed */
+					if (current_time->tv_sec > delayed->process_time.tv_sec ||
+					    (current_time->tv_sec == delayed->process_time.tv_sec && current_time->tv_nsec >= delayed->process_time.tv_nsec)) {
+						is_ready = true;
+					}
+				}
 			}
 		}
 
 		if (is_ready) {
-			/* This event is ready, execute its command */
-			log_message(INFO, "Executing delayed command for %s (watch: %s)", check->path, delayed->watch->name);
-			entity_t *state = state_get(monitor->states, check->path, ENTITY_DIRECTORY, delayed->watch);
-			if (command_execute(monitor, delayed->watch, &synthetic_event, true)) {
+			/* This event is ready - execute its command with correct state lookup */
+			log_message(INFO, "Executing delayed command for %s (watch: %s)", delayed->event.path, delayed->watch->name);
+			entity_t *state = state_get(monitor->states, delayed->event.path, delayed->kind, delayed->watch);
+			if (command_execute(monitor, delayed->watch, &delayed->event, true)) {
 				executed_count++;
 				if(state) state->command_time = current_time->tv_sec;
 			} else {
-				log_message(WARNING, "Delayed command execution failed for %s (watch: %s)", check->path, delayed->watch->name);
+				log_message(WARNING, "Delayed command execution failed for %s (watch: %s)", delayed->event.path, delayed->watch->name);
 			}
 			/* Free the path and effectively remove it from the array by not copying it */
 			free(delayed->event.path);
