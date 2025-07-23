@@ -840,7 +840,12 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 				if (strncmp(delayed->event.path, root->node->path, root_path_len) == 0) {
 					char next_char = delayed->event.path[root_path_len];
 					if (next_char == '\0' || next_char == '/') {
-						is_stale = true;
+						/* Only consider it stale if the delay has actually expired */
+						if (current_time->tv_sec > delayed->process_time.tv_sec ||
+						    (current_time->tv_sec == delayed->process_time.tv_sec && 
+						     current_time->tv_nsec >= delayed->process_time.tv_nsec)) {
+							is_stale = true;
+						}
 					}
 				}
 			}
