@@ -91,15 +91,15 @@ void events_schedule(monitor_t *monitor, watch_t *watch, event_t *event, kind_t 
 		process_time.tv_nsec -= 1000000000;
 	}
 
-	/* Look for existing delayed event for the same path and watch to enable debouncing */
+	/* Look for existing delayed event for the same watch to enable debouncing */
 	for (int i = 0; i < monitor->delayed_count; i++) {
 		delayed_t *existing = &monitor->delayed_events[i];
-		if (existing->watch == watch && 
-		    existing->event.path && event->path &&
-		    strcmp(existing->event.path, event->path) == 0) {
+		if (existing->watch == watch) {
+			/* Consolidate all events for the same watch, use watch root as canonical path */
 			
-			/* Merge event information instead of overwriting */
-			char *preserved_path = existing->event.path;
+			/* Update to watch root directory for canonical delayed event */
+			free(existing->event.path);
+			existing->event.path = strdup(watch->path);
 			
 			/* Merge event types to preserve all event information */
 			existing->event.type |= event->type;
@@ -108,9 +108,6 @@ void events_schedule(monitor_t *monitor, watch_t *watch, event_t *event, kind_t 
 			existing->event.time = event->time;
 			existing->event.wall_time = event->wall_time;
 			existing->event.user_id = event->user_id;
-			
-			/* Restore the preserved path pointer */
-			existing->event.path = preserved_path;
 			
 			/* Update the process time for the delayed event */
 			existing->process_time = process_time;
@@ -133,9 +130,9 @@ void events_schedule(monitor_t *monitor, watch_t *watch, event_t *event, kind_t 
 		monitor->delayed_capacity = new_capacity;
 	}
 
-	/* Store the delayed event */
+	/* Store the delayed event using watch root path for canonical delayed events */
 	delayed_t *delayed = &monitor->delayed_events[monitor->delayed_count++];
-	delayed->event.path = strdup(event->path);
+	delayed->event.path = strdup(watch->path);
 	delayed->event.type = event->type;
 	delayed->event.time = event->time;
 	delayed->event.wall_time = event->wall_time;
@@ -194,15 +191,38 @@ void events_delayed(monitor_t *monitor) {
 				free(delayed->event.path);
 				processed++;
 			} else {
-				/* Directory events remain in queue for stability_execute() to handle */
-				log_message(DEBUG, "Delayed directory event for %s (watch: %s) expired, will be processed when path completes stability",
-				        			delayed->event.path, delayed->watch->name);
+				/* Directory events: check if stability is active for this path */
+				entity_t *state = state_get(monitor->states, delayed->event.path, delayed->kind, delayed->watch);
+				entity_t *root = state ? stability_root(monitor, state) : NULL;
 				
-				/* Keep this event in the queue */
-				if (write_idx != read_idx) {
-					monitor->delayed_events[write_idx] = monitor->delayed_events[read_idx];
+				if (root && root->scanner->active) {
+					/* Stability check is active, keep in queue for stability_execute() */
+					log_message(DEBUG, "Delayed directory event for %s (watch: %s) expired, will be processed when path completes stability",
+					        			delayed->event.path, delayed->watch->name);
+					
+					if (write_idx != read_idx) {
+						monitor->delayed_events[write_idx] = monitor->delayed_events[read_idx];
+					}
+					write_idx++;
+				} else {
+					/* No active stability - directory is stable, execute delayed command immediately */
+					log_message(INFO, "Executing delayed directory command for %s (watch: %s) - directory is stable", 
+					            delayed->event.path, delayed->watch->name);
+					
+					if (command_execute(monitor, delayed->watch, &delayed->event, true)) {
+						/* Update command timestamp for the directory state */
+						if (state) {
+							state->command_time = current_time.tv_sec;
+						}
+					} else {
+						log_message(WARNING, "Delayed directory command execution failed for %s (watch: %s)", 
+						            delayed->event.path, delayed->watch->name);
+					}
+					
+					/* Free the path string and mark as processed */
+					free(delayed->event.path);
+					processed++;
 				}
-				write_idx++;
 			}
 		} else {
 			/* This event is not ready yet, keep it */

@@ -555,6 +555,14 @@ bool stability_execute(monitor_t *monitor, check_t *check, entity_t *root, struc
 	/* Execute commands for the primary watches associated with the stability check */
 	for (int i = 0; i < check->num_watches; i++) {
 		watch_t *watch = check->watches[i];
+		
+		/* Skip watches with delays - they should only execute via delayed event processing */
+		if (watch->processing_delay > 0) {
+			log_message(DEBUG, "Skipping watch %s with delay %d ms - will execute via delayed event processing", 
+			            watch->name, watch->processing_delay);
+			continue;
+		}
+		
 		entity_t *state = state_get(monitor->states, check->path, ENTITY_DIRECTORY, watch);
 		if (!state) {
 			log_message(WARNING, "Unable to get state for %s with watch %s", check->path, watch->name);
@@ -839,45 +847,6 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 
 		/* Remove check from queue after processing all watches */
 		queue_remove(monitor->check_queue, check->path);
-
-		/* Clean up any stale delayed events for this path and its subdirectories */
-		int write_idx = 0;
-		size_t root_path_len = strlen(root->node->path);
-		for (int read_idx = 0; read_idx < monitor->delayed_count; read_idx++) {
-			delayed_t *delayed = &monitor->delayed_events[read_idx];
-			bool is_stale = false;
-			
-			/* Never clean up config events - they are handled separately */
-			if (delayed->watch && strcmp(delayed->watch->name, "__config_file__") == 0) {
-				is_stale = false;
-			} else if (delayed->event.path) {
-				if (strncmp(delayed->event.path, root->node->path, root_path_len) == 0) {
-					char next_char = delayed->event.path[root_path_len];
-					if (next_char == '\0' || next_char == '/') {
-						/* Only consider it stale if the delay has actually expired */
-						if (current_time->tv_sec > delayed->process_time.tv_sec ||
-						    (current_time->tv_sec == delayed->process_time.tv_sec && 
-						     current_time->tv_nsec >= delayed->process_time.tv_nsec)) {
-							is_stale = true;
-						}
-					}
-				}
-			}
-
-			if (is_stale) {
-				/* This is a stale event for the path we just processed, discard it */
-				log_message(DEBUG, "Cleaning up stale delayed event for %s (watch: %s)",
-				            		 delayed->event.path, delayed->watch->name);
-				free(delayed->event.path);
-			} else {
-				/* This event is for a different path, keep it */
-				if (write_idx != read_idx) {
-					monitor->delayed_events[write_idx] = monitor->delayed_events[read_idx];
-				}
-				write_idx++;
-			}
-		}
-		monitor->delayed_count = write_idx;
 	}
 
 	if (items_processed > 0) {
