@@ -165,9 +165,28 @@ void events_delayed(monitor_t *monitor) {
 				/* Free the path string and mark as processed */
 				free(delayed->event.path);
 				processed++;
+			} else if (delayed->kind == ENTITY_FILE) {
+				/* File events execute immediately when expired - no stability checks needed */
+				log_message(INFO, "Executing delayed file command for %s (watch: %s)", 
+				            delayed->event.path, delayed->watch->name);
+				
+				if (command_execute(monitor, delayed->watch, &delayed->event, true)) {
+					/* Update command timestamp for the file state */
+					entity_t *state = state_get(monitor->states, delayed->event.path, ENTITY_FILE, delayed->watch);
+					if (state) {
+						state->command_time = current_time.tv_sec;
+					}
+				} else {
+					log_message(WARNING, "Delayed file command execution failed for %s (watch: %s)", 
+					            delayed->event.path, delayed->watch->name);
+				}
+				
+				/* Free the path string and mark as processed */
+				free(delayed->event.path);
+				processed++;
 			} else {
-				/* Non-config delayed events remain in queue for stability_execute() to handle */
-				log_message(DEBUG, "Delayed event for %s (watch: %s) expired, will be processed when path completes stability",
+				/* Directory events remain in queue for stability_execute() to handle */
+				log_message(DEBUG, "Delayed directory event for %s (watch: %s) expired, will be processed when path completes stability",
 				        			delayed->event.path, delayed->watch->name);
 				
 				/* Keep this event in the queue */
