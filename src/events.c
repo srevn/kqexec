@@ -195,7 +195,14 @@ void events_delayed(monitor_t *monitor) {
 				entity_t *state = state_get(monitor->states, delayed->event.path, delayed->kind, delayed->watch);
 				entity_t *root = state ? stability_root(monitor, state) : NULL;
 				
-				if (root && root->scanner->active) {
+				if (!root) {
+					/* If we can't find the root, we can't check for active stability - keep it in the queue */
+					log_message(WARNING, "Cannot find root for %s, keeping in queue", delayed->event.path);
+					if (write_idx != read_idx) {
+						monitor->delayed_events[write_idx] = monitor->delayed_events[read_idx];
+					}
+					write_idx++;
+				} else if (root->scanner->active) {
 					/* Stability check is active, keep in queue for stability_execute() */
 					log_message(DEBUG, "Delayed directory event for %s (watch: %s) expired, will be processed when path completes stability",
 					        			delayed->event.path, delayed->watch->name);
@@ -239,19 +246,49 @@ void events_delayed(monitor_t *monitor) {
 	}
 }
 
-/* Calculate timeout for the next delayed event */
+/* Calculate timeout for the next delayed event that can actually be processed */
 int events_timeout(monitor_t *monitor, struct timespec *current_time) {
 	if (!monitor || !monitor->delayed_events || monitor->delayed_count == 0) {
 		return -1; /* No timeout needed */
 	}
 
-	struct timespec earliest = monitor->delayed_events[0].process_time;
-	for (int i = 1; i < monitor->delayed_count; i++) {
-		if (monitor->delayed_events[i].process_time.tv_sec < earliest.tv_sec ||
-		    (monitor->delayed_events[i].process_time.tv_sec == earliest.tv_sec &&
-		     monitor->delayed_events[i].process_time.tv_nsec < earliest.tv_nsec)) {
-			earliest = monitor->delayed_events[i].process_time;
+	struct timespec earliest;
+	bool found_processable = false;
+	
+	/* Find the earliest delayed event that can actually be processed */
+	for (int i = 0; i < monitor->delayed_count; i++) {
+		delayed_t *delayed = &monitor->delayed_events[i];
+		
+		/* Skip expired events that are waiting for stability */
+		if (current_time->tv_sec > delayed->process_time.tv_sec ||
+		    (current_time->tv_sec == delayed->process_time.tv_sec && current_time->tv_nsec >= delayed->process_time.tv_nsec)) {
+			
+			/* This event has expired - check if it's waiting for stability */
+			if (delayed->kind == ENTITY_DIRECTORY && strcmp(delayed->watch->name, "__config_file__") != 0) {
+				entity_t *state = state_get(monitor->states, delayed->event.path, delayed->kind, delayed->watch);
+				entity_t *root = state ? stability_root(monitor, state) : NULL;
+				
+				if (!root || root->scanner->active) {
+					/* This expired event is waiting for stability or root is missing - skip it for timeout calculation */
+					if (!root) {
+						log_message(WARNING, "Cannot find root for %s, skipping for timeout calculation", delayed->event.path);
+					}
+					continue;
+				}
+			}
 		}
+		
+		/* This event can be processed - consider it for timeout */
+		if (!found_processable || 
+		    delayed->process_time.tv_sec < earliest.tv_sec ||
+		    (delayed->process_time.tv_sec == earliest.tv_sec && delayed->process_time.tv_nsec < earliest.tv_nsec)) {
+			earliest = delayed->process_time;
+			found_processable = true;
+		}
+	}
+	
+	if (!found_processable) {
+		return -1; /* No processable delayed events */
 	}
 
 	/* Calculate timeout in milliseconds */
