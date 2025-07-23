@@ -7,8 +7,8 @@
 #include "monitor.h"
 
 /* Thread pool configuration constants */
-#define MAX_WORKER_THREADS 1               /* Maximum number of worker threads */
-#define MAX_WORK_QUEUE_SIZE 4              /* Maximum number of queued work items */
+#define MAX_WORKER_THREADS 3               /* Maximum number of worker threads */
+#define MAX_WORK_QUEUE_SIZE 8              /* Maximum number of queued work items */
 
 /* Work task for thread pool */
 typedef struct task {
