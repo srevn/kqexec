@@ -98,10 +98,19 @@ void events_schedule(monitor_t *monitor, watch_t *watch, event_t *event, kind_t 
 		    existing->event.path && event->path &&
 		    strcmp(existing->event.path, event->path) == 0) {
 			
-			/* Preserve the existing path pointer */
-			char *preserved = existing->event.path;
-			existing->event = *event;
-			existing->event.path = preserved;
+			/* Merge event information instead of overwriting */
+			char *preserved_path = existing->event.path;
+			
+			/* Merge event types to preserve all event information */
+			existing->event.type |= event->type;
+			
+			/* Update timestamps to the most recent event */
+			existing->event.time = event->time;
+			existing->event.wall_time = event->wall_time;
+			existing->event.user_id = event->user_id;
+			
+			/* Restore the preserved path pointer */
+			existing->event.path = preserved_path;
 			
 			/* Update the process time for the delayed event */
 			existing->process_time = process_time;
