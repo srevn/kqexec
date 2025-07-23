@@ -95,11 +95,9 @@ void events_schedule(monitor_t *monitor, watch_t *watch, event_t *event, kind_t 
 	for (int i = 0; i < monitor->delayed_count; i++) {
 		delayed_t *existing = &monitor->delayed_events[i];
 		if (existing->watch == watch) {
-			/* Consolidate all events for the same watch, use watch root as canonical path */
+			/* Consolidate all events for the same watch. */
 			
-			/* Update to watch root directory for canonical delayed event */
-			free(existing->event.path);
-			existing->event.path = strdup(watch->path);
+			/* Path is not updated, to preserve the original trigger path. */
 			
 			/* Merge event types to preserve all event information */
 			existing->event.type |= event->type;
@@ -130,9 +128,9 @@ void events_schedule(monitor_t *monitor, watch_t *watch, event_t *event, kind_t 
 		monitor->delayed_capacity = new_capacity;
 	}
 
-	/* Store the delayed event using watch root path for canonical delayed events */
+	/* Store the delayed event, preserving the original path */
 	delayed_t *delayed = &monitor->delayed_events[monitor->delayed_count++];
-	delayed->event.path = strdup(watch->path);
+	delayed->event.path = strdup(event->path);
 	delayed->event.type = event->type;
 	delayed->event.time = event->time;
 	delayed->event.wall_time = event->wall_time;
