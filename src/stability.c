@@ -836,7 +836,11 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 		for (int read_idx = 0; read_idx < monitor->delayed_count; read_idx++) {
 			delayed_t *delayed = &monitor->delayed_events[read_idx];
 			bool is_stale = false;
-			if (delayed->event.path) {
+			
+			/* Never clean up config events - they are handled separately */
+			if (delayed->watch && strcmp(delayed->watch->name, "__config_file__") == 0) {
+				is_stale = false;
+			} else if (delayed->event.path) {
 				if (strncmp(delayed->event.path, root->node->path, root_path_len) == 0) {
 					char next_char = delayed->event.path[root_path_len];
 					if (next_char == '\0' || next_char == '/') {
