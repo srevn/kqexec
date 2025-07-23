@@ -807,16 +807,20 @@ static long scanner_adjust(entity_t *state, long base_ms) {
 				magnitude_factor = 5.0;
 			}
 
-			log_message(DEBUG, "Applying cumulative magnitude factor of %.2f to quiet period", magnitude_factor);
+			long pre_magnitude = required_ms;
 			required_ms = (long)(required_ms * magnitude_factor);
+			log_message(DEBUG, "Applied magnitude factor %.2f: %ld ms -> %ld ms",
+								magnitude_factor, pre_magnitude, required_ms);
 		}
 	}
 
 	/* If stability was previously achieved and then lost, increase quiet period */
 	if (state->stability && state->stability->stability_lost) {
 		/* We need a more careful check for resumed activity */
+		long pre_stability = required_ms;
 		required_ms = (long) (required_ms * 1.25); /* 25% increase */
-		log_message(DEBUG, "Stability previously achieved and lost, increasing quiet period by 25%%");
+		log_message(DEBUG, "Applied stability loss penalty: %ld ms -> %ld ms",
+							pre_stability, required_ms);
 	}
 
 	/* Tree depth multiplier - based on recent activity rate */
@@ -860,8 +864,8 @@ static long scanner_backoff(entity_t *state, long required_ms) {
 	}
 
 	long adjusted_ms = (long) (required_ms * backoff_factor);
-	log_message(DEBUG, "Applying instability backoff factor of %.2f, new quiet period: %ld ms",
-						backoff_factor, adjusted_ms);
+	log_message(DEBUG, "Applied backoff factor %.2f: %ld ms -> %ld ms",
+						backoff_factor, required_ms, adjusted_ms);
 
 	return adjusted_ms;
 }
@@ -875,7 +879,8 @@ static long scanner_limit(entity_t *state, long required_ms) {
 	long maximum_ms = 90000; /* Default 90 seconds */
 
 	if (required_ms > maximum_ms) {
-		log_message(DEBUG, "Capping quiet period for %s from %ld ms to %ld ms", state->node->path, required_ms, maximum_ms);
+		log_message(DEBUG, "Capping quiet period for %s from %ld ms to %ld ms",
+							state->node->path, required_ms, maximum_ms);
 		required_ms = maximum_ms;
 	}
 
