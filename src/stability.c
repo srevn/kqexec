@@ -516,26 +516,18 @@ bool stability_execute(monitor_t *monitor, check_t *check, entity_t *root, struc
 			break;
 		}
 	}
-	if (!needs_trigger) {
-		for (int i = 0; i < monitor->delayed_count; i++) {
-			delayed_t *delayed = &monitor->delayed_events[i];
-			if (delayed->event.path && strcmp(delayed->event.path, check->path) == 0) {
-				if (strstr(delayed->watch->command, "%f") || strstr(delayed->watch->command, "%F")) {
-					needs_trigger = true;
-					break;
-				}
-			}
-		}
-	}
 
 	/* If needed, find the most recently modified file to use as the trigger */
 	if (needs_trigger) {
 		free(root->trigger);
-		root->trigger = NULL;
+		root->trigger = NULL; /* Clear previous path */
+
 		struct stat info;
 		if (stat(active_path, &info) == 0 && S_ISDIR(info.st_mode)) {
+		        /* It's a directory, scan it for the most recent file */
 			root->trigger = scanner_newest(active_path);
 		} else {
+		        /* It's a file, or doesn't exist; use the path directly */
 			root->trigger = strdup(active_path);
 		}
 		if (root->trigger) {
@@ -555,19 +547,15 @@ bool stability_execute(monitor_t *monitor, check_t *check, entity_t *root, struc
 	/* Execute commands for the primary watches associated with the stability check */
 	for (int i = 0; i < check->num_watches; i++) {
 		watch_t *watch = check->watches[i];
-		
-		/* Skip watches with delays - they should only execute via delayed event processing */
-		if (watch->processing_delay > 0) {
-			log_message(DEBUG, "Skipping watch %s with delay %d ms - will execute via delayed event processing", 
-			            watch->name, watch->processing_delay);
-			continue;
-		}
-		
+
+                /* Get or create state for this specific watch */
 		entity_t *state = state_get(monitor->states, check->path, ENTITY_DIRECTORY, watch);
 		if (!state) {
 			log_message(WARNING, "Unable to get state for %s with watch %s", check->path, watch->name);
 			continue;
 		}
+
+		/* Execute command */
 		log_message(INFO, "Executing deferred command for %s (watch: %s)", check->path, watch->name);
 		if (command_execute(monitor, watch, &synthetic_event, true)) {
 			executed_count++;
@@ -576,58 +564,6 @@ bool stability_execute(monitor_t *monitor, check_t *check, entity_t *root, struc
 			log_message(WARNING, "Command execution failed for %s (watch: %s)", check->path, watch->name);
 		}
 	}
-
-	/*
-	 * Process and compact the delayed events queue in a single pass.
-	 * We iterate through the list, executing ready events and moving
-	 * non-ready events to fill the gaps.
-	 */
-	int write_idx = 0;
-	for (int read_idx = 0; read_idx < monitor->delayed_count; read_idx++) {
-		delayed_t *delayed = &monitor->delayed_events[read_idx];
-		bool is_ready = false;
-
-		/* Never process config events here - they are handled separately */
-		if (delayed->watch && strcmp(delayed->watch->name, "__config_file__") == 0) {
-			is_ready = false;
-		} else if (delayed->event.path) {
-			/* Check if event is for the stable directory or its subdirectories */
-			size_t check_path_len = strlen(check->path);
-			if (strncmp(delayed->event.path, check->path, check_path_len) == 0) {
-				char next_char = delayed->event.path[check_path_len];
-				if (next_char == '\0' || next_char == '/') {
-					/* Path matches - check if minimum delay has elapsed */
-					if (current_time->tv_sec > delayed->process_time.tv_sec ||
-					    (current_time->tv_sec == delayed->process_time.tv_sec && current_time->tv_nsec >= delayed->process_time.tv_nsec)) {
-						is_ready = true;
-					}
-				}
-			}
-		}
-
-		if (is_ready) {
-			/* This event is ready - execute its command with correct state lookup */
-			log_message(INFO, "Executing delayed command for %s (watch: %s)", delayed->event.path, delayed->watch->name);
-			entity_t *state = state_get(monitor->states, delayed->event.path, delayed->kind, delayed->watch);
-			if (command_execute(monitor, delayed->watch, &delayed->event, true)) {
-				executed_count++;
-				if(state) state->command_time = current_time->tv_sec;
-			} else {
-				log_message(WARNING, "Delayed command execution failed for %s (watch: %s)", delayed->event.path, delayed->watch->name);
-			}
-			/* Free the path and effectively remove it from the array by not copying it */
-			free(delayed->event.path);
-		} else {
-			/* This event is not ready, keep it in the queue */
-			if (write_idx != read_idx) {
-				monitor->delayed_events[write_idx] = monitor->delayed_events[read_idx];
-			}
-			write_idx++;
-		}
-	}
-	/* The new count of delayed events is the number of events we kept */
-	monitor->delayed_count = write_idx;
-
 
 	if (commands_executed) {
 		*commands_executed = executed_count;

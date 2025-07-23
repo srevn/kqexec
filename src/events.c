@@ -200,31 +200,15 @@ void events_delayed(monitor_t *monitor) {
 						monitor->delayed_events[write_idx] = monitor->delayed_events[read_idx];
 					}
 					write_idx++;
-				} else if (root->scanner->active) {
-					/* Stability check is active, keep in queue for stability_execute() */
-					log_message(DEBUG, "Delayed directory event for %s (watch: %s) expired, will be processed when path completes stability",
-					        			delayed->event.path, delayed->watch->name);
-					
-					if (write_idx != read_idx) {
-						monitor->delayed_events[write_idx] = monitor->delayed_events[read_idx];
-					}
-					write_idx++;
 				} else {
-					/* No active stability - directory is stable, execute delayed command immediately */
-					log_message(INFO, "Executing delayed directory command for %s (watch: %s) - directory is stable", 
-					            delayed->event.path, delayed->watch->name);
-					
-					if (command_execute(monitor, delayed->watch, &delayed->event, true)) {
-						/* Update command timestamp for the directory state */
-						if (state) {
-							state->command_time = current_time.tv_sec;
-						}
-					} else {
-						log_message(WARNING, "Delayed directory command execution failed for %s (watch: %s)", 
-						            delayed->event.path, delayed->watch->name);
-					}
-					
-					/* Free the path string and mark as processed */
+					/* Directory event has expired, trigger a stability check. */
+					log_message(DEBUG, "Delayed directory event for %s (watch: %s) expired, initiating stability check.",
+					        			delayed->event.path, delayed->watch->name);
+
+					/* This will either create a new deferred check or update an existing one. */
+					stability_defer(monitor, root);
+
+					/* The event is now handled by the stability system, so we can remove it from the delayed queue. */
 					free(delayed->event.path);
 					processed++;
 				}
