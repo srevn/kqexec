@@ -508,7 +508,7 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 		state->command_time = current_time.tv_sec;
 		
 		/* Clear executing flag to allow new events */
-		state->executing = false;
+		state->node->executing = false;
 		
 		/* Reset directory baseline to accept command result as new authoritative state */
 		stability_reset(monitor, state);

@@ -566,7 +566,7 @@ bool events_process(monitor_t *monitor, watch_t *watch, event_t *event, kind_t k
 	}
 
 	/* Check if command is executing for this path - defer events during execution */
-	if (state->executing) {
+	if (state->node->executing) {
 		log_message(DEBUG, "Deferring event for %s, command is currently executing", event->path);
 		/* Schedule event for reprocessing after a short delay */
 		events_schedule(monitor, watch, event, kind);

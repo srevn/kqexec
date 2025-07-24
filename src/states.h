@@ -18,6 +18,7 @@ typedef struct stability stability_t;
 typedef struct node {
 	char *path;                            /* The path being watched */
 	entity_t *entities;                    /* Head of the list of states for this path */
+	bool executing;                        /* Flag indicating command is currently executing on this path */
 	struct node *next;                     /* Next node in the hash bucket */
 } node_t;
 
@@ -43,7 +44,6 @@ typedef struct entity {
 	bool structure_changed;                /* Structural change occurred */
 
 	/* Command & Trigger tracking */
-	bool executing;                        /* Flag indicating command is currently executing */
 	time_t command_time;                   /* When a command was last triggered */
 	char *trigger;                         /* Path of the specific file that triggered a directory event */
 

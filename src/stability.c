@@ -581,7 +581,7 @@ bool stability_execute(monitor_t *monitor, check_t *check, entity_t *root, struc
 		}
 
 		/* Set the command executing flag BEFORE submitting to the thread pool to prevent race conditions */
-		state->executing = true;
+		state->node->executing = true;
 
 		/* Execute command */
 		log_message(INFO, "Executing deferred command for %s (watch: %s)", check->path, watch->name);
@@ -591,7 +591,7 @@ bool stability_execute(monitor_t *monitor, check_t *check, entity_t *root, struc
 		} else {
 			log_message(WARNING, "Command execution failed for %s (watch: %s)", check->path, watch->name);
 			/* Clear the flag if submission failed */
-			state->executing = false;
+			state->node->executing = false;
 		}
 	}
 
