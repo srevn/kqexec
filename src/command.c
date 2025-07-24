@@ -88,7 +88,7 @@ void intent_cleanup(void) {
 	/* Block SIGCHLD to prevent race condition with signal handler */
 	sigemptyset(&mask);
 	sigaddset(&mask, SIGCHLD);
-	sigprocmask(SIG_BLOCK, &mask, &oldmask);
+	pthread_sigmask(SIG_BLOCK, &mask, &oldmask);
 
 	for (int i = 0; i < MAX_INTENTS; i++) {
 		if (intents[i].active && intents[i].paths) {
@@ -103,7 +103,7 @@ void intent_cleanup(void) {
 	intent_count = 0;
 
 	/* Restore previous signal mask */
-	sigprocmask(SIG_SETMASK, &oldmask, NULL);
+	pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
 }
 
 /* Check if a path is affected by any active command */
@@ -187,7 +187,7 @@ void intent_expire(void) {
 	/* Block SIGCHLD to prevent race condition with signal handler */
 	sigemptyset(&mask);
 	sigaddset(&mask, SIGCHLD);
-	sigprocmask(SIG_BLOCK, &mask, &oldmask);
+	pthread_sigmask(SIG_BLOCK, &mask, &oldmask);
 
 	for (int i = 0; i < MAX_INTENTS; i++) {
 		if (!intents[i].active) continue;
@@ -216,7 +216,7 @@ void intent_expire(void) {
 	}
 
 	/* Restore previous signal mask */
-	sigprocmask(SIG_SETMASK, &oldmask, NULL);
+	pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
 }
 
 /* Analyze a command to determine what paths it will affect */
@@ -805,7 +805,7 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 	sigset_t mask, oldmask;
 	sigemptyset(&mask);
 	sigaddset(&mask, SIGCHLD);
-	sigprocmask(SIG_BLOCK, &mask, &oldmask);
+	pthread_sigmask(SIG_BLOCK, &mask, &oldmask);
 
 	/* Wait for child process to complete */
 	int status;
@@ -815,7 +815,7 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 	intent_complete(pid);
 
 	/* Restore previous signal mask */
-	sigprocmask(SIG_SETMASK, &oldmask, NULL);
+	pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
 
 	/* Record end time */
 	time(&end_time);
