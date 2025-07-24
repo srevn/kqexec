@@ -606,12 +606,24 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 		return threads_submit(command_threads, monitor, watch, event);
 	}
 
+	/* Find the canonical watch object to avoid using a temporary copy from a worker thread */
+	const watch_t *canonical_watch = watch;
+	if (monitor && monitor->config) {
+		for (int i = 0; i < monitor->config->num_watches; i++) {
+			if (monitor->config->watches[i] && monitor->config->watches[i]->name && watch && watch->name &&
+			    strcmp(monitor->config->watches[i]->name, watch->name) == 0) {
+				canonical_watch = monitor->config->watches[i];
+				break;
+			}
+		}
+	}
+
 	/* Synchronous execution with robust output capture */
 	pid_t pid;
 	char *command;
 	int stdout_pipe[2] = {-1, -1}, stderr_pipe[2] = {-1, -1};
-	bool capture_output = watch->log_output;
-	bool buffer_output = watch->buffer_output;
+	bool capture_output = canonical_watch->log_output;
+	bool buffer_output = canonical_watch->buffer_output;
 	time_t start, end_time;
 
 	/* Output buffering variables */
@@ -620,7 +632,7 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 	int output_capacity = 0;
 
 	/* Handle special config reload command */
-	if (strcmp(watch->command, "__config_reload__") == 0) {
+	if (strcmp(canonical_watch->command, "__config_reload__") == 0) {
 		/* This is handled by the monitor, not executed as a shell command */
 		return true;
 	}
@@ -629,7 +641,7 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 	time(&start);
 
 	/* Substitute placeholders in the command */
-	command = command_placeholders(monitor, watch, watch->command, event);
+	command = command_placeholders(monitor, canonical_watch, canonical_watch->command, event);
 	if (command == NULL) {
 		return false;
 	}
@@ -677,8 +689,8 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 		}
 
 		/* Set environment variables for the command if enabled */
-		if (watch->environment) {
-			command_environment(monitor, watch, event);
+		if (canonical_watch->environment) {
+			command_environment(monitor, canonical_watch, event);
 		}
 
 		/* Execute the command */
@@ -742,13 +754,13 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 									/* Add to buffer */
 									if (!buffer_append(&output_buffer, &output_count, &output_capacity, line_buffer)) {
 										log_message(WARNING, "[%s]: Failed to buffer output, switching to real-time",
-										            watch->name);
+										            canonical_watch->name);
 										buffer_output = false;
-										log_message(NOTICE, "[%s]: %s", watch->name, line_buffer);
+										log_message(NOTICE, "[%s]: %s", canonical_watch->name, line_buffer);
 									}
 								} else {
 									/* Real-time logging */
-									log_message(NOTICE, "[%s]: %s", watch->name, line_buffer);
+									log_message(NOTICE, "[%s]: %s", canonical_watch->name, line_buffer);
 								}
 							}
 							line_pos = 0;
@@ -767,7 +779,7 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 					stderr_open = false;
 				} else {
 					buffer[bytes_read] = '\0';
-					log_message(WARNING, "[%s]: %s", watch->name, buffer);
+					log_message(WARNING, "[%s]: %s", canonical_watch->name, buffer);
 				}
 			}
 		}
@@ -777,10 +789,10 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 			line_buffer[line_pos] = '\0';
 			if (buffer_output) {
 				if (!buffer_append(&output_buffer, &output_count, &output_capacity, line_buffer)) {
-					log_message(NOTICE, "[%s]: %s", watch->name, line_buffer);
+					log_message(NOTICE, "[%s]: %s", canonical_watch->name, line_buffer);
 				}
 			} else {
-				log_message(NOTICE, "[%s]: %s", watch->name, line_buffer);
+				log_message(NOTICE, "[%s]: %s", canonical_watch->name, line_buffer);
 			}
 		}
 
@@ -810,7 +822,7 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 
 	/* Flush buffered output if buffering was enabled */
 	if (capture_output && buffer_output && output_buffer) {
-		buffer_flush(watch, output_buffer, output_count);
+		buffer_flush(canonical_watch, output_buffer, output_count);
 
 		/* Clean up buffer */
 		for (int i = 0; i < output_count; i++) {
@@ -821,10 +833,10 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 
 	/* Log command completion */
 	log_message(INFO, "[%s] Finished execution (pid %d, duration: %lds, exit: %d)",
-	            watch->name, pid, end_time - start, WEXITSTATUS(status));
+	            canonical_watch->name, pid, end_time - start, WEXITSTATUS(status));
 
 	/* Mark the entity state with the command execution */
-	entity_t *state = state_get(monitor->states, event->path, ENTITY_UNKNOWN, (watch_t *) watch);
+	entity_t *state = state_get(monitor->states, event->path, ENTITY_UNKNOWN, (watch_t *) canonical_watch);
 	if (state) {
 		state->command_time = time(NULL);
 	}
