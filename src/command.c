@@ -22,6 +22,9 @@
 /* Module-scoped threads reference */
 static threads_t *command_threads = NULL;
 
+/* Mutex for thread-safe access to the intents array */
+static pthread_mutex_t intents_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 /* Maximum length of command */
 #define MAX_CMD_LEN 4096
 
@@ -33,27 +36,6 @@ static intent_t intents[MAX_INTENTS];
 /* Debounce time in milliseconds */
 static int debounce_ms = DEFAULT_DEBOUNCE_TIME_MS;
 
-/* SIGCHLD handler to reap child processes and mark command intents as complete */
-static void command_sigchld(int sig) {
-	(void) sig;
-	pid_t pid;
-	int status;
-	sigset_t mask, oldmask;
-
-	/* Block SIGCHLD during handler execution to prevent reentrancy */
-	sigemptyset(&mask);
-	sigaddset(&mask, SIGCHLD);
-	pthread_sigmask(SIG_BLOCK, &mask, &oldmask);
-
-	while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
-		/* Mark the command intent as complete */
-		intent_complete(pid);
-	}
-
-	/* Restore original signal mask */
-	pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
-}
-
 /* Initialize command subsystem */
 bool command_init(threads_t *threads) {
 	if (!threads) {
@@ -64,13 +46,12 @@ bool command_init(threads_t *threads) {
 	/* Store threads reference */
 	command_threads = threads;
 
-	/* Set up SIGCHLD handler */
+	/* Ignore SIGCHLD to prevent zombie processes. Child processes are waited for explicitly. */
 	struct sigaction sa;
 	memset(&sa, 0, sizeof(sa));
-	sa.sa_handler = command_sigchld;
-	sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
+	sa.sa_handler = SIG_IGN;
 	if (sigaction(SIGCHLD, &sa, NULL) == -1) {
-		log_message(ERROR, "Failed to set up SIGCHLD handler: %s", strerror(errno));
+		log_message(ERROR, "Failed to set SIGCHLD to SIG_IGN: %s", strerror(errno));
 		return false;
 	}
 
@@ -83,12 +64,7 @@ bool command_init(threads_t *threads) {
 
 /* Clean up command intent tracking */
 void intent_cleanup(void) {
-	sigset_t mask, oldmask;
-
-	/* Block SIGCHLD to prevent race condition with signal handler */
-	sigemptyset(&mask);
-	sigaddset(&mask, SIGCHLD);
-	pthread_sigmask(SIG_BLOCK, &mask, &oldmask);
+	pthread_mutex_lock(&intents_mutex);
 
 	for (int i = 0; i < MAX_INTENTS; i++) {
 		if (intents[i].active && intents[i].paths) {
@@ -102,20 +78,15 @@ void intent_cleanup(void) {
 	memset(intents, 0, sizeof(intents));
 	intent_count = 0;
 
-	/* Restore previous signal mask */
-	pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
+	pthread_mutex_unlock(&intents_mutex);
 }
 
 /* Check if a path is affected by any active command */
 bool command_affects(const char *path) {
 	time_t current_time;
 	time(&current_time);
-	sigset_t mask, oldmask;
 
-	/* Block SIGCHLD while accessing intents array */
-	sigemptyset(&mask);
-	sigaddset(&mask, SIGCHLD);
-	pthread_sigmask(SIG_BLOCK, &mask, &oldmask);
+	pthread_mutex_lock(&intents_mutex);
 
 	/* Iterate through all active command intents */
 	for (int i = 0; i < MAX_INTENTS; i++) {
@@ -146,8 +117,7 @@ bool command_affects(const char *path) {
 			/* Check for exact match */
 			if (strcmp(path, affected_path) == 0) {
 				log_message(DEBUG, "Path %s is directly affected by command %d", path, i);
-				/* Restore signal mask before returning */
-				pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
+				pthread_mutex_unlock(&intents_mutex);
 				return true;
 			}
 
@@ -156,8 +126,7 @@ bool command_affects(const char *path) {
 			if (strncmp(path, affected_path, affected_len) == 0 &&
 			    (path[affected_len] == '/' || path[affected_len] == '\0')) {
 				log_message(DEBUG, "Path %s is within affected path %s (command %d)", path, affected_path, i);
-				/* Restore signal mask before returning */
-				pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
+				pthread_mutex_unlock(&intents_mutex);
 				return true;
 			}
 
@@ -166,28 +135,22 @@ bool command_affects(const char *path) {
 			if (strncmp(affected_path, path, path_len) == 0 &&
 			    (affected_path[path_len] == '/' || affected_path[path_len] == '\0')) {
 				log_message(DEBUG, "Path %s contains affected path %s (command %d)", path, affected_path, i);
-				/* Restore signal mask before returning */
-				pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
+				pthread_mutex_unlock(&intents_mutex);
 				return true;
 			}
 		}
 	}
 
-	/* Restore signal mask before returning */
-	pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
+	pthread_mutex_unlock(&intents_mutex);
 	return false;
 }
 
 /* Clean up expired command intents - call this periodically and safely */
 void intent_expire(void) {
-	sigset_t mask, oldmask;
 	time_t current_time;
 	time(&current_time);
 
-	/* Block SIGCHLD to prevent race condition with signal handler */
-	sigemptyset(&mask);
-	sigaddset(&mask, SIGCHLD);
-	pthread_sigmask(SIG_BLOCK, &mask, &oldmask);
+	pthread_mutex_lock(&intents_mutex);
 
 	for (int i = 0; i < MAX_INTENTS; i++) {
 		if (!intents[i].active) continue;
@@ -215,18 +178,12 @@ void intent_expire(void) {
 		}
 	}
 
-	/* Restore previous signal mask */
-	pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
+	pthread_mutex_unlock(&intents_mutex);
 }
 
 /* Analyze a command to determine what paths it will affect */
 intent_t *intent_create(pid_t pid, const char *command, const char *base_path) {
-	sigset_t mask, oldmask;
-
-	/* Block SIGCHLD while accessing intents array */
-	sigemptyset(&mask);
-	sigaddset(&mask, SIGCHLD);
-	pthread_sigmask(SIG_BLOCK, &mask, &oldmask);
+	pthread_mutex_lock(&intents_mutex);
 
 	/* Find a free slot in the intents array */
 	int slot = -1;
@@ -239,8 +196,7 @@ intent_t *intent_create(pid_t pid, const char *command, const char *base_path) {
 
 	if (slot == -1) {
 		log_message(WARNING, "No free slots for command intent tracking");
-		/* Restore signal mask before returning */
-		pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
+		pthread_mutex_unlock(&intents_mutex);
 		return NULL;
 	}
 
@@ -257,6 +213,7 @@ intent_t *intent_create(pid_t pid, const char *command, const char *base_path) {
 	intent->paths = calloc(MAX_AFFECTED_PATHS, sizeof(char *));
 	if (!intent->paths) {
 		log_message(ERROR, "Failed to allocate memory for affected paths");
+		pthread_mutex_unlock(&intents_mutex);
 		return NULL;
 	}
 
@@ -283,7 +240,7 @@ intent_t *intent_create(pid_t pid, const char *command, const char *base_path) {
 				target += strlen(move_targets[i]);
 
 				/* Find the end of the target path */
-				const char *end = strpbrk(target, " \t\n;|&");
+				const char *end = strpbrk(target, " \t\n;|&\n");
 				if (end) {
 					/* Extract the target path */
 					int len = end - target;
@@ -332,19 +289,13 @@ intent_t *intent_create(pid_t pid, const char *command, const char *base_path) {
 
 	log_message(DEBUG, "Created command intent for PID %d with %d affected paths", pid, intent->num_paths);
 
-	/* Restore signal mask before returning */
-	pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
+	pthread_mutex_unlock(&intents_mutex);
 	return intent;
 }
 
 /* Mark a command intent as complete */
 bool intent_complete(pid_t pid) {
-	sigset_t mask, oldmask;
-
-	/* Block SIGCHLD while accessing intents array */
-	sigemptyset(&mask);
-	sigaddset(&mask, SIGCHLD);
-	pthread_sigmask(SIG_BLOCK, &mask, &oldmask);
+	pthread_mutex_lock(&intents_mutex);
 
 	for (int i = 0; i < MAX_INTENTS; i++) {
 		if (intents[i].active && intents[i].pid == pid) {
@@ -366,14 +317,12 @@ bool intent_complete(pid_t pid) {
 			}
 			intents[i].num_paths = 0;
 
-			/* Restore signal mask before returning */
-			pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
+			pthread_mutex_unlock(&intents_mutex);
 			return true;
 		}
 	}
 
-	/* Restore signal mask before returning */
-	pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
+	pthread_mutex_unlock(&intents_mutex);
 	return false;
 }
 
@@ -754,7 +703,7 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 									/* Add to buffer */
 									if (!buffer_append(&output_buffer, &output_count, &output_capacity, line_buffer)) {
 										log_message(WARNING, "[%s]: Failed to buffer output, switching to real-time",
-										            canonical_watch->name);
+									            canonical_watch->name);
 										buffer_output = false;
 										log_message(NOTICE, "[%s]: %s", canonical_watch->name, line_buffer);
 									}
@@ -801,21 +750,12 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 		close(stderr_pipe[0]);
 	}
 
-	/* Block SIGCHLD to prevent race condition with signal handler */
-	sigset_t mask, oldmask;
-	sigemptyset(&mask);
-	sigaddset(&mask, SIGCHLD);
-	pthread_sigmask(SIG_BLOCK, &mask, &oldmask);
-
 	/* Wait for child process to complete */
 	int status;
 	waitpid(pid, &status, 0);
 
 	/* Mark the command intent as complete immediately */
 	intent_complete(pid);
-
-	/* Restore previous signal mask */
-	pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
 
 	/* Record end time */
 	time(&end_time);
