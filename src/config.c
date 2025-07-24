@@ -46,22 +46,22 @@ static char *canonize_path(const char *path, int line_number) {
 
 	char resolved_path[PATH_MAX];
 	char *result;
-	
+
 	if (realpath(path, resolved_path) != NULL) {
 		/* Success - path exists and was canonicalized */
 		log_message(DEBUG, "Canonized path '%s' -> '%s' at line %d", path, resolved_path, line_number);
 		result = strdup(resolved_path);
 	} else {
 		/* realpath() failed - log warning and use original path */
-		log_message(WARNING, "Failed to canonicalize path '%s' at line %d: %s (using original path)", 
-		        			  path, line_number, strerror(errno));
+		log_message(WARNING, "Failed to canonicalize path '%s' at line %d: %s (using original path)",
+		            path, line_number, strerror(errno));
 		result = strdup(path);
 	}
-	
+
 	if (result == NULL) {
 		log_message(ERROR, "Memory allocation failed for path at line %d", line_number);
 	}
-	
+
 	return result;
 }
 
@@ -137,7 +137,7 @@ static bool config_add_watch(config_t *config, watch_t *watch) {
 	/* Check for duplicate watch names */
 	for (int i = 0; i < config->num_watches; i++) {
 		if (config->watches[i] && config->watches[i]->name && watch->name &&
-			strcmp(config->watches[i]->name, watch->name) == 0) {
+		    strcmp(config->watches[i]->name, watch->name) == 0) {
 			log_message(ERROR, "Duplicate watch name '%s' found in configuration", watch->name);
 			return false;
 		}
@@ -395,7 +395,7 @@ bool config_parse(config_t *config, const char *filename) {
 			} else if (strcasecmp(key, "events") == 0) {
 				if (!config_events(value, &current_watch->filter)) {
 					log_message(ERROR, "Invalid value for %s at line %d: %s", key,
-										line_number, value);
+					            line_number, value);
 					config_destroy_watch(current_watch);
 					fclose(fp);
 					return false;
@@ -409,7 +409,7 @@ bool config_parse(config_t *config, const char *filename) {
 					current_watch->log_output = false;
 				} else {
 					log_message(ERROR, "Invalid value for %s at line %d: %s", key,
-										line_number, value);
+					            line_number, value);
 					config_destroy_watch(current_watch);
 					fclose(fp);
 					return false;
@@ -421,7 +421,7 @@ bool config_parse(config_t *config, const char *filename) {
 					current_watch->buffer_output = false;
 				} else {
 					log_message(ERROR, "Invalid value for %s at line %d: %s", key,
-										line_number, value);
+					            line_number, value);
 					config_destroy_watch(current_watch);
 					fclose(fp);
 					return false;
@@ -433,7 +433,7 @@ bool config_parse(config_t *config, const char *filename) {
 					current_watch->recursive = false;
 				} else {
 					log_message(ERROR, "Invalid value for %s at line %d: %s", key,
-										line_number, value);
+					            line_number, value);
 					config_destroy_watch(current_watch);
 					fclose(fp);
 					return false;
@@ -445,7 +445,7 @@ bool config_parse(config_t *config, const char *filename) {
 					current_watch->hidden = false;
 				} else {
 					log_message(ERROR, "Invalid value for %s at line %d: %s", key,
-										line_number, value);
+					            line_number, value);
 					config_destroy_watch(current_watch);
 					fclose(fp);
 					return false;
@@ -457,7 +457,7 @@ bool config_parse(config_t *config, const char *filename) {
 					current_watch->environment = false;
 				} else {
 					log_message(ERROR, "Invalid value for %s at line %d: %s", key,
-					            		line_number, value);
+					            line_number, value);
 					config_destroy_watch(current_watch);
 					fclose(fp);
 					return false;
@@ -466,7 +466,7 @@ bool config_parse(config_t *config, const char *filename) {
 				double complexity_value = atof(value);
 				if (complexity_value <= 0) {
 					log_message(ERROR, "Invalid %s value at line %d: %s (must be > 0)", key,
-					            		line_number, value);
+					            line_number, value);
 					config_destroy_watch(current_watch);
 					fclose(fp);
 					return false;
@@ -477,7 +477,7 @@ bool config_parse(config_t *config, const char *filename) {
 				int processing_delay_value = atoi(value);
 				if (processing_delay_value < 0) {
 					log_message(ERROR, "Invalid %s value at line %d: %s (must be >= 0)", key,
-					            		line_number, value);
+					            line_number, value);
 					config_destroy_watch(current_watch);
 					fclose(fp);
 					return false;

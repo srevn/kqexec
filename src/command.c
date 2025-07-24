@@ -539,7 +539,7 @@ char *command_placeholders(monitor_t *monitor, const watch_t *watch, const char 
 
 		snprintf(size_str, sizeof(size_str), "%zu", size);
 		command_substitute(result, "%s", size_str);
-		command_substitute(result, "%S", format_size((ssize_t)size, false));
+		command_substitute(result, "%S", format_size((ssize_t) size, false));
 	}
 
 	/* Substitute %t with the time */
@@ -742,7 +742,7 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 									/* Add to buffer */
 									if (!buffer_append(&output_buffer, &output_count, &output_capacity, line_buffer)) {
 										log_message(WARNING, "[%s]: Failed to buffer output, switching to real-time",
-															  watch->name);
+										            watch->name);
 										buffer_output = false;
 										log_message(NOTICE, "[%s]: %s", watch->name, line_buffer);
 									}
@@ -821,7 +821,7 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 
 	/* Log command completion */
 	log_message(INFO, "[%s] Finished execution (pid %d, duration: %lds, exit: %d)",
-	        		   watch->name, pid, end_time - start, WEXITSTATUS(status));
+	            watch->name, pid, end_time - start, WEXITSTATUS(status));
 
 	/* Mark the entity state with the command execution */
 	entity_t *state = state_get(monitor->states, event->path, ENTITY_UNKNOWN, (watch_t *) watch);

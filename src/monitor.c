@@ -29,7 +29,7 @@ static void watcher_destroy(monitor_t *monitor, watcher_t *watcher) {
 	/* Close the file descriptor if this is the last watcher using it */
 	if (watcher->wd >= 0) {
 		bool should_close = !watcher->shared_fd;
-		
+
 		if (watcher->shared_fd && monitor) {
 			/* Count other watchers using this FD */
 			int fd_users = 0;
@@ -41,7 +41,7 @@ static void watcher_destroy(monitor_t *monitor, watcher_t *watcher) {
 			}
 			should_close = (fd_users == 0);
 		}
-		
+
 		if (should_close) {
 			close(watcher->wd);
 		}
@@ -587,7 +587,7 @@ bool monitor_poll(monitor_t *monitor) {
 	/* Calculate timeout based on pending deferred scans and delayed events */
 	struct timespec now_monotonic;
 	clock_gettime(CLOCK_MONOTONIC, &now_monotonic);
-	
+
 	p_timeout = timeout_calculate(monitor, &timeout, &now_monotonic);
 
 	/* Wait for events */
@@ -610,14 +610,14 @@ bool monitor_poll(monitor_t *monitor) {
 	/* Process new events */
 	if (nev > 0) {
 		log_message(DEBUG, "Processing %d new kqueue events", nev);
-		
+
 		/* Initialize sync request for collecting paths that need validation */
 		sync_t sync;
 		events_sync_init(&sync);
-		
+
 		/* Process events and collect sync requests */
 		events_handle(monitor, events, nev, &after_kevent_time, &sync);
-		
+
 		/* Handle any sync requests */
 		if (sync.paths_count > 0) {
 			for (int i = 0; i < sync.paths_count; i++) {
@@ -625,14 +625,14 @@ bool monitor_poll(monitor_t *monitor) {
 				monitor_sync(monitor, sync.paths[i]);
 			}
 		}
-		
+
 		/* Clean up sync request */
 		events_sync_cleanup(&sync);
 	} else {
 		/* nev == 0 means timeout occurred */
 		if (p_timeout) {
 			log_message(DEBUG, "Timeout occurred after %ld.%09ld seconds, checking deferred scans",
-			            		p_timeout->tv_sec, p_timeout->tv_nsec);
+			            p_timeout->tv_sec, p_timeout->tv_nsec);
 		} else {
 			log_message(DEBUG, "Timeout occurred, checking deferred scans");
 		}
@@ -845,7 +845,6 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 				monitor->num_watches--;
 				i--; /* Adjust index after removal */
 				list_modified = true;
-
 			} else if (watcher->inode != info.st_ino || watcher->device != info.st_dev) {
 				/* Path exists but inode/device changed - it was recreated */
 				log_message(DEBUG, "Path recreated: %s. Refreshing watch.", path);
@@ -885,7 +884,6 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 					monitor_tree(monitor, path, watcher->watch);
 				}
 				list_modified = true;
-
 			} else {
 				/* Path is valid and unchanged */
 				watcher->validated = time(NULL);

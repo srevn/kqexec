@@ -23,11 +23,11 @@
 static unsigned int state_hash(const char *path, size_t bucket_count) {
 	unsigned int hash = 5381; /* djb2 hash initial value */
 	if (!path) return 0;
-	
+
 	for (const char *p = path; *p; p++) {
-		hash = ((hash << 5) + hash) + (unsigned char)*p;
+		hash = ((hash << 5) + hash) + (unsigned char) *p;
 	}
-	
+
 	return hash % bucket_count;
 }
 
@@ -119,15 +119,15 @@ void state_destroy(state_t *table) {
 /* Check if entity state is corrupted by verifying magic number */
 bool state_corrupted(const entity_t *state) {
 	if (!state) return true;
-	
-	if ((uintptr_t)state < 0x1000 || ((uintptr_t)state & 0x7) != 0) {
+
+	if ((uintptr_t) state < 0x1000 || ((uintptr_t) state & 0x7) != 0) {
 		log_message(WARNING, "Entity state appears to be invalid pointer: %p", state);
 		return true;
 	}
-	
+
 	if (state->magic != ENTITY_STATE_MAGIC) {
 		log_message(WARNING, "Entity state corruption detected: magic=0x%x, expected=0x%x",
-							  state->magic, ENTITY_STATE_MAGIC);
+		            state->magic, ENTITY_STATE_MAGIC);
 		return true;
 	}
 	return false;
@@ -141,7 +141,7 @@ static void state_track(entity_t *state, watch_t *watch) {
 
 	/* Activity tracking is created on demand */
 	state->scanner = NULL;
-	
+
 	/* Stability tracking is created on demand */
 	state->stability = NULL;
 }
@@ -166,7 +166,7 @@ static void state_copy(entity_t *dest, const entity_t *src) {
 			dest->scanner = scanner_create(NULL);
 			if (!dest->scanner) return;
 		}
-		
+
 		/* Preserve the pointer to the old path */
 		char *saved_path = dest->scanner->active_path;
 
@@ -193,10 +193,10 @@ entity_t *state_get(state_t *table, const char *path, kind_t kind, watch_t *watc
 	}
 
 	unsigned int hash = state_hash(path, table->bucket_count);
-	
+
 	/* Lock the mutex*/
 	pthread_mutex_lock(&table->mutex);
-	
+
 	node_t *node = table->buckets[hash];
 
 	/* Find existing node */
@@ -257,7 +257,7 @@ entity_t *state_get(state_t *table, const char *path, kind_t kind, watch_t *watc
 
 	/* Initialize magic number for corruption detection */
 	state->magic = ENTITY_STATE_MAGIC;
-	
+
 	state->node = node;
 	state->kind = kind;
 	state->watch = watch;
@@ -285,7 +285,7 @@ entity_t *state_get(state_t *table, const char *path, kind_t kind, watch_t *watc
 	/* If an existing state for this path was found, copy its stats */
 	if (existing_state) {
 		log_message(DEBUG, "Copying stats from existing state for path %s (watch: %s)",
-		        			path, existing_state->watch->name);
+		            path, existing_state->watch->name);
 		state_copy(state, existing_state);
 	} else {
 		/* This is the first state for this path, initialize stats from scratch */
@@ -305,8 +305,8 @@ entity_t *state_get(state_t *table, const char *path, kind_t kind, watch_t *watc
 			if (scanner_scan(path, &state->stability->stats)) {
 				state->stability->prev_stats = state->stability->stats;
 				log_message(DEBUG, "Initial baseline established for %s: files=%d, dirs=%d, depth=%d, size=%s",
-				          			path, state->stability->stats.tree_files, state->stability->stats.tree_dirs,
-				           			state->stability->stats.max_depth, format_size((ssize_t)state->stability->stats.tree_size, false));
+				            path, state->stability->stats.tree_files, state->stability->stats.tree_dirs,
+				            state->stability->stats.max_depth, format_size((ssize_t) state->stability->stats.tree_size, false));
 
 				state->stability->ref_stats = state->stability->stats;
 				state->stability->reference_init = true;
@@ -321,7 +321,7 @@ entity_t *state_get(state_t *table, const char *path, kind_t kind, watch_t *watc
 	node->entities = state;
 
 	log_message(DEBUG, "Created new state for path=%s, watch=%s", path, watch->name);
-	
+
 	/* Unlock mutex */
 	pthread_mutex_unlock(&table->mutex);
 	return state;

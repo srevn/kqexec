@@ -58,7 +58,6 @@ void queue_destroy(queue_t *queue) {
 	log_message(DEBUG, "Cleaned up deferred check queue");
 }
 
-
 /* Add a watch to a queue entry */
 bool queue_add(check_t *check, watch_t *watch) {
 	if (!check || !watch) {
@@ -234,7 +233,7 @@ void queue_upsert(queue_t *queue, const char *path,
 		heap_down(queue->items, queue->size, queue_index);
 
 		log_message(DEBUG, "Updated check time for %s (new time: %ld.%09ld)",
-		        			path, (long) next_check.tv_sec, next_check.tv_nsec);
+		            path, (long) next_check.tv_sec, next_check.tv_nsec);
 		return;
 	}
 
@@ -293,7 +292,7 @@ void queue_upsert(queue_t *queue, const char *path,
 	heap_up(queue->items, new_index);
 
 	log_message(DEBUG, "Added new deferred check for %s (next check at %ld.%09ld)",
-	        			path, (long) next_check.tv_sec, next_check.tv_nsec);
+	            path, (long) next_check.tv_sec, next_check.tv_nsec);
 }
 
 /* Remove an entry from the queue */

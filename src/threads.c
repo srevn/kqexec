@@ -110,7 +110,7 @@ static void *threads_worker(void *arg) {
 }
 
 /* Create thread pool */
-threads_t* threads_create(void) {
+threads_t *threads_create(void) {
 	threads_t *threads = calloc(1, sizeof(threads_t));
 	if (!threads) {
 		log_message(ERROR, "Failed to allocate memory for thread pool");
@@ -248,7 +248,7 @@ bool threads_submit(threads_t *threads, monitor_t *monitor, const watch_t *watch
 	pthread_mutex_unlock(&threads->queue_mutex);
 
 	log_message(DEBUG, "Submitted command execution for %s to thread pool (queue size: %d)",
-	    				event->path, threads->queue_size);
+	            event->path, threads->queue_size);
 
 	return true;
 }
