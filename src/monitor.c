@@ -168,6 +168,7 @@ void monitor_destroy(monitor_t *monitor) {
 	/* Free watches */
 	for (int i = 0; i < monitor->num_watches; i++) {
 		watcher_destroy(monitor, monitor->watches[i]);
+		monitor->watches[i] = NULL; /* Prevent use-after-free in subsequent calls */
 	}
 
 	free(monitor->watches);
