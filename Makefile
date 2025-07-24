@@ -4,7 +4,19 @@ UNAME_S := $(shell uname -s)
 # Compiler and flags
 CC = cc
 CFLAGS = -Wall -Wextra -std=c11 -pedantic -g
-LDFLAGS = -lm -lpthread
+LDFLAGS = -lm -lpthread -fsanitize=address
+
+# Debug/AddressSanitizer build
+ifdef ASAN
+    CC = clang
+    CFLAGS += -fsanitize=address -O1
+    LDFLAGS += -fsanitize=address
+endif
+
+ifdef DEBUG_EXTRA
+    CFLAGS += -fsanitize=undefined -fno-omit-frame-pointer
+    LDFLAGS += -fsanitize=undefined
+endif
 
 # OS-specific settings
 ifeq ($(UNAME_S),FreeBSD)
@@ -170,5 +182,12 @@ endif
 # Generate sample configuration
 config: kqexec.conf.sample
 
+# Debug targets
+debug: clean
+	$(MAKE) ASAN=1
+
+debug-extra: clean
+	$(MAKE) ASAN=1 DEBUG_EXTRA=1
+
 # Phony targets
-.PHONY: all clean install uninstall config
+.PHONY: all clean install uninstall config debug debug-extra
