@@ -838,7 +838,9 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 	/* Mark the entity state with the command execution */
 	entity_t *state = state_get(monitor->states, event->path, ENTITY_UNKNOWN, (watch_t *) canonical_watch);
 	if (state) {
-		state->command_time = time(NULL);
+		struct timespec current_time;
+		clock_gettime(CLOCK_MONOTONIC, &current_time);
+		state->command_time = current_time.tv_sec;
 	}
 
 	free(command);
