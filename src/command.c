@@ -219,6 +219,13 @@ intent_t *intent_create(pid_t pid, const char *command, const char *base_path) {
 
 	/* Add the base path as the first affected path */
 	intent->paths[0] = strdup(base_path);
+	if (!intent->paths[0]) {
+		log_message(ERROR, "Failed to duplicate base path for intent");
+		free(intent->paths);
+		intent->paths = NULL;
+		pthread_mutex_unlock(&intents_mutex);
+		return NULL;
+	}
 	intent->num_paths = 1;
 
 	/* Simple command analysis - parse the command for common operations */
@@ -258,7 +265,7 @@ intent_t *intent_create(pid_t pid, const char *command, const char *base_path) {
 						/* Add the target path if it's not already in the list */
 						bool already_added = false;
 						for (int j = 0; j < intent->num_paths; j++) {
-							if (strcmp(intent->paths[j], path) == 0) {
+							if (intent->paths[j] && strcmp(intent->paths[j], path) == 0) {
 								already_added = true;
 								break;
 							}
@@ -266,8 +273,12 @@ intent_t *intent_create(pid_t pid, const char *command, const char *base_path) {
 
 						if (!already_added && intent->num_paths < MAX_AFFECTED_PATHS) {
 							intent->paths[intent->num_paths] = strdup(path);
-							intent->num_paths++;
-							log_message(DEBUG, "Added target path %s to affected paths", path);
+							if (intent->paths[intent->num_paths]) {
+								intent->num_paths++;
+								log_message(DEBUG, "Added target path %s to affected paths", path);
+							} else {
+								log_message(ERROR, "Failed to duplicate target path for intent: %s", path);
+							}
 						}
 					}
 				}
@@ -400,15 +411,19 @@ char *command_placeholders(monitor_t *monitor, const watch_t *watch, const char 
 	/* Substitute %n with the filename/dirname */
 	if (strstr(result, "%n")) {
 		char *path_copy = strdup(event->path);
-		command_substitute(result, "%n", basename(path_copy));
-		free(path_copy);
+		if (path_copy) {
+			command_substitute(result, "%n", basename(path_copy));
+			free(path_copy);
+		}
 	}
 
 	/* Substitute %d with the directory */
 	if (strstr(result, "%d")) {
 		char *path_copy = strdup(event->path);
-		command_substitute(result, "%d", dirname(path_copy));
-		free(path_copy);
+		if (path_copy) {
+			command_substitute(result, "%d", dirname(path_copy));
+			free(path_copy);
+		}
 	}
 
 	/* Substitute %b with the base watch path */
