@@ -479,21 +479,46 @@ void stability_reset(monitor_t *monitor, entity_t *root) {
 		return;
 	}
 
-	/* Reset activity flag, stability counter, and all change tracking on the root state */
-	root->scanner->active = false;
-	root->stability->checks_count = 0;
-	root->stability->checks_required = 0;
-	root->stability->ref_stats = root->stability->stats;
-	root->stability->reference_init = true;
+	/* Only process directories with stability tracking */
+	if (root->kind != ENTITY_DIRECTORY || !root->stability) {
+		log_message(DEBUG, "Skipping baseline reset for non-directory or non-tracked entity: %s", root->node->path);
+		return;
+	}
+
+	/* Scan current directory state to establish new baseline */
+	stats_t new_baseline;
+	memset(&new_baseline, 0, sizeof(new_baseline));
+	if (!scanner_scan(root->node->path, &new_baseline)) {
+		log_message(WARNING, "Failed to scan directory %s for baseline reset", root->node->path);
+		return;
+	}
+
+	log_message(INFO, "Resetting baseline for %s after command: %d files, %d dirs, depth %d",
+	            root->node->path, new_baseline.tree_files, new_baseline.tree_dirs, new_baseline.max_depth);
+
+	/* Reset stability state to reflect new baseline as authoritative */
+	root->stability->stats = new_baseline;
+	root->stability->prev_stats = new_baseline;
+	root->stability->ref_stats = new_baseline;
+
+	/* Clear all tracking deltas */
 	root->stability->delta_files = 0;
 	root->stability->delta_dirs = 0;
 	root->stability->delta_depth = 0;
 	root->stability->delta_size = 0;
+
+	/* Reset stability verification tracking */
+	root->stability->checks_count = 0;
+	root->stability->checks_failed = 0;
+	root->stability->checks_required = 1;
 	root->stability->unstable_count = 0;
 	root->stability->stability_lost = false;
+	root->stability->reference_init = true;
 
-	/* Update prev_stats to current stats for next cycle's comparison */
-	root->stability->prev_stats = root->stability->stats;
+	/* Clear activity tracking flag to mark the directory as idle */
+	if (root->scanner) {
+		root->scanner->active = false;
+	}
 
 	/* Propagate the reset state to all related states for this path */
 	scanner_sync(monitor, root->node, root);
@@ -555,6 +580,9 @@ bool stability_execute(monitor_t *monitor, check_t *check, entity_t *root, struc
 			continue;
 		}
 
+		/* Set the command executing flag BEFORE submitting to the thread pool to prevent race conditions */
+		state->executing = true;
+
 		/* Execute command */
 		log_message(INFO, "Executing deferred command for %s (watch: %s)", check->path, watch->name);
 		if (command_execute(monitor, watch, &synthetic_event, true)) {
@@ -562,6 +590,8 @@ bool stability_execute(monitor_t *monitor, check_t *check, entity_t *root, struc
 			state->command_time = current_time->tv_sec;
 		} else {
 			log_message(WARNING, "Command execution failed for %s (watch: %s)", check->path, watch->name);
+			/* Clear the flag if submission failed */
+			state->executing = false;
 		}
 	}
 
@@ -772,9 +802,6 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 		commands_attempted_total++;
 		log_message(INFO, "Directory %s stability confirmed (%d/%d checks), proceeding to command execution",
 		            root->node->path, root->stability->checks_count, checks_required);
-
-		/* Reset stability tracking */
-		stability_reset(monitor, root);
 
 		/* Execute commands */
 		int executed_now = 0;

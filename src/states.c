@@ -278,6 +278,7 @@ entity_t *state_get(state_t *table, const char *path, kind_t kind, watch_t *watc
 	state->trigger = NULL;
 
 	state_track(state, watch);
+	state->executing = false;
 	state->command_time = 0;
 	state->op_time.tv_sec = 0;
 	state->op_time.tv_nsec = 0;

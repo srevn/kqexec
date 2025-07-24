@@ -95,9 +95,6 @@ void events_schedule(monitor_t *monitor, watch_t *watch, event_t *event, kind_t 
 	for (int i = 0; i < monitor->delayed_count; i++) {
 		delayed_t *existing = &monitor->delayed_events[i];
 		if (existing->watch == watch) {
-			/* Consolidate all events for the same watch. */
-
-			/* Path is not updated, to preserve the original trigger path. */
 
 			/* Merge event types to preserve all event information */
 			existing->event.type |= event->type;
@@ -160,6 +157,7 @@ void events_delayed(monitor_t *monitor) {
 		/* Check if this event is ready to process */
 		if (current_time.tv_sec > delayed->process_time.tv_sec ||
 		    (current_time.tv_sec == delayed->process_time.tv_sec && current_time.tv_nsec >= delayed->process_time.tv_nsec)) {
+
 			/* Special handling for config file reload to bypass stability checks */
 			if (strcmp(delayed->watch->name, "__config_file__") == 0) {
 				log_message(NOTICE, "Configuration changed: %s", delayed->event.path);
@@ -259,8 +257,7 @@ int events_timeout(monitor_t *monitor, struct timespec *current_time) {
 		}
 
 		/* This event can be processed - consider it for timeout */
-		if (!found_processable ||
-		    delayed->process_time.tv_sec < earliest.tv_sec ||
+		if (!found_processable || delayed->process_time.tv_sec < earliest.tv_sec ||
 		    (delayed->process_time.tv_sec == earliest.tv_sec && delayed->process_time.tv_nsec < earliest.tv_nsec)) {
 			earliest = delayed->process_time;
 			found_processable = true;
@@ -562,16 +559,18 @@ bool events_process(monitor_t *monitor, watch_t *watch, event_t *event, kind_t k
 		return true;
 	}
 
-	/* Check if this event was caused by one of our commands */
-	if (command_affects(event->path)) {
-		log_message(DEBUG, "Ignoring event for %s, it was caused by our command execution", event->path);
-		return false;
-	}
-
 	/* Get state using the event path and watch config */
 	entity_t *state = state_get(monitor->states, event->path, kind, watch);
 	if (state == NULL) {
 		return false; /* Error already logged by states_get */
+	}
+
+	/* Check if command is executing for this path - defer events during execution */
+	if (state->executing) {
+		log_message(DEBUG, "Deferring event for %s, command is currently executing", event->path);
+		/* Schedule event for reprocessing after a short delay */
+		events_schedule(monitor, watch, event, kind);
+		return false;
 	}
 
 	/* Update timestamps before determining operation */

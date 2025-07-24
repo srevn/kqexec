@@ -645,9 +645,6 @@ bool monitor_poll(monitor_t *monitor) {
 	/* Process delayed events */
 	events_delayed(monitor);
 
-	/* Clean up expired command intents */
-	intent_expire();
-
 	return true; /* Continue monitoring */
 }
 

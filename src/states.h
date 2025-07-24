@@ -43,6 +43,7 @@ typedef struct entity {
 	bool structure_changed;                /* Structural change occurred */
 
 	/* Command & Trigger tracking */
+	bool executing;                        /* Flag indicating command is currently executing */
 	time_t command_time;                   /* When a command was last triggered */
 	char *trigger;                         /* Path of the specific file that triggered a directory event */
 

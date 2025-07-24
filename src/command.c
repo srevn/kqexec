@@ -18,20 +18,13 @@
 #include "stability.h"
 #include "logger.h"
 #include "scanner.h"
+#include "events.h"
 
 /* Module-scoped threads reference */
 static threads_t *command_threads = NULL;
 
-/* Mutex for thread-safe access to the intents array */
-static pthread_mutex_t intents_mutex = PTHREAD_MUTEX_INITIALIZER;
-
 /* Maximum length of command */
 #define MAX_CMD_LEN 4096
-
-/* Global array of active command intents */
-#define MAX_INTENTS 10
-static int intent_count = 0;
-static intent_t intents[MAX_INTENTS];
 
 /* Debounce time in milliseconds */
 static int debounce_ms = DEFAULT_DEBOUNCE_TIME_MS;
@@ -55,286 +48,7 @@ bool command_init(threads_t *threads) {
 		return false;
 	}
 
-	/* Initialize command intent tracking */
-	memset(intents, 0, sizeof(intents));
-	intent_count = 0;
-
 	return true;
-}
-
-/* Clean up command intent tracking */
-void intent_cleanup(void) {
-	pthread_mutex_lock(&intents_mutex);
-
-	for (int i = 0; i < MAX_INTENTS; i++) {
-		if (intents[i].active && intents[i].paths) {
-			for (int j = 0; j < intents[i].num_paths; j++) {
-				free(intents[i].paths[j]);
-			}
-			free(intents[i].paths);
-			intents[i].paths = NULL;
-		}
-	}
-	memset(intents, 0, sizeof(intents));
-	intent_count = 0;
-
-	pthread_mutex_unlock(&intents_mutex);
-}
-
-/* Check if a path is affected by any active command */
-bool command_affects(const char *path) {
-	time_t current_time;
-	time(&current_time);
-
-	pthread_mutex_lock(&intents_mutex);
-
-	/* Iterate through all active command intents */
-	for (int i = 0; i < MAX_INTENTS; i++) {
-		if (!intents[i].active) continue;
-
-		/* Check if the command has expired */
-		if (current_time > intents[i].expire) {
-			log_message(DEBUG, "Command intent %d expired", i);
-
-			/* Mark as inactive but don't free memory here to prevent race conditions */
-			intents[i].active = false;
-			intent_count--;
-			continue;
-		}
-
-		/* Check if the path matches any affected path */
-		if (!intents[i].paths) {
-			continue;
-		}
-
-		for (int j = 0; j < intents[i].num_paths; j++) {
-			const char *affected_path = intents[i].paths[j];
-
-			if (!affected_path) {
-				continue;
-			}
-
-			/* Check for exact match */
-			if (strcmp(path, affected_path) == 0) {
-				log_message(DEBUG, "Path %s is directly affected by command %d", path, i);
-				pthread_mutex_unlock(&intents_mutex);
-				return true;
-			}
-
-			/* Check if path is a subdirectory of affected_path */
-			size_t affected_len = strlen(affected_path);
-			if (strncmp(path, affected_path, affected_len) == 0 &&
-			    (path[affected_len] == '/' || path[affected_len] == '\0')) {
-				log_message(DEBUG, "Path %s is within affected path %s (command %d)", path, affected_path, i);
-				pthread_mutex_unlock(&intents_mutex);
-				return true;
-			}
-
-			/* Check if affected_path is a subdirectory of path */
-			size_t path_len = strlen(path);
-			if (strncmp(affected_path, path, path_len) == 0 &&
-			    (affected_path[path_len] == '/' || affected_path[path_len] == '\0')) {
-				log_message(DEBUG, "Path %s contains affected path %s (command %d)", path, affected_path, i);
-				pthread_mutex_unlock(&intents_mutex);
-				return true;
-			}
-		}
-	}
-
-	pthread_mutex_unlock(&intents_mutex);
-	return false;
-}
-
-/* Clean up expired command intents - call this periodically and safely */
-void intent_expire(void) {
-	time_t current_time;
-	time(&current_time);
-
-	pthread_mutex_lock(&intents_mutex);
-
-	for (int i = 0; i < MAX_INTENTS; i++) {
-		if (!intents[i].active) continue;
-
-		/* Check if the command has expired */
-		if (current_time > intents[i].expire) {
-			/* Free affected paths memory */
-			if (intents[i].paths) {
-				for (int j = 0; j < intents[i].num_paths; j++) {
-					if (intents[i].paths[j]) {
-						free(intents[i].paths[j]);
-						intents[i].paths[j] = NULL;
-					}
-				}
-				free(intents[i].paths);
-				intents[i].paths = NULL;
-			}
-			intents[i].num_paths = 0;
-
-			/* Mark as inactive if not already */
-			if (intents[i].active) {
-				intents[i].active = false;
-				intent_count--;
-			}
-		}
-	}
-
-	pthread_mutex_unlock(&intents_mutex);
-}
-
-/* Analyze a command to determine what paths it will affect */
-intent_t *intent_create(pid_t pid, const char *command, const char *base_path) {
-	pthread_mutex_lock(&intents_mutex);
-
-	/* Find a free slot in the intents array */
-	int slot = -1;
-	for (int i = 0; i < MAX_INTENTS; i++) {
-		if (!intents[i].active) {
-			slot = i;
-			break;
-		}
-	}
-
-	if (slot == -1) {
-		log_message(WARNING, "No free slots for command intent tracking");
-		pthread_mutex_unlock(&intents_mutex);
-		return NULL;
-	}
-
-	/* Initialize the command intent */
-	intent_t *intent = &intents[slot];
-	memset(intent, 0, sizeof(intent_t));
-	intent->pid = pid;
-	time(&intent->start);
-
-	/* Set a default expected end time (10 seconds) */
-	intent->expire = intent->start + 10;
-
-	/* Allocate memory for affected paths */
-	intent->paths = calloc(MAX_AFFECTED_PATHS, sizeof(char *));
-	if (!intent->paths) {
-		log_message(ERROR, "Failed to allocate memory for affected paths");
-		pthread_mutex_unlock(&intents_mutex);
-		return NULL;
-	}
-
-	/* Add the base path as the first affected path */
-	intent->paths[0] = strdup(base_path);
-	if (!intent->paths[0]) {
-		log_message(ERROR, "Failed to duplicate base path for intent");
-		free(intent->paths);
-		intent->paths = NULL;
-		pthread_mutex_unlock(&intents_mutex);
-		return NULL;
-	}
-	intent->num_paths = 1;
-
-	/* Simple command analysis - parse the command for common operations */
-	/* Check for file moves */
-	if (strstr(command, "mv ") || strstr(command, " mv ") ||
-	    strstr(command, "-exec mv") || strstr(command, " move ")) {
-		log_message(DEBUG, "Command contains file move operation");
-
-		/* Find target directories in common move patterns */
-		const char *move_targets[] = {
-			/* Common move target patterns */
-			"mv * ", "mv .* ", "mv %p", "-exec mv {} ", " move ", NULL
-		};
-
-		for (int i = 0; move_targets[i] != NULL; i++) {
-			const char *target = strstr(command, move_targets[i]);
-			if (target) {
-				/* Skip to the end of the move command */
-				target += strlen(move_targets[i]);
-
-				/* Find the end of the target path */
-				const char *end = strpbrk(target, " \t\n;|&\n");
-				if (end) {
-					/* Extract the target path */
-					int len = end - target;
-					if (len > 0 && len < MAX_AFFECTED_PATH_LEN) {
-						char path[MAX_AFFECTED_PATH_LEN];
-						strncpy(path, target, len);
-						path[len] = '\0';
-
-						/* Remove quotes if present */
-						if (path[0] == '"' && path[len - 1] == '"') {
-							memmove(path, path+1, len-2);
-							path[len - 2] = '\0';
-						}
-
-						/* Add the target path if it's not already in the list */
-						bool already_added = false;
-						for (int j = 0; j < intent->num_paths; j++) {
-							if (intent->paths[j] && strcmp(intent->paths[j], path) == 0) {
-								already_added = true;
-								break;
-							}
-						}
-
-						if (!already_added && intent->num_paths < MAX_AFFECTED_PATHS) {
-							intent->paths[intent->num_paths] = strdup(path);
-							if (intent->paths[intent->num_paths]) {
-								intent->num_paths++;
-								log_message(DEBUG, "Added target path %s to affected paths", path);
-							} else {
-								log_message(ERROR, "Failed to duplicate target path for intent: %s", path);
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
-	/* Check for file deletions */
-	if (strstr(command, "rm ") || strstr(command, " rm ") ||
-	    strstr(command, "-delete") || strstr(command, " delete ")) {
-		log_message(DEBUG, "Command contains file delete operation");
-		/* Delete operations affect the base path and its parents */
-		/* Already added base path, so no additional paths needed */
-	}
-
-	/* Mark the intent as active */
-	intent->active = true;
-	intent_count++;
-
-	log_message(DEBUG, "Created command intent for PID %d with %d affected paths", pid, intent->num_paths);
-
-	pthread_mutex_unlock(&intents_mutex);
-	return intent;
-}
-
-/* Mark a command intent as complete */
-bool intent_complete(pid_t pid) {
-	pthread_mutex_lock(&intents_mutex);
-
-	for (int i = 0; i < MAX_INTENTS; i++) {
-		if (intents[i].active && intents[i].pid == pid) {
-			intents[i].active = false;
-			intent_count--;
-
-			log_message(DEBUG, "Marked command intent for PID %d as complete", pid);
-
-			/* Free affected paths */
-			if (intents[i].paths) {
-				for (int j = 0; j < intents[i].num_paths; j++) {
-					if (intents[i].paths[j]) {
-						free(intents[i].paths[j]);
-						intents[i].paths[j] = NULL;
-					}
-				}
-				free(intents[i].paths);
-				intents[i].paths = NULL;
-			}
-			intents[i].num_paths = 0;
-
-			pthread_mutex_unlock(&intents_mutex);
-			return true;
-		}
-	}
-
-	pthread_mutex_unlock(&intents_mutex);
-	return false;
 }
 
 /* Set debounce time */
@@ -665,8 +379,8 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 		exit(EXIT_FAILURE);
 	}
 
-	/* Parent process - create command intent */
-	intent_create(pid, command, event->path);
+	/* Parent process - get a reference to the state for post-execution cleanup */
+	entity_t *state = state_get(monitor->states, event->path, ENTITY_UNKNOWN, (watch_t *) canonical_watch);
 
 	/* Read and log output if configured - robust version */
 	if (capture_output) {
@@ -769,9 +483,6 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 	int status;
 	waitpid(pid, &status, 0);
 
-	/* Mark the command intent as complete immediately */
-	intent_complete(pid);
-
 	/* Record end time */
 	time(&end_time);
 
@@ -790,12 +501,17 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 	log_message(INFO, "[%s] Finished execution (pid %d, duration: %lds, exit: %d)",
 	            canonical_watch->name, pid, end_time - start, WEXITSTATUS(status));
 
-	/* Mark the entity state with the command execution */
-	entity_t *state = state_get(monitor->states, event->path, ENTITY_UNKNOWN, (watch_t *) canonical_watch);
+	/* Clear command executing flag and reset baseline */
 	if (state) {
 		struct timespec current_time;
 		clock_gettime(CLOCK_MONOTONIC, &current_time);
 		state->command_time = current_time.tv_sec;
+		
+		/* Clear executing flag to allow new events */
+		state->executing = false;
+		
+		/* Reset directory baseline to accept command result as new authoritative state */
+		stability_reset(monitor, state);
 	}
 
 	free(command);
@@ -890,9 +606,6 @@ void command_cleanup(threads_t *threads) {
 	if (threads) {
 		threads_wait(threads);
 	}
-
-	/* Clean up command intents */
-	intent_cleanup();
 
 	/* Clear threads reference */
 	command_threads = NULL;
