@@ -4,18 +4,13 @@ UNAME_S := $(shell uname -s)
 # Compiler and flags
 CC = cc
 CFLAGS = -Wall -Wextra -std=c11 -pedantic -g
-LDFLAGS = -lm -lpthread -fsanitize=address
+LDFLAGS = -lm -lpthread
 
-# Debug/AddressSanitizer build
-ifdef ASAN
+# Debug build with sanitizers
+ifdef DEBUG
     CC = clang
-    CFLAGS += -fsanitize=address -O1
-    LDFLAGS += -fsanitize=address
-endif
-
-ifdef DEBUG_EXTRA
-    CFLAGS += -fsanitize=undefined -fno-omit-frame-pointer
-    LDFLAGS += -fsanitize=undefined
+    CFLAGS += -fsanitize=address,undefined -fno-omit-frame-pointer -O1
+    LDFLAGS += -fsanitize=address,undefined
 endif
 
 # OS-specific settings
@@ -182,12 +177,9 @@ endif
 # Generate sample configuration
 config: kqexec.conf.sample
 
-# Debug targets
+# Debug target
 debug: clean
-	$(MAKE) ASAN=1
-
-debug-extra: clean
-	$(MAKE) ASAN=1 DEBUG_EXTRA=1
+	$(MAKE) DEBUG=1
 
 # Phony targets
-.PHONY: all clean install uninstall config debug debug-extra
+.PHONY: all clean install uninstall config debug
