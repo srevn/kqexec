@@ -604,16 +604,16 @@ bool stability_execute(monitor_t *monitor, check_t *check, entity_t *root, struc
 
 /* Main stability processing function */
 void stability_process(monitor_t *monitor, struct timespec *current_time) {
-	int commands_attempted_total = 0;
-	int commands_executed_total = 0;
-	int items_processed = 0;
+	int commands_attempted = 0;
+	int commands_executed = 0;
+	bool item_processed = false;
 
 	if (!monitor || !monitor->check_queue) {
 		return;
 	}
 
-	/* Loop to process all overdue checks */
-	while (monitor->check_queue->size > 0) {
+	/* Process one overdue check to maintain main loop responsiveness */
+	if (monitor->check_queue->size > 0) {
 		/* Get the top check (earliest scheduled check) */
 		check_t *check = &monitor->check_queue->items[0];
 
@@ -621,17 +621,17 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 		if (!check || !check->path) {
 			log_message(WARNING, "Corrupted check in queue, removing");
 			queue_remove(monitor->check_queue, NULL);
-			continue; /* Process next item */
+			return; /* Try again on next call */
 		}
 
 		/* Check if it's time to process this check */
 		if (current_time->tv_sec < check->next_check.tv_sec ||
 		    (current_time->tv_sec == check->next_check.tv_sec && current_time->tv_nsec < check->next_check.tv_nsec)) {
 			/* Not yet time for this check. Since it's a min-heap, no other checks are ready */
-			break;
+			return;
 		}
 
-		items_processed++;
+		item_processed = true;
 
 		log_message(DEBUG, "Processing deferred check for %s with %d watches", check->path, check->num_watches);
 
@@ -639,14 +639,14 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 		entity_t *root = stability_entry(monitor, check);
 		if (!root) {
 			queue_remove(monitor->check_queue, check->path);
-			continue;
+			return;
 		}
 
 		/* If the entity is no longer active, just remove from queue */
 		if (!root->scanner->active) {
 			log_message(DEBUG, "Directory %s no longer active, removing from queue", check->path);
 			queue_remove(monitor->check_queue, check->path);
-			continue;
+			return;
 		}
 
 		/* Check if we're in verification mode or need to verify quiet period */
@@ -670,7 +670,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 				            root->node->path, primary_watch ? primary_watch->name : "unknown");
 
 				stability_delay(monitor, check, root, current_time, required_quiet);
-				continue;
+				return;
 			}
 
 			/* Quiet period has elapsed, enter verification mode */
@@ -709,7 +709,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 			}
 			check->next_check = next_check;
 			heap_down(monitor->check_queue->items, monitor->check_queue->size, 0);
-			continue;
+			return;
 		}
 
 		/* Perform directory stability scan */
@@ -723,7 +723,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 			if (failure_type == SCAN_FAILURE_MAX_ATTEMPTS_REACHED) {
 				/* Remove from queue */
 				queue_remove(monitor->check_queue, check->path);
-				continue;
+				return;
 			} else if (failure_type == SCAN_FAILURE_DIRECTORY_DELETED) {
 				/* Reschedule for another check */
 				struct timespec next_check;
@@ -733,7 +733,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 				/* Update check */
 				check->next_check = next_check;
 				heap_down(monitor->check_queue->items, monitor->check_queue->size, 0);
-				continue;
+				return;
 			}
 		}
 
@@ -761,7 +761,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 			required_quiet = scanner_delay(root);
 			log_message(DEBUG, "Recalculated quiet period for instability: %ld ms", required_quiet);
 			stability_delay(monitor, check, root, current_time, required_quiet);
-			continue;
+			return;
 		}
 
 		/* Directory is stable - determine if enough checks have been completed */
@@ -795,25 +795,25 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 			check->next_check = next_check;
 			heap_down(monitor->check_queue->items, monitor->check_queue->size, 0);
 
-			continue;
+			return;
 		}
 
 		/* Directory is stable with sufficient consecutive checks - execute commands */
-		commands_attempted_total++;
+		commands_attempted++;
 		log_message(INFO, "Directory %s stability confirmed (%d/%d checks), proceeding to command execution",
 		            root->node->path, root->stability->checks_count, checks_required);
 
 		/* Execute commands */
 		int executed_now = 0;
 		stability_execute(monitor, check, root, current_time, &executed_now);
-		commands_executed_total += executed_now;
+		commands_executed += executed_now;
 
 		/* Remove check from queue after processing all watches */
 		queue_remove(monitor->check_queue, check->path);
 	}
 
-	if (items_processed > 0) {
-		log_message(DEBUG, "Finished processing %d overdue deferred checks. Attempted: %d, Executed: %d. Remaining queue size: %d",
-		            items_processed, commands_attempted_total, commands_executed_total, monitor->check_queue->size);
+	if (item_processed) {
+		log_message(DEBUG, "Processed deferred check. Commands attempted: %d, executed: %d. Remaining queue size: %d",
+		            commands_attempted, commands_executed, monitor->check_queue->size);
 	}
 }
