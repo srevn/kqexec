@@ -15,7 +15,7 @@ A lightweight file and directory monitoring utility for FreeBSD and macOS that u
 - **Command Debouncing**: Prevent command execution flooding when many events occur rapidly
 - **Placeholder Substitution**: Dynamic command generation based on event details
 - **Environment Variable Injection**: Event context provided to commands when enabled
-- **Command Intent Tracking**: Filters out self-generated events by analyzing command operations
+- **Feedback Loop Prevention**: Filters out self-generated events and establishes a new baseline after command execution
 - **Directory Stability Verification**: Uses `stat()` to recursively verify directory stability before executing commands
 - **Configuration Hot-Reload**: Monitors the configuration file and automatically reloads when it changes
 - **Syslog Integration**: Comprehensive logging with configurable verbosity
