@@ -26,7 +26,7 @@ typedef struct node {
 typedef struct states {
 	node_t **buckets;                      /* Hash table buckets for path states */
 	size_t bucket_count;                   /* Number of buckets in the hash table */
-	pthread_mutex_t mutex;                 /* Mutex for thread-safe access */
+	pthread_mutex_t *mutexes;              /* Array of mutexes, one per bucket */
 } states_t;
 
 /* Entity state tracking structure */
@@ -65,5 +65,6 @@ states_t *states_create(size_t bucket_count);
 void states_destroy(states_t *states);
 bool state_corrupted(const entity_t *state);
 entity_t *states_get(states_t *states, const char *path, kind_t kind, watch_t *watch);
+unsigned int states_hash(const char *path, size_t bucket_count);
 
 #endif /* STATES_H */

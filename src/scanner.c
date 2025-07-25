@@ -362,7 +362,11 @@ void scanner_sync(monitor_t *monitor, node_t *node, entity_t *source) {
 		return;
 	}
 
-	pthread_mutex_lock(&monitor->states->mutex);
+	/* Calculate bucket hash for this node's path */
+	unsigned int hash = states_hash(node->path, monitor->states->bucket_count);
+
+	/* Lock only the specific mutex for this path */
+	pthread_mutex_lock(&monitor->states->mutexes[hash]);
 
 	struct timespec sync_time = source->scanner ? source->scanner->latest_time : source->last_time;
 	bool path_active = source->scanner ? source->scanner->active : false;
@@ -465,7 +469,8 @@ void scanner_sync(monitor_t *monitor, node_t *node, entity_t *source) {
 		}
 	}
 
-	pthread_mutex_unlock(&monitor->states->mutex);
+	/* Unlock the specific mutex */
+	pthread_mutex_unlock(&monitor->states->mutexes[hash]);
 }
 
 /* Record basic activity in circular buffer and update state */

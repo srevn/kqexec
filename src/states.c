@@ -20,7 +20,7 @@
 #include "scanner.h"
 
 /* Hash function for a path string */
-static unsigned int state_hash(const char *path, size_t bucket_count) {
+unsigned int states_hash(const char *path, size_t bucket_count) {
 	unsigned int hash = 5381; /* djb2 hash initial value */
 	if (!path) return 0;
 
@@ -48,17 +48,29 @@ states_t *states_create(size_t bucket_count) {
 
 	states->bucket_count = bucket_count;
 
-	/* Initialize the recursive mutex */
-	pthread_mutexattr_t attr;
-	pthread_mutexattr_init(&attr);
-	pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
-	if (pthread_mutex_init(&states->mutex, &attr) != 0) {
-		log_message(ERROR, "Failed to initialize state table mutex");
+	/* Allocate array of mutexes */
+	states->mutexes = calloc(bucket_count, sizeof(pthread_mutex_t));
+	if (!states->mutexes) {
+		log_message(ERROR, "Failed to allocate memory for mutexes");
 		free(states->buckets);
 		free(states);
 		return NULL;
 	}
-	pthread_mutexattr_destroy(&attr);
+
+	/* Initialize all mutexes (standard, non-recursive) */
+	for (size_t i = 0; i < bucket_count; i++) {
+		if (pthread_mutex_init(&states->mutexes[i], NULL) != 0) {
+			log_message(ERROR, "Failed to initialize mutex %zu", i);
+			/* Clean up previously initialized mutexes */
+			for (size_t j = 0; j < i; j++) {
+				pthread_mutex_destroy(&states->mutexes[j]);
+			}
+			free(states->mutexes);
+			free(states->buckets);
+			free(states);
+			return NULL;
+		}
+	}
 
 	log_message(DEBUG, "State table created with %zu buckets", bucket_count);
 	return states;
@@ -92,8 +104,10 @@ static void state_free_node(node_t *node) {
 void states_destroy(states_t *states) {
 	if (!states) return;
 
-	/* Lock mutex during cleanup */
-	pthread_mutex_lock(&states->mutex);
+	/* Lock all mutexes during cleanup to ensure thread safety */
+	for (size_t i = 0; i < states->bucket_count; i++) {
+		pthread_mutex_lock(&states->mutexes[i]);
+	}
 
 	/* Free all path states */
 	for (size_t i = 0; i < states->bucket_count; i++) {
@@ -108,9 +122,13 @@ void states_destroy(states_t *states) {
 	free(states->buckets);
 	states->buckets = NULL;
 
-	/* Unlock mutex after cleanup */
-	pthread_mutex_unlock(&states->mutex);
-	pthread_mutex_destroy(&states->mutex);
+	/* Unlock and destroy all mutexes */
+	for (size_t i = 0; i < states->bucket_count; i++) {
+		pthread_mutex_unlock(&states->mutexes[i]);
+		pthread_mutex_destroy(&states->mutexes[i]);
+	}
+	free(states->mutexes);
+	states->mutexes = NULL;
 
 	free(states);
 	log_message(DEBUG, "State table destroyed");
@@ -192,10 +210,10 @@ entity_t *states_get(states_t *states, const char *path, kind_t kind, watch_t *w
 		return NULL;
 	}
 
-	unsigned int hash = state_hash(path, states->bucket_count);
+	unsigned int hash = states_hash(path, states->bucket_count);
 
-	/* Lock the mutex*/
-	pthread_mutex_lock(&states->mutex);
+	/* Lock only the specific mutex for this bucket */
+	pthread_mutex_lock(&states->mutexes[hash]);
 
 	node_t *node = states->buckets[hash];
 
@@ -212,14 +230,14 @@ entity_t *states_get(states_t *states, const char *path, kind_t kind, watch_t *w
 		node = calloc(1, sizeof(node_t));
 		if (!node) {
 			log_message(ERROR, "Failed to allocate memory for node: %s", path);
-			pthread_mutex_unlock(&states->mutex);
+			pthread_mutex_unlock(&states->mutexes[hash]);
 			return NULL;
 		}
 		node->path = strdup(path);
 		if (!node->path) {
 			log_message(ERROR, "Failed to duplicate path for node: %s", path);
 			free(node);
-			pthread_mutex_unlock(&states->mutex);
+			pthread_mutex_unlock(&states->mutexes[hash]);
 			return NULL;
 		}
 		node->executing = false;
@@ -234,7 +252,7 @@ entity_t *states_get(states_t *states, const char *path, kind_t kind, watch_t *w
 			if (state->kind == ENTITY_UNKNOWN && kind != ENTITY_UNKNOWN) {
 				state->kind = kind;
 			}
-			pthread_mutex_unlock(&states->mutex);
+			pthread_mutex_unlock(&states->mutexes[hash]);
 			return state;
 		}
 		state = state->next;
@@ -252,7 +270,7 @@ entity_t *states_get(states_t *states, const char *path, kind_t kind, watch_t *w
 			states->buckets[hash] = node->next;
 			state_free_node(node);
 		}
-		pthread_mutex_unlock(&states->mutex);
+		pthread_mutex_unlock(&states->mutexes[hash]);
 		return NULL;
 	}
 
@@ -299,7 +317,7 @@ entity_t *states_get(states_t *states, const char *path, kind_t kind, watch_t *w
 					states->buckets[hash] = node->next;
 					state_free_node(node);
 				}
-				pthread_mutex_unlock(&states->mutex);
+				pthread_mutex_unlock(&states->mutexes[hash]);
 				return NULL;
 			}
 
@@ -324,6 +342,6 @@ entity_t *states_get(states_t *states, const char *path, kind_t kind, watch_t *w
 	log_message(DEBUG, "Created new state for path=%s, watch=%s", path, watch->name);
 
 	/* Unlock mutex */
-	pthread_mutex_unlock(&states->mutex);
+	pthread_mutex_unlock(&states->mutexes[hash]);
 	return state;
 }
