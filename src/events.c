@@ -173,7 +173,7 @@ void events_delayed(monitor_t *monitor) {
 
 				if (command_execute(monitor, delayed->watch, &delayed->event, true)) {
 					/* Update command timestamp for the file state */
-					entity_t *state = state_get(monitor->states, delayed->event.path, ENTITY_FILE, delayed->watch);
+					entity_t *state = states_get(monitor->states, delayed->event.path, ENTITY_FILE, delayed->watch);
 					if (state) {
 						state->command_time = current_time.tv_sec;
 					}
@@ -187,7 +187,7 @@ void events_delayed(monitor_t *monitor) {
 				processed++;
 			} else {
 				/* Directory events: check if stability is active for this path */
-				entity_t *state = state_get(monitor->states, delayed->event.path, delayed->kind, delayed->watch);
+				entity_t *state = states_get(monitor->states, delayed->event.path, delayed->kind, delayed->watch);
 				entity_t *root = state ? stability_root(monitor, state) : NULL;
 
 				if (!root) {
@@ -243,7 +243,7 @@ int events_timeout(monitor_t *monitor, struct timespec *current_time) {
 		    (current_time->tv_sec == delayed->process_time.tv_sec && current_time->tv_nsec >= delayed->process_time.tv_nsec)) {
 			/* This event has expired - check if it's waiting for stability */
 			if (delayed->kind == ENTITY_DIRECTORY && strcmp(delayed->watch->name, "__config_file__") != 0) {
-				entity_t *state = state_get(monitor->states, delayed->event.path, delayed->kind, delayed->watch);
+				entity_t *state = states_get(monitor->states, delayed->event.path, delayed->kind, delayed->watch);
 				entity_t *root = state ? stability_root(monitor, state) : NULL;
 
 				if (!root || root->scanner->active) {
@@ -560,7 +560,7 @@ bool events_process(monitor_t *monitor, watch_t *watch, event_t *event, kind_t k
 	}
 
 	/* Get state using the event path and watch config */
-	entity_t *state = state_get(monitor->states, event->path, kind, watch);
+	entity_t *state = states_get(monitor->states, event->path, kind, watch);
 	if (state == NULL) {
 		return false; /* Error already logged by states_get */
 	}

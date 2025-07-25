@@ -156,7 +156,7 @@ char *command_placeholders(monitor_t *monitor, const watch_t *watch, const char 
 	}
 
 	/* Get entity state for size and trigger file placeholders */
-	entity_t *state = state_get(monitor->states, event->path, ENTITY_UNKNOWN, (watch_t *) watch);
+	entity_t *state = states_get(monitor->states, event->path, ENTITY_UNKNOWN, (watch_t *) watch);
 
 	/* Substitute %f and %F with trigger file path and name */
 	if (strstr(result, "%f") || strstr(result, "%F")) {
@@ -380,7 +380,7 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 	}
 
 	/* Parent process - get a reference to the state for post-execution cleanup */
-	entity_t *state = state_get(monitor->states, event->path, ENTITY_UNKNOWN, (watch_t *) canonical_watch);
+	entity_t *state = states_get(monitor->states, event->path, ENTITY_UNKNOWN, (watch_t *) canonical_watch);
 
 	/* Read and log output if configured - robust version */
 	if (capture_output) {
@@ -563,7 +563,7 @@ void command_environment(monitor_t *monitor, const watch_t *watch, const event_t
 
 	/* KQ_TRIGGER_FILE_PATH - full path of the file that triggered the event */
 	const char *trigger_file_path = event->path; /* Default to event path */
-	entity_t *state = state_get(monitor->states, event->path, ENTITY_UNKNOWN, (watch_t *) watch);
+	entity_t *state = states_get(monitor->states, event->path, ENTITY_UNKNOWN, (watch_t *) watch);
 	if (state) {
 		entity_t *root = stability_root(monitor, state);
 		if (root && root->trigger) {

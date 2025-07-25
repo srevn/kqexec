@@ -29,7 +29,7 @@ typedef struct watcher {
 typedef struct monitor {
 	int kq;                                /* Kqueue descriptor */
 	config_t *config;                      /* Configuration */
-	state_t *states;                       /* State table for this monitor */
+	states_t *states;                      /* State table for this monitor */
 	
 	/* Watch tracking */
 	watcher_t **watches;                   /* Array of watch information */

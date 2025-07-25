@@ -542,7 +542,7 @@ static void scanner_propagate(monitor_t *monitor, entity_t *state, entity_t *roo
 			}
 
 			/* Update state for this parent directory */
-			entity_t *parent = state_get(monitor->states, path_copy, ENTITY_DIRECTORY, state->watch);
+			entity_t *parent = states_get(monitor->states, path_copy, ENTITY_DIRECTORY, state->watch);
 			if (parent) {
 				/* Create activity state if needed */
 				if (!parent->scanner) {

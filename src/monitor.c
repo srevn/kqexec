@@ -137,7 +137,7 @@ monitor_t *monitor_create(config_t *config) {
 	monitor->check_queue = queue_create(16); /* Initial capacity of 16 */
 
 	/* Initialize state table */
-	monitor->states = state_create(PATH_HASH_SIZE);
+	monitor->states = states_create(PATH_HASH_SIZE);
 	if (!monitor->states) {
 		log_message(ERROR, "Failed to create state table for monitor");
 		queue_destroy(monitor->check_queue);
@@ -186,7 +186,7 @@ void monitor_destroy(monitor_t *monitor) {
 	}
 
 	/* Clean up state table */
-	state_destroy(monitor->states);
+	states_destroy(monitor->states);
 
 	/* Destroy the configuration */
 	config_destroy(monitor->config);
@@ -310,7 +310,7 @@ bool monitor_tree(monitor_t *monitor, const char *dir_path, watch_t *watch) {
 			log_message(DEBUG, "Added new watch for directory: %s", dir_path);
 
 			/* Establish baseline state */
-			state_get(monitor->states, dir_path, ENTITY_DIRECTORY, watch);
+			states_get(monitor->states, dir_path, ENTITY_DIRECTORY, watch);
 		}
 	}
 
@@ -461,7 +461,7 @@ bool monitor_add(monitor_t *monitor, watch_t *watch) {
 		}
 
 		/* Establish baseline state */
-		state_get(monitor->states, watcher->path, ENTITY_FILE, watch);
+		states_get(monitor->states, watcher->path, ENTITY_FILE, watch);
 
 		return monitor_kq(monitor, watcher);
 	}
@@ -723,8 +723,8 @@ bool monitor_reload(monitor_t *monitor) {
 	}
 
 	/* Reset the state management system */
-	state_destroy(monitor->states);
-	monitor->states = state_create(PATH_HASH_SIZE);
+	states_destroy(monitor->states);
+	monitor->states = states_create(PATH_HASH_SIZE);
 	if (!monitor->states) {
 		log_message(ERROR, "Failed to recreate state table during reload");
 		return false;

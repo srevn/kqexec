@@ -32,36 +32,36 @@ static unsigned int state_hash(const char *path, size_t bucket_count) {
 }
 
 /* Create a new state table */
-state_t *state_create(size_t bucket_count) {
-	state_t *table = calloc(1, sizeof(state_t));
-	if (!table) {
+states_t *states_create(size_t bucket_count) {
+	states_t *states = calloc(1, sizeof(states_t));
+	if (!states) {
 		log_message(ERROR, "Failed to allocate memory for state table");
 		return NULL;
 	}
 
-	table->buckets = calloc(bucket_count, sizeof(node_t *));
-	if (!table->buckets) {
+	states->buckets = calloc(bucket_count, sizeof(node_t *));
+	if (!states->buckets) {
 		log_message(ERROR, "Failed to allocate memory for state table buckets");
-		free(table);
+		free(states);
 		return NULL;
 	}
 
-	table->bucket_count = bucket_count;
+	states->bucket_count = bucket_count;
 
 	/* Initialize the recursive mutex */
 	pthread_mutexattr_t attr;
 	pthread_mutexattr_init(&attr);
 	pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
-	if (pthread_mutex_init(&table->mutex, &attr) != 0) {
+	if (pthread_mutex_init(&states->mutex, &attr) != 0) {
 		log_message(ERROR, "Failed to initialize state table mutex");
-		free(table->buckets);
-		free(table);
+		free(states->buckets);
+		free(states);
 		return NULL;
 	}
 	pthread_mutexattr_destroy(&attr);
 
 	log_message(DEBUG, "State table created with %zu buckets", bucket_count);
-	return table;
+	return states;
 }
 
 /* Free resources used by an entity state */
@@ -89,30 +89,30 @@ static void state_free_node(node_t *node) {
 }
 
 /* Destroy a state table */
-void state_destroy(state_t *table) {
-	if (!table) return;
+void states_destroy(states_t *states) {
+	if (!states) return;
 
 	/* Lock mutex during cleanup */
-	pthread_mutex_lock(&table->mutex);
+	pthread_mutex_lock(&states->mutex);
 
 	/* Free all path states */
-	for (size_t i = 0; i < table->bucket_count; i++) {
-		node_t *node = table->buckets[i];
+	for (size_t i = 0; i < states->bucket_count; i++) {
+		node_t *node = states->buckets[i];
 		while (node) {
 			node_t *next = node->next;
 			state_free_node(node);
 			node = next;
 		}
-		table->buckets[i] = NULL;
+		states->buckets[i] = NULL;
 	}
-	free(table->buckets);
-	table->buckets = NULL;
+	free(states->buckets);
+	states->buckets = NULL;
 
 	/* Unlock mutex after cleanup */
-	pthread_mutex_unlock(&table->mutex);
-	pthread_mutex_destroy(&table->mutex);
+	pthread_mutex_unlock(&states->mutex);
+	pthread_mutex_destroy(&states->mutex);
 
-	free(table);
+	free(states);
 	log_message(DEBUG, "State table destroyed");
 }
 
@@ -180,9 +180,9 @@ static void state_copy(entity_t *dest, const entity_t *src) {
 }
 
 /* Get or create an entity state for a given path and watch */
-entity_t *state_get(state_t *table, const char *path, kind_t kind, watch_t *watch) {
-	if (!table || !path || !watch || !table->buckets) {
-		log_message(ERROR, "Invalid arguments to state_get");
+entity_t *states_get(states_t *states, const char *path, kind_t kind, watch_t *watch) {
+	if (!states || !path || !watch || !states->buckets) {
+		log_message(ERROR, "Invalid arguments to states_get");
 		return NULL;
 	}
 
@@ -192,12 +192,12 @@ entity_t *state_get(state_t *table, const char *path, kind_t kind, watch_t *watc
 		return NULL;
 	}
 
-	unsigned int hash = state_hash(path, table->bucket_count);
+	unsigned int hash = state_hash(path, states->bucket_count);
 
 	/* Lock the mutex*/
-	pthread_mutex_lock(&table->mutex);
+	pthread_mutex_lock(&states->mutex);
 
-	node_t *node = table->buckets[hash];
+	node_t *node = states->buckets[hash];
 
 	/* Find existing node */
 	while (node) {
@@ -212,19 +212,19 @@ entity_t *state_get(state_t *table, const char *path, kind_t kind, watch_t *watc
 		node = calloc(1, sizeof(node_t));
 		if (!node) {
 			log_message(ERROR, "Failed to allocate memory for node: %s", path);
-			pthread_mutex_unlock(&table->mutex);
+			pthread_mutex_unlock(&states->mutex);
 			return NULL;
 		}
 		node->path = strdup(path);
 		if (!node->path) {
 			log_message(ERROR, "Failed to duplicate path for node: %s", path);
 			free(node);
-			pthread_mutex_unlock(&table->mutex);
+			pthread_mutex_unlock(&states->mutex);
 			return NULL;
 		}
 		node->executing = false;
-		node->next = table->buckets[hash];
-		table->buckets[hash] = node;
+		node->next = states->buckets[hash];
+		states->buckets[hash] = node;
 	}
 
 	/* Find existing entity for this watch */
@@ -234,7 +234,7 @@ entity_t *state_get(state_t *table, const char *path, kind_t kind, watch_t *watc
 			if (state->kind == ENTITY_UNKNOWN && kind != ENTITY_UNKNOWN) {
 				state->kind = kind;
 			}
-			pthread_mutex_unlock(&table->mutex);
+			pthread_mutex_unlock(&states->mutex);
 			return state;
 		}
 		state = state->next;
@@ -249,10 +249,10 @@ entity_t *state_get(state_t *table, const char *path, kind_t kind, watch_t *watc
 		log_message(ERROR, "Failed to allocate memory for entity: %s", path);
 		/* If the node was newly created for this entity, free it to prevent a leak */
 		if (!node->entities) {
-			table->buckets[hash] = node->next;
+			states->buckets[hash] = node->next;
 			state_free_node(node);
 		}
-		pthread_mutex_unlock(&table->mutex);
+		pthread_mutex_unlock(&states->mutex);
 		return NULL;
 	}
 
@@ -296,10 +296,10 @@ entity_t *state_get(state_t *table, const char *path, kind_t kind, watch_t *watc
 			if (!state->stability) {
 				state_free_entity(state);
 				if (!node->entities) {
-					table->buckets[hash] = node->next;
+					states->buckets[hash] = node->next;
 					state_free_node(node);
 				}
-				pthread_mutex_unlock(&table->mutex);
+				pthread_mutex_unlock(&states->mutex);
 				return NULL;
 			}
 
@@ -324,6 +324,6 @@ entity_t *state_get(state_t *table, const char *path, kind_t kind, watch_t *watc
 	log_message(DEBUG, "Created new state for path=%s, watch=%s", path, watch->name);
 
 	/* Unlock mutex */
-	pthread_mutex_unlock(&table->mutex);
+	pthread_mutex_unlock(&states->mutex);
 	return state;
 }
