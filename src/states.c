@@ -281,13 +281,21 @@ entity_t *states_get(states_t *states, const char *path, kind_t kind, watch_t *w
 	state->kind = kind;
 	state->watch = watch;
 
-	struct stat info;
-	state->exists = (stat(path, &info) == 0);
+	/* If an existing state for this path was found, inherit its existence status */
+	if (existing_state) {
+		state->exists = existing_state->exists;
+	} else {
+		struct stat info;
+		state->exists = (stat(path, &info) == 0);
+	}
 
 	/* Determine entity type from stat if needed */
 	if (kind == ENTITY_UNKNOWN && state->exists) {
-		if (S_ISDIR(info.st_mode)) state->kind = ENTITY_DIRECTORY;
-		else if (S_ISREG(info.st_mode)) state->kind = ENTITY_FILE;
+		struct stat info;
+		if (stat(path, &info) == 0) {
+			if (S_ISDIR(info.st_mode)) state->kind = ENTITY_DIRECTORY;
+			else if (S_ISREG(info.st_mode)) state->kind = ENTITY_FILE;
+		}
 	} else if (kind != ENTITY_UNKNOWN) {
 		state->kind = kind;
 	}
@@ -303,8 +311,6 @@ entity_t *states_get(states_t *states, const char *path, kind_t kind, watch_t *w
 
 	/* If an existing state for this path was found, copy its stats */
 	if (existing_state) {
-		log_message(DEBUG, "Copying stats from existing state for path %s (watch: %s)",
-		            path, existing_state->watch->name);
 		state_copy(state, existing_state);
 	} else {
 		/* This is the first state for this path, initialize stats from scratch */

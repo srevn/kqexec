@@ -503,15 +503,23 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 
 	/* Clear command executing flag and reset baseline */
 	if (state) {
+		entity_t *root = stability_root(monitor, state);
 		struct timespec current_time;
 		clock_gettime(CLOCK_MONOTONIC, &current_time);
+
+		/* Update command time on the original state that triggered the event */
 		state->command_time = current_time.tv_sec;
-		
-		/* Clear executing flag to allow new events */
-		state->node->executing = false;
-		
-		/* Reset directory baseline to accept command result as new authoritative state */
-		stability_reset(monitor, state);
+
+		if (root) {
+			/* Clear executing flag on the root to allow new events for the entire watch */
+			root->node->executing = false;
+			/* Reset directory baseline to accept command result as new authoritative state */
+			stability_reset(monitor, root);
+		} else {
+			/* Fallback for non-stability events (e.g., file-only watches) */
+			state->node->executing = false;
+			stability_reset(monitor, state); /* Will do nothing if not a directory */
+		}
 	}
 
 	free(command);

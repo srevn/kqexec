@@ -91,10 +91,10 @@ void events_schedule(monitor_t *monitor, watch_t *watch, event_t *event, kind_t 
 		process_time.tv_nsec -= 1000000000;
 	}
 
-	/* Look for existing delayed event for the same watch to enable debouncing */
+	/* Look for existing delayed event for the same watch and path to enable debouncing */
 	for (int i = 0; i < monitor->delayed_count; i++) {
 		delayed_t *existing = &monitor->delayed_events[i];
-		if (existing->watch == watch) {
+		if (existing->watch == watch && strcmp(existing->event.path, event->path) == 0) {
 
 			/* Merge event types to preserve all event information */
 			existing->event.type |= event->type;
@@ -108,7 +108,7 @@ void events_schedule(monitor_t *monitor, watch_t *watch, event_t *event, kind_t 
 			existing->process_time = process_time;
 
 			log_message(DEBUG, "Updated existing delayed event for %s (watch: %s) to process in %d ms",
-			            event->path, watch->name, watch->processing_delay);
+			            existing->event.path, watch->name, watch->processing_delay);
 			return;
 		}
 	}
@@ -158,58 +158,15 @@ void events_delayed(monitor_t *monitor) {
 		if (current_time.tv_sec > delayed->process_time.tv_sec ||
 		    (current_time.tv_sec == delayed->process_time.tv_sec && current_time.tv_nsec >= delayed->process_time.tv_nsec)) {
 
-			/* Special handling for config file reload to bypass stability checks */
-			if (strcmp(delayed->watch->name, "__config_file__") == 0) {
-				log_message(NOTICE, "Configuration changed: %s", delayed->event.path);
-				monitor->reload = true;
+			log_message(DEBUG, "Delayed event for %s (watch: %s) expired, initiating stability check",
+			            delayed->event.path, delayed->watch->name);
 
-				/* Free the path string and mark as processed */
-				free(delayed->event.path);
-				processed++;
-			} else if (delayed->kind == ENTITY_FILE) {
-				/* File events execute immediately when expired - no stability checks needed */
-				log_message(INFO, "Executing delayed file command for %s (watch: %s)",
-				            delayed->event.path, delayed->watch->name);
+			/* Pass the event to the main processing function */
+			events_process(monitor, delayed->watch, &delayed->event, delayed->kind);
 
-				if (command_execute(monitor, delayed->watch, &delayed->event, true)) {
-					/* Update command timestamp for the file state */
-					entity_t *state = states_get(monitor->states, delayed->event.path, ENTITY_FILE, delayed->watch);
-					if (state) {
-						state->command_time = current_time.tv_sec;
-					}
-				} else {
-					log_message(WARNING, "Delayed file command execution failed for %s (watch: %s)",
-					            delayed->event.path, delayed->watch->name);
-				}
-
-				/* Free the path string and mark as processed */
-				free(delayed->event.path);
-				processed++;
-			} else {
-				/* Directory events: check if stability is active for this path */
-				entity_t *state = states_get(monitor->states, delayed->event.path, delayed->kind, delayed->watch);
-				entity_t *root = state ? stability_root(monitor, state) : NULL;
-
-				if (!root) {
-					/* If we can't find the root, we can't check for active stability - keep it in the queue */
-					log_message(WARNING, "Cannot find root for %s, keeping in queue", delayed->event.path);
-					if (write_idx != read_idx) {
-						monitor->delayed_events[write_idx] = monitor->delayed_events[read_idx];
-					}
-					write_idx++;
-				} else {
-					/* Directory event has expired, trigger a stability check. */
-					log_message(DEBUG, "Delayed directory event for %s (watch: %s) expired, initiating stability check.",
-					            delayed->event.path, delayed->watch->name);
-
-					/* This will either create a new deferred check or update an existing one. */
-					stability_defer(monitor, root);
-
-					/* The event is now handled by the stability system, so we can remove it from the delayed queue. */
-					free(delayed->event.path);
-					processed++;
-				}
-			}
+			/* The event is now handled, so we can remove it from the delayed queue */
+			free(delayed->event.path);
+			processed++;
 		} else {
 			/* This event is not ready yet, keep it */
 			if (write_idx != read_idx) {
@@ -225,47 +182,21 @@ void events_delayed(monitor_t *monitor) {
 	}
 }
 
-/* Calculate timeout for the next delayed event that can actually be processed */
+/* Calculate timeout for the next delayed event */
 int events_timeout(monitor_t *monitor, struct timespec *current_time) {
 	if (!monitor || !monitor->delayed_events || monitor->delayed_count == 0) {
 		return -1; /* No timeout needed */
 	}
 
-	struct timespec earliest;
-	bool found_processable = false;
+	struct timespec earliest = monitor->delayed_events[0].process_time;
 
-	/* Find the earliest delayed event that can actually be processed */
-	for (int i = 0; i < monitor->delayed_count; i++) {
+	/* Find the earliest process time in the queue */
+	for (int i = 1; i < monitor->delayed_count; i++) {
 		delayed_t *delayed = &monitor->delayed_events[i];
-
-		/* Skip expired events that are waiting for stability */
-		if (current_time->tv_sec > delayed->process_time.tv_sec ||
-		    (current_time->tv_sec == delayed->process_time.tv_sec && current_time->tv_nsec >= delayed->process_time.tv_nsec)) {
-			/* This event has expired - check if it's waiting for stability */
-			if (delayed->kind == ENTITY_DIRECTORY && strcmp(delayed->watch->name, "__config_file__") != 0) {
-				entity_t *state = states_get(monitor->states, delayed->event.path, delayed->kind, delayed->watch);
-				entity_t *root = state ? stability_root(monitor, state) : NULL;
-
-				if (!root || root->scanner->active) {
-					/* This expired event is waiting for stability or root is missing - skip it for timeout calculation */
-					if (!root) {
-						log_message(WARNING, "Cannot find root for %s, skipping for timeout calculation", delayed->event.path);
-					}
-					continue;
-				}
-			}
-		}
-
-		/* This event can be processed - consider it for timeout */
-		if (!found_processable || delayed->process_time.tv_sec < earliest.tv_sec ||
+		if (delayed->process_time.tv_sec < earliest.tv_sec ||
 		    (delayed->process_time.tv_sec == earliest.tv_sec && delayed->process_time.tv_nsec < earliest.tv_nsec)) {
 			earliest = delayed->process_time;
-			found_processable = true;
 		}
-	}
-
-	if (!found_processable) {
-		return -1; /* No processable delayed events */
 	}
 
 	/* Calculate timeout in milliseconds */
@@ -572,9 +503,11 @@ bool events_process(monitor_t *monitor, watch_t *watch, event_t *event, kind_t k
 		return false; /* Error already logged by states_get */
 	}
 
-	/* Check if command is executing for this path - defer events during execution */
-	if (state->node->executing) {
-		log_message(DEBUG, "Deferring event for %s, command is currently executing", event->path);
+	/* Check if command is executing for this path or its root - defer events during execution */
+	entity_t *root = stability_root(monitor, state);
+	if (state->node->executing || (root && root->node->executing)) {
+		log_message(DEBUG, "Deferring event for %s, command is currently executing for self or root %s",
+		            event->path, root ? root->node->path : "N/A");
 		/* Schedule event for reprocessing after a short delay */
 		events_schedule(monitor, watch, event, kind);
 		return false;

@@ -510,7 +510,7 @@ void stability_reset(monitor_t *monitor, entity_t *root) {
 	/* Reset stability verification tracking */
 	root->stability->checks_count = 0;
 	root->stability->checks_failed = 0;
-	root->stability->checks_required = 1;
+	root->stability->checks_required = 0;
 	root->stability->unstable_count = 0;
 	root->stability->stability_lost = false;
 	root->stability->reference_init = true;
@@ -569,29 +569,28 @@ bool stability_execute(monitor_t *monitor, check_t *check, entity_t *root, struc
 		.user_id = getuid()
 	};
 
-	/* Execute commands for the primary watches associated with the stability check */
+	/* Set the executing flag for the root node before starting any commands. */
+	root->node->executing = true;
+
+	/* Execute commands for all watches associated with the stability check */
 	for (int i = 0; i < check->num_watches; i++) {
 		watch_t *watch = check->watches[i];
 
-		/* Get or create state for this specific watch */
+		/* Get or create state for this specific watch to update its command time */
 		entity_t *state = states_get(monitor->states, check->path, ENTITY_DIRECTORY, watch);
 		if (!state) {
 			log_message(WARNING, "Unable to get state for %s with watch %s", check->path, watch->name);
 			continue;
 		}
 
-		/* Set the command executing flag BEFORE submitting to the thread pool to prevent race conditions */
-		state->node->executing = true;
-
 		/* Execute command */
 		log_message(INFO, "Executing deferred command for %s (watch: %s)", check->path, watch->name);
 		if (command_execute(monitor, watch, &synthetic_event, true)) {
 			executed_count++;
+			/* Update the specific state's command time for debouncing purposes */
 			state->command_time = current_time->tv_sec;
 		} else {
 			log_message(WARNING, "Command execution failed for %s (watch: %s)", check->path, watch->name);
-			/* Clear the flag if submission failed */
-			state->node->executing = false;
 		}
 	}
 
