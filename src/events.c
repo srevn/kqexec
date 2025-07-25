@@ -447,15 +447,22 @@ struct timespec *timeout_calculate(monitor_t *monitor, struct timespec *timeout,
 filter_t operation_to_filter(optype_t optype) {
 	switch (optype) {
 		case OP_FILE_CONTENT_CHANGED:
-		case OP_DIR_CONTENT_CHANGED: return EVENT_STRUCTURE;
-		case OP_FILE_CREATED:
 		case OP_FILE_DELETED:
 		case OP_FILE_RENAMED:
+		case OP_FILE_CREATED:
+			return EVENT_CONTENT;
+
+		case OP_DIR_CONTENT_CHANGED:
+		case OP_DIR_DELETED:
 		case OP_DIR_CREATED:
-		case OP_DIR_DELETED: return EVENT_CONTENT;
+			return EVENT_STRUCTURE;
+
 		case OP_FILE_METADATA_CHANGED:
-		case OP_DIR_METADATA_CHANGED: return EVENT_METADATA;
-		default: return EVENT_NONE;
+		case OP_DIR_METADATA_CHANGED:
+			return EVENT_METADATA;
+
+		default:
+			return EVENT_NONE;
 	}
 }
 
@@ -510,12 +517,12 @@ optype_t events_operation(entity_t *state, filter_t filter) {
 		if (state->kind == ENTITY_DIRECTORY && (state->content_changed || state->structure_changed)) {
 			determined_op = OP_DIR_CONTENT_CHANGED;
 			log_message(DEBUG, "Directory %s structure changed", state->node->path);
-		} else if (state->kind == ENTITY_FILE && state->content_changed) {
-			determined_op = OP_FILE_RENAMED;
-			log_message(DEBUG, "File %s content changed", state->node->path);
 		} else if (state->kind == ENTITY_FILE && state->structure_changed) {
 			determined_op = OP_FILE_CONTENT_CHANGED;
 			log_message(DEBUG, "File %s content changed", state->node->path);
+		} else if (state->kind == ENTITY_FILE && state->content_changed) {
+			determined_op = OP_FILE_RENAMED;
+			log_message(DEBUG, "File %s renamed or replaced", state->node->path);
 		} else if (state->metadata_changed) {
 			determined_op = (state->kind == ENTITY_FILE) ? OP_FILE_METADATA_CHANGED : OP_DIR_METADATA_CHANGED;
 			log_message(DEBUG, "Entity %s metadata changed", state->node->path);
