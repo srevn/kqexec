@@ -402,7 +402,7 @@ bool config_parse(config_t *config, const char *filename) {
 				}
 			} else if (strcasecmp(key, "command") == 0) {
 				current_watch->command = strdup(value);
-			} else if (strcasecmp(key, "log_output") == 0) {
+			} else if (strcasecmp(key, "log_output") == 0 || strcasecmp(key, "log") == 0) {
 				if (strcasecmp(value, "true") == 0 || strcmp(value, "1") == 0) {
 					current_watch->log_output = true;
 				} else if (strcasecmp(value, "false") == 0 || strcmp(value, "0") == 0) {
@@ -414,7 +414,7 @@ bool config_parse(config_t *config, const char *filename) {
 					fclose(fp);
 					return false;
 				}
-			} else if (strcasecmp(key, "buffer_output") == 0) {
+			} else if (strcasecmp(key, "buffer_output") == 0 || strcasecmp(key, "buffer") == 0) {
 				if (strcasecmp(value, "true") == 0 || strcmp(value, "1") == 0) {
 					current_watch->buffer_output = true;
 				} else if (strcasecmp(value, "false") == 0 || strcmp(value, "0") == 0) {
