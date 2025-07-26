@@ -432,7 +432,7 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 									/* Add to buffer */
 									if (!buffer_append(&output_buffer, &output_count, &output_capacity, line_buffer)) {
 										log_message(WARNING, "[%s]: Failed to buffer output, switching to real-time",
-									            canonical_watch->name);
+													canonical_watch->name);
 										buffer_output = false;
 										log_message(NOTICE, "[%s]: %s", canonical_watch->name, line_buffer);
 									}
@@ -611,8 +611,23 @@ void command_environment(monitor_t *monitor, const watch_t *watch, const event_t
 /* Clean up command subsystem */
 void command_cleanup(threads_t *threads) {
 	/* Wait for all pending commands to complete */
-	if (threads) {
-		threads_wait(threads);
+	threads_t *exec_threads = threads ? threads : command_threads;
+	if (exec_threads) {
+		/* Check if there are pending commands to wait for */
+		pthread_mutex_lock(&exec_threads->queue_mutex);
+		int pending_commands = exec_threads->queue_size + exec_threads->active_tasks;
+		pthread_mutex_unlock(&exec_threads->queue_mutex);
+		
+		if (pending_commands > 0) {
+			log_message(INFO, "Waiting for %d pending command%s to finish...", 
+			           pending_commands, pending_commands == 1 ? "" : "s");
+		}
+		
+		threads_wait(exec_threads);
+		
+		if (pending_commands > 0) {
+			log_message(INFO, "All pending commands finished");
+		}
 	}
 
 	/* Clear threads reference */

@@ -89,6 +89,7 @@ static void *threads_worker(void *arg) {
 			threads->queue_tail = NULL;
 		}
 		threads->queue_size--;
+		threads->active_tasks++;
 
 		pthread_mutex_unlock(&threads->queue_mutex);
 
@@ -103,7 +104,10 @@ static void *threads_worker(void *arg) {
 		}
 
 		/* Signal that work is done */
+		pthread_mutex_lock(&threads->queue_mutex);
+		threads->active_tasks--;
 		pthread_cond_signal(&threads->work_done);
+		pthread_mutex_unlock(&threads->queue_mutex);
 	}
 
 	return NULL;
@@ -143,6 +147,7 @@ threads_t *threads_create(void) {
 	threads->queue_head = NULL;
 	threads->queue_tail = NULL;
 	threads->queue_size = 0;
+	threads->active_tasks = 0;
 	threads->shutdown = false;
 
 	/* Create worker threads */
@@ -258,7 +263,7 @@ void threads_wait(threads_t *threads) {
 	if (!threads) return;
 
 	pthread_mutex_lock(&threads->queue_mutex);
-	while (threads->queue_size > 0) {
+	while (threads->queue_size > 0 || threads->active_tasks > 0) {
 		pthread_cond_wait(&threads->work_done, &threads->queue_mutex);
 	}
 	pthread_mutex_unlock(&threads->queue_mutex);

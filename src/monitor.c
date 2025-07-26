@@ -680,6 +680,9 @@ bool monitor_reload(monitor_t *monitor) {
 	log_message(INFO, "Reloading configuration from %s", monitor->config_path);
 	log_message(DEBUG, "Current configuration has %d watches", monitor->num_watches);
 
+	/* Wait for any pending commands to finish before destroying state */
+	command_cleanup(NULL);
+
 	/* Save existing config to compare later */
 	config_t *old_config = monitor->config;
 

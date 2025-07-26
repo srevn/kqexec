@@ -24,6 +24,7 @@ typedef struct threads {
 	task_t *queue_head;                    /* Head of work queue */
 	task_t *queue_tail;                    /* Tail of work queue */
 	int queue_size;                        /* Current queue size */
+	int active_tasks;                      /* Number of tasks currently executing */
 	int thread_count;                      /* Number of active threads */
 	bool shutdown;                         /* Shutdown flag */
 	pthread_mutex_t queue_mutex;           /* Queue access mutex */
