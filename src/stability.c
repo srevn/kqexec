@@ -149,7 +149,7 @@ void stability_defer(monitor_t *monitor, entity_t *state) {
 		}
 	}
 
-	/* Ensure the root state has a scanner before we use it. */
+	/* Ensure the root state has a scanner before we use it */
 	if (!root->scanner) {
 		root->scanner = scanner_create(root->node->path);
 		if (!root->scanner) {
@@ -521,7 +521,7 @@ void stability_reset(monitor_t *monitor, entity_t *root) {
 	/* Reset stability verification tracking */
 	root->stability->checks_count = 0;
 	root->stability->checks_failed = 0;
-	root->stability->checks_required = 0;
+	root->stability->checks_required = 1;
 	root->stability->unstable_count = 0;
 	root->stability->stability_lost = false;
 	root->stability->reference_init = true;

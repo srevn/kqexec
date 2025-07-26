@@ -87,7 +87,7 @@ static void state_free_entity(entity_t *state) {
 }
 
 /* Free resources used by a path state and all its entity states */
-static void state_free_node(node_t *node) {
+static void node_free(node_t *node) {
 	if (node) {
 		entity_t *state = node->entities;
 		while (state) {
@@ -114,7 +114,7 @@ void states_destroy(states_t *states) {
 		node_t *node = states->buckets[i];
 		while (node) {
 			node_t *next = node->next;
-			state_free_node(node);
+			node_free(node);
 			node = next;
 		}
 		states->buckets[i] = NULL;
@@ -268,7 +268,7 @@ entity_t *states_get(states_t *states, const char *path, kind_t kind, watch_t *w
 		/* If the node was newly created for this entity, free it to prevent a leak */
 		if (!node->entities) {
 			states->buckets[hash] = node->next;
-			state_free_node(node);
+			node_free(node);
 		}
 		pthread_mutex_unlock(&states->mutexes[hash]);
 		return NULL;
@@ -321,7 +321,7 @@ entity_t *states_get(states_t *states, const char *path, kind_t kind, watch_t *w
 				state_free_entity(state);
 				if (!node->entities) {
 					states->buckets[hash] = node->next;
-					state_free_node(node);
+					node_free(node);
 				}
 				pthread_mutex_unlock(&states->mutexes[hash]);
 				return NULL;
