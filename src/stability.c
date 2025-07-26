@@ -149,9 +149,20 @@ void stability_defer(monitor_t *monitor, entity_t *state) {
 		}
 	}
 
-	/* Force root state to be active */
+	/* Ensure the root state has a scanner before we use it. */
+	if (!root->scanner) {
+		root->scanner = scanner_create(root->node->path);
+		if (!root->scanner) {
+			log_message(ERROR, "Failed to create scanner for root %s in stability_defer", root->node->path);
+			return;
+		}
+	}
+
+	/* Force root state to be active and update its activity time to now */
 	root->scanner->active = true;
 	root->stability->stability_lost = false;
+	clock_gettime(CLOCK_MONOTONIC, &root->scanner->latest_time);
+	scanner_sync(monitor, root->node, root); /* Propagate new activity time */
 
 	/* Initialize reference stats if needed */
 	if (!root->stability->reference_init) {
