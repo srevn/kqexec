@@ -547,6 +547,14 @@ bool events_process(monitor_t *monitor, watch_t *watch, event_t *event, kind_t k
 		log_message(INFO, "Executing command for %s (watch: %s, operation: %d)",
 		            state->node->path, watch->name, optype);
 
+		/* Set executing flag to prevent race condition for async commands */
+		entity_t *root = stability_root(monitor, state);
+		if (root) {
+			root->node->executing = true;
+		} else {
+			state->node->executing = true;
+		}
+
 		if (command_execute(monitor, watch, &synthetic_event, true)) {
 			log_message(INFO, "Command execution successful for %s", state->node->path);
 
@@ -559,6 +567,13 @@ bool events_process(monitor_t *monitor, watch_t *watch, event_t *event, kind_t k
 			return true;
 		} else {
 			log_message(WARNING, "Command execution failed for %s", state->node->path);
+			
+			/* Clear executing flag on failure since command won't run */
+			if (root) {
+				root->node->executing = false;
+			} else {
+				state->node->executing = false;
+			}
 			return false;
 		}
 	} else {
