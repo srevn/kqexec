@@ -70,8 +70,8 @@ bool stability_ready(monitor_t *monitor, entity_t *state, optype_t optype, int b
 	/* Record activity (updates timestamps and root tree time) */
 	scanner_track(monitor, state, optype);
 
-	/* Directory content changes and deletions defer execution to the stability system */
-	if (optype == OP_DIR_CONTENT_CHANGED || optype == OP_DIR_DELETED) {
+	/* Defer all directory-related operations to the stability system */
+	if (state->kind == ENTITY_DIRECTORY) {
 		entity_t *root = stability_root(monitor, state);
 		if (root && monitor) {
 			/* Always trigger a deferred check; queue deduplicates */
