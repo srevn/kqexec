@@ -570,15 +570,15 @@ void command_environment(monitor_t *monitor, const watch_t *watch, const event_t
 	}
 
 	/* KQ_TRIGGER_FILE_PATH - full path of the file that triggered the event */
-	const char *trigger_file_path = event->path; /* Default to event path */
+	const char *trigger_file = event->path; /* Default to event path */
 	entity_t *state = states_get(monitor->states, event->path, ENTITY_UNKNOWN, (watch_t *) watch);
 	if (state) {
 		entity_t *root = stability_root(monitor, state);
 		if (root && root->trigger) {
-			trigger_file_path = root->trigger;
+			trigger_file = root->trigger;
 		}
 	}
-	setenv("KQ_TRIGGER_FILE_PATH", trigger_file_path, 1);
+	setenv("KQ_TRIGGER_FILE_PATH", trigger_file, 1);
 
 	/* KQ_USER_ID - numeric user ID that caused the event*/
 	snprintf(buffer, sizeof(buffer), "%d", event->user_id);

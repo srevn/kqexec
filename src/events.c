@@ -95,7 +95,6 @@ void events_schedule(monitor_t *monitor, watch_t *watch, event_t *event, kind_t 
 	for (int i = 0; i < monitor->delayed_count; i++) {
 		delayed_t *existing = &monitor->delayed_events[i];
 		if (existing->watch == watch && strcmp(existing->event.path, event->path) == 0) {
-
 			/* Merge event types to preserve all event information */
 			existing->event.type |= event->type;
 
@@ -157,7 +156,6 @@ void events_delayed(monitor_t *monitor) {
 		/* Check if this event is ready to process */
 		if (current_time.tv_sec > delayed->process_time.tv_sec ||
 		    (current_time.tv_sec == delayed->process_time.tv_sec && current_time.tv_nsec >= delayed->process_time.tv_nsec)) {
-
 			log_message(DEBUG, "Delayed event for %s (watch: %s) expired, initiating stability check",
 			            delayed->event.path, delayed->watch->name);
 
@@ -283,6 +281,9 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 					if (sync) {
 						events_sync_add(sync, watcher->path);
 					}
+
+					/* Process pending watches for event-driven path traversal */
+					pending_process(monitor, watcher->path);
 				}
 
 				/* Check if this watch has a processing delay configured */
@@ -525,6 +526,12 @@ bool events_process(monitor_t *monitor, watch_t *watch, event_t *event, kind_t k
 
 	log_message(DEBUG, "Determined operation type %d for %s", optype, state->node->path);
 
+	/* Handle directory deletion for pending watches */
+	if (optype == OP_DIR_DELETED && monitor->num_pending > 0) {
+		log_message(DEBUG, "Directory deleted, checking pending watches: %s", state->node->path);
+		pending_delete(monitor, state->node->path);
+	}
+
 	/* Check if operation is included in watch mask */
 	filter_t filter_for_mask = operation_to_filter(optype);
 	if ((watch->filter & filter_for_mask) == 0) {
@@ -567,7 +574,7 @@ bool events_process(monitor_t *monitor, watch_t *watch, event_t *event, kind_t k
 			return true;
 		} else {
 			log_message(WARNING, "Command execution failed for %s", state->node->path);
-			
+
 			/* Clear executing flag on failure since command won't run */
 			if (root) {
 				root->node->executing = false;

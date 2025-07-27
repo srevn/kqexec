@@ -7,6 +7,7 @@
 #include "config.h"
 #include "events.h"
 #include "states.h"
+#include "pending.h"
 
 /* Monitor configuration */
 #define MAX_WATCHES 128
@@ -34,6 +35,10 @@ typedef struct monitor {
 	/* Watch tracking */
 	watcher_t **watches;                   /* Array of watch information */
 	int num_watches;                       /* Number of watches */
+	
+	/* Pending watches for non-existent paths */
+	pending_t **pending;                   /* Array of pending watch information */
+	int num_pending;                       /* Number of pending watches */
 
 	/* Queue for delayed events */
 	queue_t *check_queue;                  /* Deferred checks queue */
@@ -61,6 +66,7 @@ bool monitor_poll(monitor_t *monitor);
 /* Watch management */
 bool monitor_add(monitor_t *monitor, watch_t *watch);
 bool monitor_tree(monitor_t *monitor, const char *dir_path, watch_t *watch);
+bool monitor_path(monitor_t *monitor, const char *path, watch_t *watch);
 
 /* Path synchronization */
 bool monitor_sync(monitor_t *monitor, const char *path);

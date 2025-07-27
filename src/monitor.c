@@ -123,6 +123,8 @@ monitor_t *monitor_create(config_t *config) {
 	monitor->kq = -1;
 	monitor->watches = NULL;
 	monitor->num_watches = 0;
+	monitor->pending = NULL;
+	monitor->num_pending = 0;
 	monitor->running = false;
 	monitor->reload = false;
 
@@ -170,6 +172,10 @@ void monitor_destroy(monitor_t *monitor) {
 	}
 
 	free(monitor->watches);
+
+	/* Clean up pending watches */
+	pending_cleanup(monitor);
+
 	free(monitor->config_path);
 
 	/* Clean up the check queue */
@@ -225,7 +231,7 @@ static bool monitor_kq(monitor_t *monitor, watcher_t *watcher) {
 }
 
 /* Add a watch for a single path, creating or sharing file descriptors as needed */
-static bool monitor_path(monitor_t *monitor, const char *path, watch_t *watch) {
+bool monitor_path(monitor_t *monitor, const char *path, watch_t *watch) {
 	/* Check if a watcher for this path and watch config already exists to avoid duplicates */
 	for (int i = 0; i < monitor->num_watches; i++) {
 		if (strcmp(monitor->watches[i]->path, path) == 0 && monitor->watches[i]->watch == watch) {
@@ -368,8 +374,15 @@ bool monitor_add(monitor_t *monitor, watch_t *watch) {
 	/* Get file/directory stats */
 	struct stat info;
 	if (stat(watch->path, &info) == -1) {
-		log_message(WARNING, "Failed to stat %s: %s. It may have been deleted", watch->path, strerror(errno));
-		return true; /* Not a fatal error, just skip this watch */
+		if (errno == ENOENT) {
+			/* Path does not exist - add to pending watches for event-driven monitoring */
+			log_message(DEBUG, "Path does not exist, adding to pending watches: %s", watch->path);
+			return pending_add(monitor, watch->path, watch);
+		} else {
+			/* Other stat error */
+			log_message(WARNING, "Failed to stat %s: %s. It may have been deleted", watch->path, strerror(errno));
+			return true; /* Not a fatal error, just skip this watch */
+		}
 	}
 
 	/* Handle directories (possibly recursively) */
@@ -518,8 +531,8 @@ bool monitor_poll(monitor_t *monitor) {
 	nev = kevent(monitor->kq, NULL, 0, events, MAX_EVENTS, p_timeout);
 
 	/* Get time after kevent returns */
-	struct timespec after_kevent_time;
-	clock_gettime(CLOCK_MONOTONIC, &after_kevent_time);
+	struct timespec kevent_time;
+	clock_gettime(CLOCK_MONOTONIC, &kevent_time);
 
 	/* Handle kevent result */
 	if (nev == -1) {
@@ -540,7 +553,7 @@ bool monitor_poll(monitor_t *monitor) {
 		events_sync_init(&sync);
 
 		/* Process events and collect sync requests */
-		events_handle(monitor, events, nev, &after_kevent_time, &sync);
+		events_handle(monitor, events, nev, &kevent_time, &sync);
 
 		/* Handle any sync requests */
 		if (sync.paths_count > 0) {
@@ -563,7 +576,7 @@ bool monitor_poll(monitor_t *monitor) {
 	}
 
 	/* Check deferred scans */
-	stability_process(monitor, &after_kevent_time);
+	stability_process(monitor, &kevent_time);
 
 	/* Process delayed events */
 	events_delayed(monitor);
@@ -671,6 +684,9 @@ bool monitor_reload(monitor_t *monitor) {
 		log_message(DEBUG, "Cleared %d delayed events during config reload", monitor->delayed_count);
 		monitor->delayed_capacity = 0;
 	}
+
+	/* Clear pending watches that may reference old watches */
+	pending_cleanup(monitor);
 
 	/* Save old watches to be destroyed later */
 	watcher_t **stale_watches = monitor->watches;
