@@ -130,6 +130,66 @@ const char *filter_to_string(filter_t event) {
 	return buffer;
 }
 
+/* Deep copy a watch with a new path - creates completely independent watch */
+watch_t *watch_deep_copy(const watch_t *original, const char *new_path) {
+	if (!original || !new_path) {
+		return NULL;
+	}
+
+	watch_t *copy = calloc(1, sizeof(watch_t));
+	if (!copy) {
+		log_message(ERROR, "Failed to allocate memory for watch copy");
+		return NULL;
+	}
+
+	/* Copy all fields */
+	copy->name = original->name ? strdup(original->name) : NULL;
+	copy->path = strdup(new_path);  /* Use the resolved path */
+	copy->target = original->target;
+	copy->filter = original->filter;
+	copy->command = original->command ? strdup(original->command) : NULL;
+	copy->log_output = original->log_output;
+	copy->buffer_output = original->buffer_output;  
+	copy->recursive = original->recursive;
+	copy->hidden = original->hidden;
+	copy->environment = original->environment;
+	copy->complexity = original->complexity;
+	copy->processing_delay = original->processing_delay;
+
+	/* Check for allocation failures */
+	if ((original->name && !copy->name) || !copy->path || (original->command && !copy->command)) {
+		log_message(ERROR, "Failed to copy watch strings");
+		if (copy->name) free(copy->name);
+		if (copy->path) free(copy->path);  
+		if (copy->command) free(copy->command);
+		free(copy);
+		return NULL;
+	}
+
+	return copy;
+}
+
+/* Add a dynamically created watch to the configuration */
+bool config_add_dynamic_watch(config_t *config, watch_t *watch) {
+	if (!config || !watch) {
+		return false;
+	}
+
+	/* Expand the watches array */
+	watch_t **new_watches = realloc(config->watches, (config->num_watches + 1) * sizeof(watch_t *));
+	if (!new_watches) {
+		log_message(ERROR, "Failed to expand watches array for dynamic watch");
+		return false;
+	}
+
+	config->watches = new_watches;
+	config->watches[config->num_watches] = watch;
+	config->num_watches++;
+
+	log_message(DEBUG, "Added dynamic watch: %s", watch->path);
+	return true;
+}
+
 /* Add a watch entry to the configuration */
 static bool config_add_watch(config_t *config, watch_t *watch) {
 	watch_t **new_watches;

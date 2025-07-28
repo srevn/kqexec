@@ -50,6 +50,7 @@ typedef struct monitor {
 	bool running;                          /* Monitor running flag */
 	bool reload;                           /* Flag to indicate reload requested */
 	char *config_path;                     /* Copy of config file path for reloading */
+	watch_t *glob_watch;                   /* Special watch for intermediate glob directories */
 } monitor_t;
 
 /* Monitor lifecycle management */
@@ -64,7 +65,7 @@ bool monitor_reload(monitor_t *monitor);
 bool monitor_poll(monitor_t *monitor);
 
 /* Watch management */
-bool monitor_add(monitor_t *monitor, watch_t *watch);
+bool monitor_add(monitor_t *monitor, watch_t *watch, bool skip_pending);
 bool monitor_tree(monitor_t *monitor, const char *dir_path, watch_t *watch);
 bool monitor_path(monitor_t *monitor, const char *path, watch_t *watch);
 

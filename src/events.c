@@ -5,6 +5,7 @@
 #include <sys/time.h>
 #include <sys/event.h>
 #include <sys/stat.h>
+#include <fnmatch.h>
 
 #include "events.h"
 #include "monitor.h"
@@ -281,8 +282,10 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 					if (sync) {
 						events_sync_add(sync, watcher->path);
 					}
+				}
 
-					/* Process pending watches for event-driven path traversal */
+				/* Process pending watches for any event that might create new paths */
+				if (monitor->num_pending > 0) {
 					pending_process(monitor, watcher->path);
 				}
 
@@ -477,6 +480,11 @@ bool events_process(monitor_t *monitor, watch_t *watch, event_t *event, kind_t k
 		return false;
 	}
 
+	/* Handle intermediate glob events - they only trigger pending_process, not commands */
+	if (watch->name != NULL && strcmp(watch->name, "__glob_intermediate__") == 0) {
+		return false; /* Don't process further, event has served its purpose */
+	}
+
 	/* Additional safety checks for watch structure */
 	if (!watch->name || !watch->command) {
 		log_message(ERROR, "events_process: Watch has NULL name or command");
@@ -487,7 +495,7 @@ bool events_process(monitor_t *monitor, watch_t *watch, event_t *event, kind_t k
 	            event->path, watch->name, filter_to_string(event->type));
 
 	/* Handle config file events specially for hot reload */
-	if (watch->name != NULL && strcmp(watch->name, "__config_file__") == 0) {
+	if (strcmp(watch->name, "__config_file__") == 0) {
 		log_message(NOTICE, "Configuration changed: %s", event->path);
 		if (monitor != NULL) {
 			monitor->reload = true;

@@ -151,6 +151,21 @@ monitor_t *monitor_create(config_t *config) {
 	monitor->delayed_count = 0;
 	monitor->delayed_capacity = 0;
 
+	/* Initialize the special watch for intermediate glob directories */
+	monitor->glob_watch = calloc(1, sizeof(watch_t));
+	if (!monitor->glob_watch) {
+		log_message(ERROR, "Failed to allocate memory for glob watch");
+		states_destroy(monitor->states);
+		queue_destroy(monitor->check_queue);
+		free(monitor->config_path);
+		free(monitor);
+		return NULL;
+	}
+	monitor->glob_watch->name = strdup("__glob_intermediate__");
+	monitor->glob_watch->target = WATCH_DIRECTORY;
+	monitor->glob_watch->filter = EVENT_STRUCTURE;
+	monitor->glob_watch->command = NULL; /* No command execution */
+
 	return monitor;
 }
 
@@ -191,6 +206,12 @@ void monitor_destroy(monitor_t *monitor) {
 
 	/* Clean up state table */
 	states_destroy(monitor->states);
+
+	/* Destroy the special glob watch */
+	if (monitor->glob_watch) {
+		free(monitor->glob_watch->name);
+		free(monitor->glob_watch);
+	}
 
 	/* Destroy the configuration */
 	config_destroy(monitor->config);
@@ -365,7 +386,7 @@ bool monitor_tree(monitor_t *monitor, const char *dir_path, watch_t *watch) {
 }
 
 /* Add a watch for a file or directory based on a watch entry */
-bool monitor_add(monitor_t *monitor, watch_t *watch) {
+bool monitor_add(monitor_t *monitor, watch_t *watch, bool skip_pending) {
 	if (monitor == NULL || watch == NULL || watch->path == NULL) {
 		log_message(ERROR, "Invalid arguments to monitor_add");
 		return false;
@@ -377,14 +398,20 @@ bool monitor_add(monitor_t *monitor, watch_t *watch) {
 	/* Get file/directory stats */
 	struct stat info;
 	if (stat(watch->path, &info) == -1) {
-		if (errno == ENOENT) {
+		if (errno == ENOENT && !skip_pending) {
 			/* Path does not exist - add to pending watches for event-driven monitoring */
 			log_message(DEBUG, "Path does not exist, adding to pending watches: %s", watch->path);
-			return pending_add(monitor, watch->path, watch);
+			if (pending_add(monitor, watch->path, watch)) {
+				/* Immediately process the parent to catch existing paths */
+				pending_process(monitor, monitor->pending[monitor->num_pending - 1]->current_parent);
+				return true;
+			}
+			return false;
 		} else {
-			/* Other stat error */
-			log_message(WARNING, "Failed to stat %s: %s. It may have been deleted", watch->path, strerror(errno));
-			return true; /* Not a fatal error, just skip this watch */
+			/* Other stat error or skipping pending */
+			log_message(WARNING, "Failed to stat %s: %s%s", watch->path, strerror(errno),
+			           skip_pending ? " (skipping pending)" : ". It may have been deleted");
+			return skip_pending ? false : true; /* Fail if skipping pending, else not fatal */
 		}
 	}
 
@@ -394,7 +421,7 @@ bool monitor_add(monitor_t *monitor, watch_t *watch) {
 			log_message(WARNING, "%s is a directory but configured as a file", watch->path);
 			watch->target = WATCH_DIRECTORY;
 		}
-		return monitor_tree(monitor, watch->path, watch); /* false = don't skip existing */
+		return monitor_tree(monitor, watch->path, watch);
 	}
 	/* Handle regular files */
 	else if (S_ISREG(info.st_mode)) {
@@ -463,7 +490,7 @@ bool monitor_setup(monitor_t *monitor) {
 
 	/* Add watches for each entry in the configuration */
 	for (int i = 0; i < monitor->config->num_watches; i++) {
-		if (!monitor_add(monitor, monitor->config->watches[i])) {
+		if (!monitor_add(monitor, monitor->config->watches[i], false)) {
 			log_message(WARNING, "Failed to add watch for %s, skipping", monitor->config->watches[i]->path);
 		}
 	}
@@ -491,7 +518,7 @@ bool monitor_setup(monitor_t *monitor) {
 				monitor->config->watches[monitor->config->num_watches] = config_watch;
 				monitor->config->num_watches++;
 
-				if (!monitor_add(monitor, config_watch)) {
+				if (!monitor_add(monitor, config_watch, false)) {
 					log_message(WARNING, "Failed to add config file watch for %s", monitor->config_path);
 					/* Remove from config since it wasn't added to monitor */
 					monitor->config->num_watches--;
@@ -701,7 +728,7 @@ bool monitor_reload(monitor_t *monitor) {
 
 	/* Add watches from the new configuration (including the config file watch) */
 	for (int i = 0; i < new_config->num_watches; i++) {
-		if (!monitor_add(monitor, new_config->watches[i])) {
+		if (!monitor_add(monitor, new_config->watches[i], false)) {
 			log_message(WARNING, "Failed to add watch for %s", new_config->watches[i]->path);
 		}
 	}
@@ -779,6 +806,9 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 				if (watcher->watch->target == WATCH_DIRECTORY && watcher->watch->recursive) {
 					monitor_prune(monitor, path);
 				}
+
+				/* Handle pending watches that might be affected by this deletion */
+				pending_delete(monitor, path);
 
 				/* Remove this watch */
 				watcher_destroy(monitor, watcher);
