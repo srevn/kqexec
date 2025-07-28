@@ -232,6 +232,9 @@ static bool monitor_kq(monitor_t *monitor, watcher_t *watcher) {
 
 /* Add a watch for a single path, creating or sharing file descriptors as needed */
 bool monitor_path(monitor_t *monitor, const char *path, watch_t *watch) {
+	/* Clean up any stale watchers for this path first */
+	monitor_sync(monitor, path);
+	
 	/* Check if a watcher for this path and watch config already exists to avoid duplicates */
 	for (int i = 0; i < monitor->num_watches; i++) {
 		if (strcmp(monitor->watches[i]->path, path) == 0 && monitor->watches[i]->watch == watch) {

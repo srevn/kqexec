@@ -526,10 +526,30 @@ bool events_process(monitor_t *monitor, watch_t *watch, event_t *event, kind_t k
 
 	log_message(DEBUG, "Determined operation type %d for %s", optype, state->node->path);
 
-	/* Handle directory deletion for pending watches */
-	if (optype == OP_DIR_DELETED && monitor->num_pending > 0) {
-		log_message(DEBUG, "Directory deleted, checking pending watches: %s", state->node->path);
-		pending_delete(monitor, state->node->path);
+	/* Handle directory content changes - check for deleted child directories */
+	if (optype == OP_DIR_CONTENT_CHANGED && monitor->num_pending > 0) {
+		log_message(DEBUG, "Directory content changed, checking for deleted child directories: %s", state->node->path);
+		
+		/* Check all pending watches to see if any are waiting for children of this directory */
+		for (int i = 0; i < monitor->num_pending; i++) {
+			pending_t *pending = monitor->pending[i];
+			if (!pending || !pending->current_parent) continue;
+			
+			/* Check if this pending watch's current_parent is a child of the changed directory */
+			size_t parent_len = strlen(state->node->path);
+			if (strlen(pending->current_parent) > parent_len &&
+			    strncmp(pending->current_parent, state->node->path, parent_len) == 0 &&
+			    pending->current_parent[parent_len] == '/') {
+				
+				/* Check if the current_parent still exists */
+				struct stat info;
+				if (stat(pending->current_parent, &info) != 0) {
+					log_message(DEBUG, "Detected deletion of pending watch parent: %s", pending->current_parent);
+					pending_delete(monitor, pending->current_parent);
+					break; /* pending_delete modifies the list, so restart the loop */
+				}
+			}
+		}
 	}
 
 	/* Check if operation is included in watch mask */
