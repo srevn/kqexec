@@ -630,6 +630,8 @@ void command_cleanup(threads_t *threads) {
 		}
 	}
 
-	/* Clear threads reference */
-	command_threads = NULL;
+	/* If a specific thread pool is being cleaned up, clear the reference */
+	if (threads != NULL) {
+		command_threads = NULL;
+	}
 }
