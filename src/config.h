@@ -42,6 +42,10 @@ typedef struct watch {
 	bool environment;                      /* Whether to inject KQ_* environment variables */
 	double complexity;                     /* Multiplier for quiet period calculation (default: 1.0) */
 	int processing_delay;                  /* Delay in milliseconds before processing events (0 = no delay) */
+	
+	/* Dynamic watch tracking fields */
+	bool is_dynamic;                       /* True if created from glob promotion */
+	char *source_pattern;                  /* Original glob pattern that created this watch */
 } watch_t;
 
 /* Configuration file section parsing state */
@@ -68,6 +72,7 @@ const char *filter_to_string(filter_t filter);
 
 /* Watch management functions */
 watch_t *watch_deep_copy(const watch_t *original, const char *new_path);
+watch_t *watch_deep_copy_dynamic(const watch_t *original, const char *new_path, const char *source_pattern);
 bool config_add_dynamic_watch(config_t *config, watch_t *watch);
 
 #endif /* CONFIG_H */

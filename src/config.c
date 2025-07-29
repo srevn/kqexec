@@ -155,12 +155,44 @@ watch_t *watch_deep_copy(const watch_t *original, const char *new_path) {
 	copy->environment = original->environment;
 	copy->complexity = original->complexity;
 	copy->processing_delay = original->processing_delay;
+	
+	/* Initialize dynamic tracking fields (not dynamic by default) */
+	copy->is_dynamic = false;
+	copy->source_pattern = NULL;
 
 	/* Check for allocation failures */
 	if ((original->name && !copy->name) || !copy->path || (original->command && !copy->command)) {
 		log_message(ERROR, "Failed to copy watch strings");
 		if (copy->name) free(copy->name);
 		if (copy->path) free(copy->path);  
+		if (copy->command) free(copy->command);
+		free(copy);
+		return NULL;
+	}
+
+	return copy;
+}
+
+/* Deep copy a watch with a new path and mark as dynamic with source pattern */
+watch_t *watch_deep_copy_dynamic(const watch_t *original, const char *new_path, const char *source_pattern) {
+	if (!original || !new_path || !source_pattern) {
+		return NULL;
+	}
+
+	/* First create a regular deep copy */
+	watch_t *copy = watch_deep_copy(original, new_path);
+	if (!copy) {
+		return NULL;
+	}
+
+	/* Mark as dynamic and set source pattern */
+	copy->is_dynamic = true;
+	copy->source_pattern = strdup(source_pattern);
+	
+	if (!copy->source_pattern) {
+		log_message(ERROR, "Failed to copy source pattern for dynamic watch");
+		if (copy->name) free(copy->name);
+		if (copy->path) free(copy->path);
 		if (copy->command) free(copy->command);
 		free(copy);
 		return NULL;
@@ -225,6 +257,7 @@ static void config_destroy_watch(watch_t *watch) {
 	free(watch->name);
 	free(watch->path);
 	free(watch->command);
+	free(watch->source_pattern);  /* Free dynamic tracking field */
 	free(watch);
 }
 
@@ -408,6 +441,10 @@ bool config_parse(config_t *config, const char *filename) {
 			current_watch->environment = false; /* Default to not injecting environment variables */
 			current_watch->processing_delay = 0; /* Default to no delay */
 			current_watch->complexity = 1.0; /* Default complexity multiplier */
+			
+			/* Initialize dynamic tracking fields (config watches are not dynamic) */
+			current_watch->is_dynamic = false;
+			current_watch->source_pattern = NULL;
 			state = SECTION_ENTRY;
 
 			continue;

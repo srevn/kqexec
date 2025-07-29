@@ -165,6 +165,10 @@ monitor_t *monitor_create(config_t *config) {
 	monitor->glob_watch->target = WATCH_DIRECTORY;
 	monitor->glob_watch->filter = EVENT_STRUCTURE;
 	monitor->glob_watch->command = NULL; /* No command execution */
+	
+	/* Initialize dynamic tracking fields (glob intermediate watch is not dynamic) */
+	monitor->glob_watch->is_dynamic = false;
+	monitor->glob_watch->source_pattern = NULL;
 
 	return monitor;
 }
@@ -210,6 +214,7 @@ void monitor_destroy(monitor_t *monitor) {
 	/* Destroy the special glob watch */
 	if (monitor->glob_watch) {
 		free(monitor->glob_watch->name);
+		free(monitor->glob_watch->source_pattern);  /* Free dynamic tracking field */
 		free(monitor->glob_watch);
 	}
 
@@ -460,6 +465,10 @@ static watch_t *monitor_config(const char *config_file_path) {
 	config_watch->environment = false;
 	config_watch->complexity = 1.0;
 	config_watch->processing_delay = 100;
+	
+	/* Initialize dynamic tracking fields (config watches are not dynamic) */
+	config_watch->is_dynamic = false;
+	config_watch->source_pattern = NULL;
 
 	/* Check for strdup failures, which can return NULL on error */
 	if (!config_watch->name || !config_watch->path || !config_watch->command) {
@@ -717,6 +726,43 @@ bool monitor_reload(monitor_t *monitor) {
 
 	/* Clear pending watches that may reference old watches */
 	pending_cleanup(monitor);
+
+	/* Preserve dynamic watches whose source patterns still exist in the new configuration */
+	for (int i = 0; i < old_config->num_watches; i++) {
+		watch_t *old_watch = old_config->watches[i];
+		if (old_watch->is_dynamic && old_watch->source_pattern) {
+			/* Check if the source pattern exists in the new configuration */
+			bool pattern_exists = false;
+			for (int j = 0; j < new_config->num_watches; j++) {
+				watch_t *new_watch = new_config->watches[j];
+				if (!new_watch->is_dynamic && strcmp(new_watch->path, old_watch->source_pattern) == 0) {
+					pattern_exists = true;
+					break;
+				}
+			}
+			
+			if (pattern_exists) {
+				/* Create a copy of the dynamic watch to preserve it */
+				watch_t *preserved_watch = watch_deep_copy_dynamic(old_watch, old_watch->path, old_watch->source_pattern);
+				if (preserved_watch && config_add_dynamic_watch(new_config, preserved_watch)) {
+					log_message(INFO, "Preserved dynamic watch: %s (from pattern: %s)", 
+					           preserved_watch->path, preserved_watch->source_pattern);
+				} else {
+					log_message(WARNING, "Failed to preserve dynamic watch: %s", old_watch->path);
+					if (preserved_watch) {
+						free(preserved_watch->name);
+						free(preserved_watch->path);
+						free(preserved_watch->command);  
+						free(preserved_watch->source_pattern);
+						free(preserved_watch);
+					}
+				}
+			} else {
+				log_message(DEBUG, "Dynamic watch not preserved - source pattern removed: %s (pattern: %s)", 
+				           old_watch->path, old_watch->source_pattern);
+			}
+		}
+	}
 
 	/* Save old watches to be destroyed later */
 	watcher_t **stale_watches = monitor->watches;

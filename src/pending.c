@@ -430,8 +430,8 @@ void pending_process(monitor_t *monitor, const char *parent_path) {
 								
 								log_message(INFO, "pending_process: Glob pattern fully matched, promoting: %s", matches[m]);
 								
-								/* Create a deep copy with the resolved path */
-								watch_t *resolved_watch = watch_deep_copy(pending->watch, matches[m]);
+								/* Create a dynamic deep copy with the resolved path and source pattern tracking */
+								watch_t *resolved_watch = watch_deep_copy_dynamic(pending->watch, matches[m], pending->glob_pattern);
 								if (!resolved_watch) {
 									log_message(ERROR, "Failed to create resolved watch for: %s", matches[m]);
 									continue;
