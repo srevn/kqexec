@@ -28,6 +28,6 @@ void pending_cleanup(monitor_t *monitor);
 
 /* Glob scanning functions */
 char **pending_scan(const char *pattern, int *count);
-void pending_free_matches(char **matches, int count);
+void pending_free(char **matches, int count);
 
 #endif /* PENDING_H */

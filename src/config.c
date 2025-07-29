@@ -202,7 +202,7 @@ watch_t *watch_deep_copy_dynamic(const watch_t *original, const char *new_path, 
 }
 
 /* Add a dynamically created watch to the configuration */
-bool config_add_dynamic_watch(config_t *config, watch_t *watch) {
+bool config_dynamic_watch(config_t *config, watch_t *watch) {
 	if (!config || !watch) {
 		return false;
 	}

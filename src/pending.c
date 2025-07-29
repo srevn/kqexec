@@ -355,14 +355,14 @@ bool pending_add(monitor_t *monitor, const char *target_path, watch_t *watch) {
 	pending->parent_watcher = NULL;
 
 	/* Add watch on the parent directory */
-	watch_t *watch_to_use = is_glob ? monitor->glob_watch : watch;
+	watch_t *pending_watch = is_glob ? monitor->glob_watch : watch;
 	if (is_glob) {
 		/* Copy relevant properties from original watch */
 		monitor->glob_watch->recursive = watch->recursive;
 		monitor->glob_watch->hidden = watch->hidden;
 	}
 
-	if (!monitor_path(monitor, parent, watch_to_use)) {
+	if (!monitor_path(monitor, parent, pending_watch)) {
 		log_message(WARNING, "Failed to add parent watch for %s, parent: %s", target_path, parent);
 		pending_destroy(pending);
 		return false;
@@ -393,220 +393,231 @@ bool pending_add(monitor_t *monitor, const char *target_path, watch_t *watch) {
 	return true;
 }
 
+/* Promote a fully matched glob path to a dynamic watch */
+static void pending_promote_glob(monitor_t *monitor, pending_t *pending, const char *path) {
+	/* Full pattern matched - create independent watch */
+	if (dynamic_watch_exists(monitor, path, pending->glob_pattern)) {
+		log_message(DEBUG, "Dynamic watch for %s from pattern %s already exists.", path, pending->glob_pattern);
+		return;
+	}
+	
+	/* Create a dynamic deep copy with the resolved path and source pattern tracking */
+	watch_t *resolved_watch = watch_deep_copy_dynamic(pending->watch, path, pending->glob_pattern);
+	if (!resolved_watch) {
+		log_message(ERROR, "Failed to create resolved watch for: %s", path);
+		return;
+	}
+	
+	/* Add to configuration for proper lifecycle management */
+	if (!config_dynamic_watch(monitor->config, resolved_watch)) {
+		log_message(ERROR, "Failed to add dynamic watch to config: %s", path);
+		/* Clean up manually since config addition failed */
+		free(resolved_watch->name);
+		free(resolved_watch->path);
+		free(resolved_watch->command);
+		free(resolved_watch);
+		return;
+	}
+	
+	/* Add to monitoring system - now it's a first-class citizen */
+	if (monitor_add(monitor, resolved_watch, true)) {
+		log_message(INFO, "Successfully promoted glob match: %s", path);
+	} else {
+		log_message(WARNING, "Failed to promote glob match: %s", path);
+	}
+}
+
+/* Create a new pending watch for an intermediate directory that matches a glob component */
+static void pending_intermediate(monitor_t *monitor, pending_t *pending, const char *path) {
+	/* For globs, this means we found an intermediate directory that matches part of the pattern */
+	struct stat info;
+	if (stat(path, &info) != 0 || !S_ISDIR(info.st_mode)) {
+		return; /* Not a directory, so it can't be an intermediate step */
+	}
+
+	if (pending_watch_exists(monitor, path, pending->glob_pattern)) {
+		log_message(DEBUG, "Pending watch for intermediate path %s already exists.", path);
+		return;
+	}
+	
+	log_message(DEBUG, "Glob intermediate directory created: %s", path);
+	
+	/* Create a new pending watch for this path */
+	pending_t *new_pending = calloc(1, sizeof(pending_t));
+	if (!new_pending) {
+		log_message(ERROR, "Failed to allocate memory for intermediate pending watch");
+		return;
+	}
+
+	new_pending->target_path = strdup(pending->target_path);
+	new_pending->current_parent = strdup(path); /* The resolved path */
+
+	/* Construct the new unresolved path by appending the component that just matched */
+	char *new_unresolved_path;
+	if (strcmp(pending->unresolved_path, "/") == 0) {
+		int len = snprintf(NULL, 0, "/%s", pending->next_component);
+		new_unresolved_path = malloc(len + 1);
+		if(new_unresolved_path) snprintf(new_unresolved_path, len + 1, "/%s", pending->next_component);
+	} else {
+		int len = snprintf(NULL, 0, "%s/%s", pending->unresolved_path, pending->next_component);
+		new_unresolved_path = malloc(len + 1);
+		if(new_unresolved_path) snprintf(new_unresolved_path, len + 1, "%s/%s", pending->unresolved_path, pending->next_component);
+	}
+	new_pending->unresolved_path = new_unresolved_path;
+
+	if (new_unresolved_path) {
+		new_pending->next_component = get_glob_component(pending->glob_pattern, new_unresolved_path);
+	} else {
+		new_pending->next_component = NULL;
+	}
+
+	new_pending->is_glob = true;
+	new_pending->glob_pattern = strdup(pending->glob_pattern);
+	new_pending->watch = pending->watch;
+	new_pending->parent_watcher = NULL;
+	
+	/* Use the special glob watch for intermediate directories */
+	watch_t *pending_watch = monitor->glob_watch;
+	pending_watch->recursive = pending->watch->recursive;
+	pending_watch->hidden = pending->watch->hidden;
+
+	if (new_pending->next_component && monitor_tree(monitor, path, pending_watch)) {
+		/* Find the watcher for this parent */
+		for (int w = 0; w < monitor->num_watches; w++) {
+			if (strcmp(monitor->watches[w]->path, path) == 0 && 
+				monitor->watches[w]->watch == pending_watch) {
+				new_pending->parent_watcher = monitor->watches[w];
+				break;
+			}
+		}
+		
+		/* Add to pending array */
+		pending_t **new_pending_array = realloc(monitor->pending, (monitor->num_pending + 1) * sizeof(pending_t *));
+		if (new_pending_array) {
+			monitor->pending = new_pending_array;
+			monitor->pending[monitor->num_pending] = new_pending;
+			monitor->num_pending++;
+			
+			log_message(DEBUG, "Added new glob pending watch: target=%s, parent=%s, next=%s",
+					   new_pending->target_path, new_pending->current_parent, new_pending->next_component);
+			
+			/* Recursively process the new parent to handle pre-existing subdirectories */
+			pending_process(monitor, new_pending->current_parent);
+		} else {
+			pending_destroy(new_pending);
+		}
+	} else {
+		log_message(WARNING, "Failed to add monitor or get next component for '%s'", path);
+		pending_destroy(new_pending);
+	}
+}
+
+/* Process a pending watch for a glob pattern */
+static void pending_glob_path(monitor_t *monitor, pending_t *pending) {
+	char **matches = NULL;
+	int match_count = 0;
+	
+	if (!find_glob_matches(pending->current_parent, pending->next_component, &matches, &match_count)) {
+		return;
+	}
+
+	if (match_count > 0) {
+		log_message(DEBUG, "Found %d glob matches in %s for pattern %s", 
+					match_count, pending->current_parent, pending->next_component);
+		
+		/* For each matching file, check if it completes the pattern */
+		for (int m = 0; m < match_count; m++) {
+			if (matches_glob_pattern(matches[m], pending->glob_pattern)) {
+				pending_promote_glob(monitor, pending, matches[m]);
+			} else {
+				pending_intermediate(monitor, pending, matches[m]);
+			}
+		}
+	}
+	
+	/* Free the matches array */
+	for (int m = 0; m < match_count; m++) {
+		free(matches[m]);
+	}
+	free(matches);
+}
+
+/* Process a pending watch for an exact path */
+static void pending_exact_path(monitor_t *monitor, pending_t *pending, int index) {
+	struct stat info;
+	
+	if (stat(pending->next_component, &info) == 0) {
+		log_message(DEBUG, "Next component created: %s", pending->next_component);
+
+		/* Check if this completes the full target path */
+		if (strcmp(pending->next_component, pending->target_path) == 0) {
+			/* Full path now exists - promote to regular watch */
+			log_message(DEBUG, "Promoting pending watch to regular watch: %s", pending->target_path);
+
+			if (monitor_add(monitor, pending->watch, true)) {
+				log_message(INFO, "Successfully promoted pending watch: %s", pending->target_path);
+			} else {
+				log_message(WARNING, "Failed to promote pending watch: %s", pending->target_path);
+			}
+
+			/* Remove from pending list */
+			pending_remove(monitor, index);
+		} else {
+			/* Intermediate directory created - update pending watch */
+			log_message(DEBUG, "Intermediate component created, updating pending watch: %s", pending->next_component);
+
+			free(pending->current_parent);
+			pending->current_parent = strdup(pending->next_component);
+
+			free(pending->next_component);
+			pending->next_component = get_next_component(pending->target_path, pending->current_parent);
+
+			if (!pending->next_component) {
+				log_message(ERROR, "Failed to determine next component, removing pending watch");
+				pending_remove(monitor, index);
+				return;
+			}
+
+			/* Add watch on the new parent directory */
+			if (!monitor_path(monitor, pending->current_parent, pending->watch)) {
+				log_message(WARNING, "Failed to add watch on new parent: %s", pending->current_parent);
+				pending_remove(monitor, index);
+				return;
+			}
+
+			/* Update parent watcher reference */
+			pending->parent_watcher = NULL;
+			for (int j = 0; j < monitor->num_watches; j++) {
+				if (strcmp(monitor->watches[j]->path, pending->current_parent) == 0 &&
+					monitor->watches[j]->watch == pending->watch) {
+					pending->parent_watcher = monitor->watches[j];
+					break;
+				}
+			}
+
+			log_message(DEBUG, "Updated pending watch: target=%s, new_parent=%s, next=%s",
+						pending->target_path, pending->current_parent, pending->next_component);
+		}
+	}
+}
+
 /* Process pending watches for a given parent path */
 void pending_process(monitor_t *monitor, const char *parent_path) {
 	if (!monitor || !parent_path || monitor->num_pending == 0) {
 		return;
 	}
-	log_message(DEBUG, "pending_process: Checking for pending watches under '%s'", parent_path);
 
 	for (int i = monitor->num_pending - 1; i >= 0; i--) {
 		pending_t *pending = monitor->pending[i];
 
 		/* Check if this pending watch is waiting for activity in this parent */
 		if (strcmp(pending->current_parent, parent_path) == 0) {
-			log_message(DEBUG, "pending_process: Found pending watch for parent '%s', target '%s'", parent_path, pending->target_path);
+			log_message(DEBUG, "Found pending watch for parent '%s', target '%s'", parent_path, pending->target_path);
 			
 			if (pending->is_glob) {
-				/* Handle glob pattern matching */
-				char **matches = NULL;
-				int match_count = 0;
-				
-				log_message(DEBUG, "pending_process: Finding glob matches in '%s' for component '%s'", parent_path, pending->next_component);
-				if (find_glob_matches(parent_path, pending->next_component, &matches, &match_count)) {
-					if (match_count > 0) {
-						log_message(DEBUG, "pending_process: Found %d glob matches in %s for pattern %s", 
-								    match_count, parent_path, pending->next_component);
-						
-						/* For each matching file, check if it completes the pattern */
-						for (int m = 0; m < match_count; m++) {
-							log_message(DEBUG, "pending_process: Checking match '%s' against full pattern '%s'", matches[m], pending->glob_pattern);
-							if (matches_glob_pattern(matches[m], pending->glob_pattern)) {
-								/* Full pattern matched - create independent watch */
-								if (dynamic_watch_exists(monitor, matches[m], pending->glob_pattern)) {
-									log_message(DEBUG, "Dynamic watch for %s from pattern %s already exists.", matches[m], pending->glob_pattern);
-									continue;
-								}
-								
-								log_message(INFO, "pending_process: Glob pattern fully matched, promoting: %s", matches[m]);
-								
-								/* Create a dynamic deep copy with the resolved path and source pattern tracking */
-								watch_t *resolved_watch = watch_deep_copy_dynamic(pending->watch, matches[m], pending->glob_pattern);
-								if (!resolved_watch) {
-									log_message(ERROR, "Failed to create resolved watch for: %s", matches[m]);
-									continue;
-								}
-								
-								/* Add to configuration for proper lifecycle management */
-								if (!config_add_dynamic_watch(monitor->config, resolved_watch)) {
-									log_message(ERROR, "Failed to add dynamic watch to config: %s", matches[m]);
-									/* Clean up manually since config addition failed */
-									free(resolved_watch->name);
-									free(resolved_watch->path);
-									free(resolved_watch->command);
-									free(resolved_watch);
-									continue;
-								}
-								
-								/* Add to monitoring system - now it's a first-class citizen */
-								if (monitor_add(monitor, resolved_watch, true)) {
-									log_message(INFO, "Successfully promoted glob match: %s", matches[m]);
-								} else {
-									log_message(WARNING, "Failed to promote glob match: %s", matches[m]);
-								}
-							} else {
-								/* Partial match - need to continue monitoring deeper */
-								/* For globs, this means we found an intermediate directory that matches part of the pattern */
-								struct stat info;
-								if (stat(matches[m], &info) == 0 && S_ISDIR(info.st_mode)) {
-									if (pending_watch_exists(monitor, matches[m], pending->glob_pattern)) {
-										log_message(DEBUG, "Pending watch for intermediate path %s already exists.", matches[m]);
-										continue;
-									}
-									
-									log_message(DEBUG, "pending_process: Glob intermediate directory created: %s", matches[m]);
-									
-									/* Create a new pending watch for this path */
-									pending_t *new_pending = calloc(1, sizeof(pending_t));
-									if (new_pending) {
-										new_pending->target_path = strdup(pending->target_path);
-										new_pending->current_parent = strdup(matches[m]); // The resolved path
-
-										/* Construct the new unresolved path by appending the component that just matched */
-										char *new_unresolved_path;
-										if (strcmp(pending->unresolved_path, "/") == 0) {
-											int len = snprintf(NULL, 0, "/%s", pending->next_component);
-											new_unresolved_path = malloc(len + 1);
-											if(new_unresolved_path) snprintf(new_unresolved_path, len + 1, "/%s", pending->next_component);
-										} else {
-											int len = snprintf(NULL, 0, "%s/%s", pending->unresolved_path, pending->next_component);
-											new_unresolved_path = malloc(len + 1);
-											if(new_unresolved_path) snprintf(new_unresolved_path, len + 1, "%s/%s", pending->unresolved_path, pending->next_component);
-										}
-										new_pending->unresolved_path = new_unresolved_path;
-
-										if (new_unresolved_path) {
-											new_pending->next_component = get_glob_component(pending->glob_pattern, new_unresolved_path);
-										} else {
-											new_pending->next_component = NULL;
-										}
-
-										new_pending->is_glob = true;
-										new_pending->glob_pattern = strdup(pending->glob_pattern);
-										new_pending->watch = pending->watch;
-										new_pending->parent_watcher = NULL;
-										
-										/* Use the special glob watch for intermediate directories */
-										watch_t *watch_to_use = monitor->glob_watch;
-										watch_to_use->recursive = pending->watch->recursive;
-										watch_to_use->hidden = pending->watch->hidden;
-
-										log_message(DEBUG, "pending_process: Adding monitor for intermediate dir '%s' with watch '%s'", matches[m], watch_to_use->name);
-										if (new_pending->next_component && monitor_tree(monitor, matches[m], watch_to_use)) {
-											/* Find the watcher for this parent */
-											for (int w = 0; w < monitor->num_watches; w++) {
-												if (strcmp(monitor->watches[w]->path, matches[m]) == 0 && 
-												    monitor->watches[w]->watch == watch_to_use) {
-													new_pending->parent_watcher = monitor->watches[w];
-													break;
-												}
-											}
-											
-											/* Add to pending array */
-											pending_t **new_pending_array = realloc(monitor->pending, 
-											                                       (monitor->num_pending + 1) * sizeof(pending_t *));
-											if (new_pending_array) {
-												monitor->pending = new_pending_array;
-												monitor->pending[monitor->num_pending] = new_pending;
-												monitor->num_pending++;
-												
-												log_message(DEBUG, "Added new glob pending watch: target=%s, parent=%s, next=%s",
-												           new_pending->target_path, new_pending->current_parent, new_pending->next_component);
-												
-												/* Recursively process the new parent to handle pre-existing subdirectories */
-												pending_process(monitor, new_pending->current_parent);
-											} else {
-												pending_destroy(new_pending);
-											}
-										} else {
-											log_message(WARNING, "pending_process: Failed to add monitor or get next component for '%s'", matches[m]);
-											pending_destroy(new_pending);
-										}
-									}
-								}
-							}
-						}
-						
-						/* Free the matches array */
-						for (int m = 0; m < match_count; m++) {
-							free(matches[m]);
-						}
-						free(matches);
-						
-						/*
-						 * DO NOT remove the original pending watch. It must persist to find other
-						 * potential matches in the same directory in the future. The checks for
-						 * dynamic_watch_exists() and pending_watch_exists() prevent duplicates.
-						 */
-					}
-				}
+				pending_glob_path(monitor, pending);
 			} else {
-				/* Handle exact path matching (original logic) */
-				struct stat info;
-				
-				if (stat(pending->next_component, &info) == 0) {
-					log_message(DEBUG, "Next component created: %s", pending->next_component);
-
-					/* Check if this completes the full target path */
-					if (strcmp(pending->next_component, pending->target_path) == 0) {
-						/* Full path now exists - promote to regular watch */
-						log_message(DEBUG, "Promoting pending watch to regular watch: %s", pending->target_path);
-
-						if (monitor_add(monitor, pending->watch, true)) {
-							log_message(INFO, "Successfully promoted pending watch: %s", pending->target_path);
-						} else {
-							log_message(WARNING, "Failed to promote pending watch: %s", pending->target_path);
-						}
-
-						/* Remove from pending list */
-						pending_remove(monitor, i);
-					} else {
-						/* Intermediate directory created - update pending watch */
-						log_message(DEBUG, "Intermediate component created, updating pending watch: %s", pending->next_component);
-
-						free(pending->current_parent);
-						pending->current_parent = strdup(pending->next_component);
-
-						free(pending->next_component);
-						pending->next_component = get_next_component(pending->target_path, pending->current_parent);
-
-						if (!pending->next_component) {
-							log_message(ERROR, "Failed to determine next component, removing pending watch");
-							pending_remove(monitor, i);
-							continue;
-						}
-
-						/* Add watch on the new parent directory */
-						if (!monitor_path(monitor, pending->current_parent, pending->watch)) {
-							log_message(WARNING, "Failed to add watch on new parent: %s", pending->current_parent);
-							pending_remove(monitor, i);
-							continue;
-						}
-
-						/* Update parent watcher reference */
-						pending->parent_watcher = NULL;
-						for (int j = 0; j < monitor->num_watches; j++) {
-							if (strcmp(monitor->watches[j]->path, pending->current_parent) == 0 &&
-							    monitor->watches[j]->watch == pending->watch) {
-								pending->parent_watcher = monitor->watches[j];
-								break;
-							}
-						}
-
-						log_message(DEBUG, "Updated pending watch: target=%s, new_parent=%s, next=%s",
-						            pending->target_path, pending->current_parent, pending->next_component);
-					}
-				}
+				pending_exact_path(monitor, pending, i);
 			}
 		}
 	}
@@ -747,7 +758,7 @@ char **pending_scan(const char *pattern, int *count) {
     return matches;
 }
 
-void pending_free_matches(char **matches, int count) {
+void pending_free(char **matches, int count) {
     if (!matches) return;
     for (int i = 0; i < count; i++) {
         free(matches[i]);
