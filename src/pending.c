@@ -270,24 +270,24 @@ static void pending_remove(monitor_t *monitor, int index) {
 	monitor->num_pending--;
 }
 
-/* Check if a dynamic watch for a given path and source pattern already exists */
-static bool dynamic_watch_exists(monitor_t *monitor, const char *path, const char *source_pattern) {
-	for (int i = 0; i < monitor->config->num_watches; i++) {
-		watch_t *w = monitor->config->watches[i];
-		if (w->is_dynamic && strcmp(w->path, path) == 0 &&
-		    w->source_pattern && strcmp(w->source_pattern, source_pattern) == 0) {
-			return true;
-		}
-	}
-	return false;
-}
-
 /* Check if a pending watch for a given intermediate parent and glob pattern already exists */
 static bool pending_watch_exists(monitor_t *monitor, const char *parent, const char *glob_pattern) {
 	for (int i = 0; i < monitor->num_pending; i++) {
 		pending_t *p = monitor->pending[i];
 		if (p->is_glob && strcmp(p->current_parent, parent) == 0 &&
 		    p->glob_pattern && strcmp(p->glob_pattern, glob_pattern) == 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/* Check if a watch for a given path already exists in the config */
+static bool watch_exists(config_t *config, const char *path) {
+	if (!config || !path) return false;
+	for (int i = 0; i < config->num_watches; i++) {
+		watch_t *w = config->watches[i];
+		if (w && w->path && strcmp(w->path, path) == 0) {
 			return true;
 		}
 	}
@@ -396,8 +396,8 @@ bool pending_add(monitor_t *monitor, const char *target_path, watch_t *watch) {
 /* Promote a fully matched glob path to a dynamic watch */
 static void pending_promote_glob(monitor_t *monitor, pending_t *pending, const char *path) {
 	/* Full pattern matched - create independent watch */
-	if (dynamic_watch_exists(monitor, path, pending->glob_pattern)) {
-		log_message(DEBUG, "Dynamic watch for %s from pattern %s already exists.", path, pending->glob_pattern);
+	if (watch_exists(monitor->config, path)) {
+		log_message(DEBUG, "Watch for %s from pattern %s already exists.", path, pending->glob_pattern);
 		return;
 	}
 	

@@ -681,6 +681,9 @@ bool monitor_reload(monitor_t *monitor) {
 		return false;
 	}
 
+	/* Replace old config with new one so that dynamic promotions are added to the new config */
+	monitor->config = new_config;
+
 	/* Add config file watch to the new config so it gets re-added */
 	if (monitor->config_path != NULL) {
 		watch_t *config_watch = monitor_config(monitor->config_path);
@@ -744,7 +747,7 @@ bool monitor_reload(monitor_t *monitor) {
 			if (pattern_exists) {
 				/* Create a copy of the dynamic watch to preserve it */
 				watch_t *preserved_watch = watch_deep_copy_dynamic(old_watch, old_watch->path, old_watch->source_pattern);
-				if (preserved_watch && config_dynamic_watch(new_config, preserved_watch)) {
+				if (preserved_watch && config_dynamic_watch(monitor->config, preserved_watch)) {
 					log_message(INFO, "Preserved dynamic watch: %s (from pattern: %s)", 
 					           preserved_watch->path, preserved_watch->source_pattern);
 				} else {
@@ -773,9 +776,9 @@ bool monitor_reload(monitor_t *monitor) {
 	monitor->num_watches = 0;
 
 	/* Add watches from the new configuration (including the config file watch) */
-	for (int i = 0; i < new_config->num_watches; i++) {
-		if (!monitor_add(monitor, new_config->watches[i], false)) {
-			log_message(WARNING, "Failed to add watch for %s", new_config->watches[i]->path);
+	for (int i = 0; i < monitor->config->num_watches; i++) {
+		if (!monitor_add(monitor, monitor->config->watches[i], false)) {
+			log_message(WARNING, "Failed to add watch for %s", monitor->config->watches[i]->path);
 		}
 	}
 
@@ -785,9 +788,8 @@ bool monitor_reload(monitor_t *monitor) {
 	}
 	free(stale_watches);
 
-	/* Replace old config with new one */
+	/* Destroy the old config object */
 	config_destroy(old_config);
-	monitor->config = new_config;
 
 	/* After reloading, explicitly validate the config file watch to handle editor atomic saves */
 	monitor_sync(monitor, monitor->config_path);
