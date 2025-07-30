@@ -43,9 +43,12 @@ void queue_destroy(queue_t *queue) {
 			free(queue->items[i].path);
 			queue->items[i].path = NULL;
 		}
-		if (queue->items[i].watches) {
-			free(queue->items[i].watches);
-			queue->items[i].watches = NULL;
+		if (queue->items[i].watch_names) {
+			for (int j = 0; j < queue->items[i].num_watches; j++) {
+				free(queue->items[i].watch_names[j]);
+			}
+			free(queue->items[i].watch_names);
+			queue->items[i].watch_names = NULL;
 		}
 
 		/* Clear the struct to prevent double-free issues */
@@ -59,15 +62,15 @@ void queue_destroy(queue_t *queue) {
 }
 
 /* Add a watch to a queue entry */
-bool queue_add(check_t *check, watch_t *watch) {
-	if (!check || !watch) {
+bool queue_add(check_t *check, const char *watch_name) {
+	if (!check || !watch_name) {
 		log_message(ERROR, "Invalid parameters for queue_add");
 		return false;
 	}
 
 	/* Check if this watch is already in the array */
 	for (int i = 0; i < check->num_watches; i++) {
-		if (check->watches && check->watches[i] == watch) {
+		if (check->watch_names && strcmp(check->watch_names[i], watch_name) == 0) {
 			return true; /* Already present */
 		}
 	}
@@ -75,22 +78,27 @@ bool queue_add(check_t *check, watch_t *watch) {
 	/* Ensure capacity */
 	if (check->num_watches >= check->watches_capacity) {
 		int new_capacity = check->watches_capacity == 0 ? 4 : check->watches_capacity * 2;
-		watch_t **new_watches = realloc(check->watches, new_capacity * sizeof(watch_t *));
+		char **new_watches = realloc(check->watch_names, new_capacity * sizeof(char *));
 		if (!new_watches) {
 			log_message(ERROR, "Failed to resize watches array in queue entry");
 			return false;
 		}
-		check->watches = new_watches;
+		check->watch_names = new_watches;
 		check->watches_capacity = new_capacity;
 
 		/* Zero out new memory */
 		if (check->num_watches < new_capacity) {
-			memset(&check->watches[check->num_watches], 0, (new_capacity - check->num_watches) * sizeof(watch_t *));
+			memset(&check->watch_names[check->num_watches], 0, (new_capacity - check->num_watches) * sizeof(char *));
 		}
 	}
 
 	/* Add the new watch */
-	check->watches[check->num_watches++] = watch;
+	check->watch_names[check->num_watches] = strdup(watch_name);
+	if (!check->watch_names[check->num_watches]) {
+		log_message(ERROR, "Failed to duplicate watch name for queue entry");
+		return false;
+	}
+	check->num_watches++;
 	return true;
 }
 
@@ -221,7 +229,7 @@ void queue_upsert(queue_t *queue, const char *path,
 		check_t *check = &queue->items[queue_index];
 
 		/* Add this watch if not already present */
-		if (!queue_add(check, watch)) {
+		if (!queue_add(check, watch->name)) {
 			log_message(WARNING, "Failed to add watch to existing queue entry for %s", path);
 		}
 
@@ -272,14 +280,14 @@ void queue_upsert(queue_t *queue, const char *path,
 
 	queue->items[new_index].path = path_copy;
 	queue->items[new_index].next_check = next_check;
-	queue->items[new_index].watches = NULL;
+	queue->items[new_index].watch_names = NULL;
 	queue->items[new_index].num_watches = 0;
 	queue->items[new_index].watches_capacity = 0;
 	queue->items[new_index].verifying = false;
 	queue->items[new_index].scheduled_quiet = 0;
 
 	/* Add the watch */
-	if (!queue_add(&queue->items[new_index], watch)) {
+	if (!queue_add(&queue->items[new_index], watch->name)) {
 		log_message(ERROR, "Failed to add watch to new queue entry");
 		free(queue->items[new_index].path);
 		queue->items[new_index].path = NULL;
@@ -333,9 +341,12 @@ void queue_remove(queue_t *queue, const char *path) {
 		queue->items[queue_index].path = NULL;
 	}
 
-	if (queue->items[queue_index].watches) {
-		free(queue->items[queue_index].watches);
-		queue->items[queue_index].watches = NULL;
+	if (queue->items[queue_index].watch_names) {
+		for (int i = 0; i < queue->items[queue_index].num_watches; i++) {
+			free(queue->items[queue_index].watch_names[i]);
+		}
+		free(queue->items[queue_index].watch_names);
+		queue->items[queue_index].watch_names = NULL;
 	}
 
 	/* Replace with the last element and restore heap property */

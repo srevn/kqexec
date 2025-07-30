@@ -46,7 +46,7 @@ void stability_destroy(stability_t *stability);
 /* Main stability processing function */
 void stability_process(monitor_t *monitor, struct timespec *current_time);
 entity_t* stability_root(monitor_t *monitor, entity_t *state);
-watch_t *stability_watch(check_t *check);
+watch_t *stability_watch(monitor_t *monitor, check_t *check);
 entity_t *stability_entry(monitor_t *monitor, check_t *check);
 
 /* Quiet period checking */

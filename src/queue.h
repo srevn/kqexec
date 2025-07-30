@@ -10,7 +10,7 @@
 typedef struct check {
 	char *path;                            /* Path to the watched directory (unique key) */
 	struct timespec next_check;            /* When this directory needs checking */
-	watch_t **watches;                     /* Array of watches for this path */
+	char **watch_names;                    /* Array of watch names for this path */
 	int num_watches;                       /* Number of watches for this path */
 	int watches_capacity;                  /* Allocated capacity for watches array */
 	bool verifying;                        /* True if in verification phase (skip quiet period checks) */
@@ -34,7 +34,7 @@ void queue_upsert(queue_t *queue, const char *path, watch_t *watch, struct times
 void queue_remove(queue_t *queue, const char *path);
 
 /* Check entry management */
-bool queue_add(check_t *check, watch_t *watch);
+bool queue_add(check_t *check, const char *watch_name);
 
 /* Time comparison and heap operations */
 int time_compare(struct timespec *a, struct timespec *b);

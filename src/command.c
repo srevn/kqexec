@@ -39,7 +39,7 @@ bool command_init(threads_t *threads) {
 	/* Store threads reference */
 	command_threads = threads;
 
-	/* Ignore SIGCHLD to prevent zombie processes. Child processes are waited for explicitly. */
+	/* Ignore SIGCHLD to prevent zombie processes, child processes are waited for explicitly */
 	struct sigaction sa;
 	memset(&sa, 0, sizeof(sa));
 	sa.sa_handler = SIG_IGN;
