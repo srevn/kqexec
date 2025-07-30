@@ -826,7 +826,7 @@ bool monitor_prune(monitor_t *monitor, const char *parent) {
 		if ((int) strlen(watcher->path) > parent_len &&
 		    strncmp(watcher->path, parent, parent_len) == 0 &&
 		    watcher->path[parent_len] == '/') {
-			log_message(DEBUG, "Removing stale subdirectory watch: %s", watcher->path);
+			log_message(DEBUG, "Pruning stale subdirectory watch: %s", watcher->path);
 
 			/* Destroy the watcher (closes FD if not shared) */
 			watcher_destroy(monitor, watcher);
@@ -853,29 +853,46 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 	bool path_exists = (stat(path, &info) == 0);
 	bool list_modified = false;
 
-	/* Find all watcher entries for this exact path */
+	/* Process all watchers monitoring this exact path */
 	for (int i = 0; i < monitor->num_watches; i++) {
 		watcher_t *watcher = monitor->watches[i];
 		if (watcher && watcher->path && strcmp(watcher->path, path) == 0) {
 			if (!path_exists) {
-				/* Path does not exist - it was deleted */
-				log_message(DEBUG, "Path deleted: %s. Removing watch.", path);
+				/* Path deleted - clean up all related resources */
+				log_message(DEBUG, "Path deleted: %s. Cleaning up watch resources.", path);
+				
+				/* Store watch config before watcher becomes invalid */
+				watch_t *target_watch = watcher->watch;
 
-				/* If it was a recursive directory, remove all subdirectory watches */
-				if (watcher->watch->target == WATCH_DIRECTORY && watcher->watch->recursive) {
+				/* Clear any pending deferred checks to prevent use-after-free */
+				queue_remove(monitor->check_queue, path);
+
+				/* Remove subdirectory watchers if this was a recursive directory */
+				if (target_watch && target_watch->target == WATCH_DIRECTORY && target_watch->recursive) {
 					monitor_prune(monitor, path);
 				}
 
 				/* Handle pending watches that might be affected by this deletion */
 				pending_delete(monitor, path);
 
-				/* Remove this watch */
-				watcher_destroy(monitor, watcher);
-				for (int j = i; j < monitor->num_watches - 1; j++) {
-					monitor->watches[j] = monitor->watches[j + 1];
+				/*  Remove dynamic watch from config to prevent resurrection during reload */
+				if (target_watch && target_watch->is_dynamic) {
+					config_remove_watch(monitor->config, target_watch);
 				}
-				monitor->num_watches--;
-				i--; /* Adjust index after removal */
+
+				/* Finally, remove the watcher for the parent path itself */
+				for (int j = 0; j < monitor->num_watches; j++) {
+					if (monitor->watches[j] == watcher) {
+						watcher_destroy(monitor, monitor->watches[j]);
+						/* Shift remaining watchers */
+						for (int k = j; k < monitor->num_watches - 1; k++) {
+							monitor->watches[k] = monitor->watches[k + 1];
+						}
+						monitor->num_watches--;
+						break;
+					}
+				}
+				i--; /* Adjust loop index after removal */
 				list_modified = true;
 			} else if (watcher->inode != info.st_ino || watcher->device != info.st_dev) {
 				/* Path exists but inode/device changed - it was recreated */
@@ -886,7 +903,7 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 					close(watcher->wd);
 				}
 
-				/* Open new file descriptor */
+				/* Attempt to open the recreated path */
 				int new_fd = open(path, O_RDONLY);
 				if (new_fd == -1) {
 					log_message(ERROR, "Failed to open recreated path %s: %s", path, strerror(errno));
@@ -901,10 +918,11 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 					continue;
 				}
 
+				/* Update watcher with new file info */
 				watcher->wd = new_fd;
 				watcher->inode = info.st_ino;
 				watcher->device = info.st_dev;
-				watcher->shared_fd = false; /* It's a new FD */
+				watcher->shared_fd = false;
 
 				/* Re-register with kqueue */
 				monitor_kq(monitor, watcher);

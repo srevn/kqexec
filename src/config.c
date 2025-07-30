@@ -204,8 +204,28 @@ bool config_add_watch(config_t *config, watch_t *watch) {
 	return true;
 }
 
+/* Remove a watch entry from the configuration */
+bool config_remove_watch(config_t *config, watch_t *watch) {
+	if (!config || !watch) return false;
+
+	for (int i = 0; i < config->num_watches; i++) {
+		if (config->watches[i] == watch) {
+			log_message(DEBUG, "Removing watch '%s' for path '%s' from config.", watch->name, watch->path);
+			config_destroy_watch(watch);
+			for (int j = i; j < config->num_watches - 1; j++) {
+				config->watches[j] = config->watches[j+1];
+			}
+			config->num_watches--;
+			config->watches[config->num_watches] = NULL;
+			return true;
+		}
+	}
+	log_message(WARNING, "Could not find watch '%s' for path '%s' in config to remove.", watch->name, watch->path);
+	return false;
+}
+
 /* Free a watch entry */
-static void config_destroy_watch(watch_t *watch) {
+void config_destroy_watch(watch_t *watch) {
 	if (watch == NULL) {
 		return;
 	}
