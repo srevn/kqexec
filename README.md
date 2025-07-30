@@ -11,6 +11,7 @@ A lightweight file and directory monitoring utility for FreeBSD and macOS that u
 - **Recursive Monitoring**: Automatically monitor new files and directories
 - **Dynamic Directory Scanning**: Automatically detects and monitors new files and directories as they are created
 - **Event-Driven Parent Watching**: Monitors non-existent paths by watching parent directories and promoting watches as path components are created
+- **Glob Pattern Support**: Dynamic file and directory matching using wildcards (`*`, `?`, `[]`) with automatic watch promotion when patterns resolve
 - **Hidden File Support**: Optional monitoring of hidden files and directories (starting with a dot)
 - **State-Based Event Processing**: Tracks the state of files and directories to detect meaningful changes
 - **Command Debouncing**: Prevent command execution flooding when many events occur rapidly
