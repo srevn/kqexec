@@ -71,8 +71,7 @@ bool config_events(const char *events_str, filter_t *events);
 const char *filter_to_string(filter_t filter);
 
 /* Watch management functions */
-watch_t *watch_deep_copy(const watch_t *original, const char *new_path);
-watch_t *watch_deep_copy_dynamic(const watch_t *original, const char *new_path, const char *source_pattern);
-bool config_dynamic_watch(config_t *config, watch_t *watch);
+watch_t *config_clone(const watch_t *original, const char *new_path, const char *source_pattern);
+bool config_add_watch(config_t *config, watch_t *watch);
 
 #endif /* CONFIG_H */

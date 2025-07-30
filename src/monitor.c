@@ -746,8 +746,8 @@ bool monitor_reload(monitor_t *monitor) {
 			
 			if (pattern_exists) {
 				/* Create a copy of the dynamic watch to preserve it */
-				watch_t *preserved_watch = watch_deep_copy_dynamic(old_watch, old_watch->path, old_watch->source_pattern);
-				if (preserved_watch && config_dynamic_watch(monitor->config, preserved_watch)) {
+				watch_t *preserved_watch = config_clone(old_watch, old_watch->path, old_watch->source_pattern);
+				if (preserved_watch && config_add_watch(monitor->config, preserved_watch)) {
 					log_message(INFO, "Preserved dynamic watch: %s (from pattern: %s)", 
 					           preserved_watch->path, preserved_watch->source_pattern);
 				} else {
