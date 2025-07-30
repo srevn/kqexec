@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <fnmatch.h>
 #include <sys/types.h>
 #include <sys/event.h>
 #include <sys/time.h>
@@ -745,20 +746,30 @@ bool monitor_reload(monitor_t *monitor) {
 			}
 			
 			if (pattern_exists) {
-				/* Create a copy of the dynamic watch to preserve it */
-				watch_t *preserved_watch = config_clone(old_watch, old_watch->path, old_watch->source_pattern);
-				if (preserved_watch && config_add_watch(monitor->config, preserved_watch)) {
-					log_message(INFO, "Preserved dynamic watch: %s (from pattern: %s)", 
-					           preserved_watch->path, preserved_watch->source_pattern);
-				} else {
-					log_message(WARNING, "Failed to preserve dynamic watch: %s", old_watch->path);
-					if (preserved_watch) {
-						free(preserved_watch->name);
-						free(preserved_watch->path);
-						free(preserved_watch->command);  
-						free(preserved_watch->source_pattern);
-						free(preserved_watch);
+				/* Validate that the dynamic watch path still exists and matches the pattern */
+				bool path_exists = (access(old_watch->path, F_OK) == 0);
+				bool pattern_matches = (fnmatch(old_watch->source_pattern, old_watch->path, FNM_PATHNAME) == 0);
+				
+				if (path_exists && pattern_matches) {
+					/* Create a copy of the dynamic watch to preserve it */
+					watch_t *preserved_watch = config_clone(old_watch, old_watch->path, old_watch->source_pattern);
+					if (preserved_watch && config_add_watch(monitor->config, preserved_watch)) {
+						log_message(INFO, "Preserved dynamic watch: %s (from pattern: %s)", 
+						           preserved_watch->path, preserved_watch->source_pattern);
+					} else {
+						log_message(WARNING, "Failed to preserve dynamic watch: %s", old_watch->path);
+						if (preserved_watch) {
+							free(preserved_watch->name);
+							free(preserved_watch->path);
+							free(preserved_watch->command);  
+							free(preserved_watch->source_pattern);
+							free(preserved_watch);
+						}
 					}
+				} else {
+					log_message(DEBUG, "Dynamic watch not preserved - path %s or pattern mismatch: %s (pattern: %s)", 
+					           path_exists ? "exists but doesn't match" : "no longer exists", 
+					           old_watch->path, old_watch->source_pattern);
 				}
 			} else {
 				log_message(DEBUG, "Dynamic watch not preserved - source pattern removed: %s (pattern: %s)", 
