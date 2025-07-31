@@ -54,8 +54,8 @@ static char *canonize_path(const char *path, int line_number) {
 		result = strdup(resolved_path);
 	} else {
 		/* realpath() failed - log warning and use original path */
-		log_message(WARNING, "Failed to canonicalize path '%s' at line %d: %s (using original path)",
-		            path, line_number, strerror(errno));
+		log_message(DEBUG, "Failed to canonicalize path '%s' at line %d: %s (using original path)",
+					path, line_number, strerror(errno));
 		result = strdup(path);
 	}
 

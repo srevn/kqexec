@@ -329,6 +329,13 @@ bool pending_add(monitor_t *monitor, const char *target_path, watchref_t watchre
 
 /* Promote a fully matched glob path to a dynamic watch */
 static void pending_promote_match(monitor_t *monitor, pending_t *pending, const char *path) {
+	if (!monitor || !pending || !path) {
+		log_message(ERROR, "Invalid parameters to pending_promote_match");
+		return;
+	}
+	
+	log_message(DEBUG, "Promoting glob match: %s from pattern %s", path, pending->glob_pattern ? pending->glob_pattern : "unknown");
+	
 	/* Check if a watch for this path with the same name already exists */
 	if (monitor->config && path) {
 		watch_t *pending_watch = registry_get(monitor->registry, pending->watchref);
@@ -337,10 +344,12 @@ static void pending_promote_match(monitor_t *monitor, pending_t *pending, const 
 			return;
 		}
 
+		/* Check for existing watches with same path and name */
 		for (int i = 0; i < monitor->config->num_watches; i++) {
 			watch_t *w = config_get_watch(monitor->config, i, monitor->registry);
 			if (w && w->path && w->name && strcmp(w->path, path) == 0 && strcmp(w->name, pending_watch->name) == 0) {
-				log_message(DEBUG, "Watch for %s with name '%s' from pattern %s already exists", path, w->name, pending->glob_pattern);
+				log_message(INFO, "Watch for %s with name '%s' from pattern %s already exists, skipping promotion", 
+				           path, w->name, pending->glob_pattern);
 				return;
 			}
 		}
@@ -353,6 +362,7 @@ static void pending_promote_match(monitor_t *monitor, pending_t *pending, const 
 		return;
 	}
 
+	/* Clone watch for resolved path */
 	watch_t *resolved_watch = config_clone_watch(pending_watch);
 	if (!resolved_watch) {
 		log_message(ERROR, "Failed to clone watch for resolved path: %s", path);
@@ -371,7 +381,7 @@ static void pending_promote_match(monitor_t *monitor, pending_t *pending, const 
 		return;
 	}
 
-	/* Add to configuration for proper lifecycle management */
+	/* Add dynamic watch to config */
 	if (!config_add_watch(monitor->config, resolved_watch, monitor->registry)) {
 		log_message(ERROR, "Failed to add dynamic watch to config: %s", path);
 		/* Clean up manually since config addition failed */
@@ -384,10 +394,13 @@ static void pending_promote_match(monitor_t *monitor, pending_t *pending, const 
 
 	/* Add to monitoring system */
 	watchref_t resolved_ref = config_get_watchref(monitor->config, monitor->config->num_watches - 1);
+	log_message(INFO, "Adding resolved watch to monitoring system: %s (watchref %u:%u)", 
+	           path, resolved_ref.watch_id, resolved_ref.generation);
+	           
 	if (monitor_add(monitor, resolved_ref, true)) {
-		log_message(INFO, "Successfully promoted glob match: %s", path);
+		log_message(INFO, "Successfully promoted glob match: %s from pattern %s", path, pending->glob_pattern);
 	} else {
-		log_message(WARNING, "Failed to promote glob match: %s", path);
+		log_message(WARNING, "Failed to promote glob match: %s from pattern %s", path, pending->glob_pattern);
 		/* Remove from config since monitor add failed */
 		config_remove_watch(monitor->config, resolved_ref, monitor->registry);
 	}
@@ -400,12 +413,13 @@ static void pending_intermediate(monitor_t *monitor, pending_t *pending, const c
 		return; /* Not a directory, so it can't be an intermediate step */
 	}
 
-	/* Check if a pending watch for this intermediate parent and glob pattern already exists */
+	/* Check if a pending watch for this intermediate parent, glob pattern, and watchref already exists */
 	for (int i = 0; i < monitor->num_pending; i++) {
 		pending_t *p = monitor->pending[i];
 		if (p->is_glob && strcmp(p->current_parent, path) == 0 &&
-		    p->glob_pattern && strcmp(p->glob_pattern, pending->glob_pattern) == 0) {
-			log_message(DEBUG, "Pending watch for intermediate path %s already exists", path);
+		    p->glob_pattern && strcmp(p->glob_pattern, pending->glob_pattern) == 0 &&
+		    watchref_equal(p->watchref, pending->watchref)) {
+			log_message(DEBUG, "Pending watch for intermediate path %s with same watchref already exists", path);
 			return;
 		}
 	}

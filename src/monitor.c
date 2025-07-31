@@ -86,12 +86,19 @@ static bool watcher_add(monitor_t *monitor, watcher_t *watcher) {
 
 /* Find a watcher entry by path */
 static watcher_t *watcher_find(monitor_t *monitor, const char *path) {
+	if (!monitor || !path) {
+		return NULL;
+	}
+	
 	for (int i = 0; i < monitor->num_watches; i++) {
-		if (strcmp(monitor->watches[i]->path, path) == 0) {
-			return monitor->watches[i];
+		if (monitor->watches[i] && monitor->watches[i]->path) {
+			if (strcmp(monitor->watches[i]->path, path) == 0) {
+				log_message(DEBUG, "Found existing watcher for path %s (fd %d)", 
+							path, monitor->watches[i]->wd);
+				return monitor->watches[i];
+			}
 		}
 	}
-
 	return NULL;
 }
 
@@ -283,10 +290,12 @@ void monitor_destroy(monitor_t *monitor) {
 static bool monitor_kq(monitor_t *monitor, watcher_t *watcher) {
 	struct kevent changes[1];
 	int flags = 0;
+	int shared_count = 0;
 
 	/* Consolidate event filters from ALL watches on this file descriptor */
 	for (int i = 0; i < monitor->num_watches; i++) {
 		if (monitor->watches[i]->wd == watcher->wd) {
+			shared_count++;
 			watch_t *shared_watch = registry_get(monitor->registry, monitor->watches[i]->watchref);
 			if (shared_watch) {
 				if (shared_watch->filter & EVENT_STRUCTURE) {
@@ -302,11 +311,17 @@ static bool monitor_kq(monitor_t *monitor, watcher_t *watcher) {
 		}
 	}
 
+	if (shared_count > 1) {
+		log_message(DEBUG, "Configuring kqueue for fd %d with %d shared watches, combined flags: 0x%x", 
+					watcher->wd, shared_count, flags);
+	}
+
 	/* Register for events */
 	EV_SET(&changes[0], watcher->wd, EVFILT_VNODE, EV_ADD | EV_CLEAR, flags, 0, watcher);
 
 	if (kevent(monitor->kq, changes, 1, NULL, 0, NULL) == -1) {
-		log_message(ERROR, "Failed to register kqueue events for %s: %s", watcher->path, strerror(errno));
+		log_message(ERROR, "Failed to register kqueue events for %s (fd %d): %s", 
+					watcher->path, watcher->wd, strerror(errno));
 		return false;
 	}
 
@@ -315,46 +330,73 @@ static bool monitor_kq(monitor_t *monitor, watcher_t *watcher) {
 
 /* Add a watch for a single path, creating or sharing file descriptors as needed */
 bool monitor_path(monitor_t *monitor, const char *path, watchref_t watchref) {
+	if (!monitor || !path || !watchref_valid(watchref)) {
+		log_message(ERROR, "Invalid parameters to monitor_path");
+		return false;
+	}
+
 	/* Clean up any stale watchers for this path first */
 	monitor_sync(monitor, path);
 
-	/* Check if a watcher for this path and watch config already exists to avoid duplicates */
+	/* Check if this exact combination already exists to avoid true duplicates */
 	for (int i = 0; i < monitor->num_watches; i++) {
 		if (strcmp(monitor->watches[i]->path, path) == 0 && watchref_equal(monitor->watches[i]->watchref, watchref)) {
+			log_message(DEBUG, "Exact watcher already exists for path %s (watchref %u:%u)", 
+			           path, watchref.watch_id, watchref.generation);
 			return true;
 		}
 	}
 
+	/* Always check for existing watchers by path to prioritize fd sharing */
 	watcher_t *shared_watcher = watcher_find(monitor, path);
 	if (shared_watcher) {
 		/* Path is already being watched, share the fd */
-		log_message(DEBUG, "Path %s already watched, sharing file descriptor", path);
+		log_message(INFO, "Sharing file descriptor for path %s (watchref %u:%u with existing fd %d)", 
+					path, watchref.watch_id, watchref.generation, shared_watcher->wd);
+		
 		watcher_t *watcher = calloc(1, sizeof(watcher_t));
 		if (!watcher) {
-			log_message(ERROR, "Failed to allocate memory for watcher for path %s", path);
+			log_message(ERROR, "Failed to allocate memory for shared watcher for path %s", path);
 			return false;
 		}
+		
 		watcher->wd = shared_watcher->wd;
 		watcher->path = strdup(path);
+		if (!watcher->path) {
+			log_message(ERROR, "Failed to duplicate path for shared watcher: %s", path);
+			free(watcher);
+			return false;
+		}
+		
 		watcher->watchref = watchref;
 		watcher->shared_fd = true;
 		shared_watcher->shared_fd = true;
 
 		if (!watcher_stat(watcher)) {
+			log_message(ERROR, "Failed to stat shared watcher for path %s", path);
 			watcher_destroy(monitor, watcher, false);
 			return false;
 		}
 
 		if (!watcher_add(monitor, watcher)) {
+			log_message(ERROR, "Failed to add shared watcher for path %s", path);
 			watcher_destroy(monitor, watcher, false);
 			return false;
 		}
 
-		/* Update kqueue with combined filters */
-		return monitor_kq(monitor, watcher);
+		/* Update kqueue with combined filters from all watches on this fd */
+		if (!monitor_kq(monitor, watcher)) {
+			log_message(ERROR, "Failed to update kqueue for shared watcher: %s", path);
+			return false;
+		}
+		
+		/* Shared watcher created successfully */
+		return true;
 	} else {
 		/* New path, create a new watcher and get a new fd */
-		log_message(DEBUG, "Path %s is new, creating new watcher", path);
+		log_message(DEBUG, "Creating new file descriptor for path %s (watchref %u:%u)", 
+		           path, watchref.watch_id, watchref.generation);
+		
 		int fd = open(path, O_RDONLY);
 		if (fd == -1) {
 			/* It's possible the file was deleted since the initial scan */
@@ -364,21 +406,31 @@ bool monitor_path(monitor_t *monitor, const char *path, watchref_t watchref) {
 
 		watcher_t *watcher = calloc(1, sizeof(watcher_t));
 		if (!watcher) {
-			log_message(ERROR, "Failed to allocate memory for watcher for path %s", path);
+			log_message(ERROR, "Failed to allocate memory for new watcher for path %s", path);
 			close(fd);
 			return false;
 		}
+		
 		watcher->wd = fd;
 		watcher->path = strdup(path);
+		if (!watcher->path) {
+			log_message(ERROR, "Failed to duplicate path for new watcher: %s", path);
+			close(fd);
+			free(watcher);
+			return false;
+		}
+		
 		watcher->watchref = watchref;
 		watcher->shared_fd = false;
 
 		if (!watcher_stat(watcher)) {
+			log_message(ERROR, "Failed to stat new watcher for path %s", path);
 			watcher_destroy(monitor, watcher, false);
 			return false;
 		}
 
 		if (!watcher_add(monitor, watcher)) {
+			log_message(ERROR, "Failed to add new watcher for path %s", path);
 			watcher_destroy(monitor, watcher, false);
 			return false;
 		}
@@ -392,7 +444,13 @@ bool monitor_path(monitor_t *monitor, const char *path, watchref_t watchref) {
 		}
 
 		/* Add to kqueue */
-		return monitor_kq(monitor, watcher);
+		if (!monitor_kq(monitor, watcher)) {
+			log_message(ERROR, "Failed to setup kqueue for new watcher: %s", path);
+			return false;
+		}
+		
+		/* New watcher created successfully */
+		return true;
 	}
 }
 
@@ -1085,7 +1143,7 @@ void cleanup_pending(watchref_t watchref, void *context) {
 		return;
 	}
 
-	log_message(DEBUG, "Monitor observer: Watch ID %u (gen %u) deactivated, cleaning up pending entries",
+	log_message(DEBUG, "Watch ID %u (gen %u) deactivated, cleaning up pending entries",
 	            watchref.watch_id, watchref.generation);
 
 	int entries_removed = 0;
