@@ -573,7 +573,7 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 		log_message(DEBUG, "Directory content changed, checking for deleted child directories: %s", state->node->path);
 		
 		/* Check all pending watches to see if any are waiting for children of this directory */
-		for (int i = 0; i < monitor->num_pending; i++) {
+		for (int i = monitor->num_pending - 1; i >= 0; i--) {
 			pending_t *pending = monitor->pending[i];
 			if (!pending || !pending->current_parent) continue;
 			
@@ -588,7 +588,6 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 				if (stat(pending->current_parent, &info) != 0) {
 					log_message(DEBUG, "Detected deletion of pending watch parent: %s", pending->current_parent);
 					pending_delete(monitor, pending->current_parent);
-					break; /* pending_delete modifies the list, so restart the loop */
 				}
 			}
 		}
