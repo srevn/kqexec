@@ -20,6 +20,74 @@
 #include "registry.h"
 #include "scanner.h"
 
+/* Free resources used by an entity state */
+static void state_free_entity(entity_t *state) {
+	if (state) {
+		scanner_destroy(state->scanner);
+		stability_destroy(state->stability);
+		free(state->trigger);
+		free(state);
+	}
+}
+
+/* Observer callback for watch deactivation - proactive cleanup */
+static void states_on_watch_deactivated(watchref_t ref, void *context) {
+	states_t *states = (states_t *)context;
+	if (!states || !states->buckets) {
+		return;
+	}
+	
+	log_message(DEBUG, "States observer: Watch ID %u (gen %u) deactivated, cleaning up states", 
+	           ref.watch_id, ref.generation);
+	
+	int entities_removed = 0;
+	int nodes_removed = 0;
+	
+	/* Scan all buckets for entities with the deactivated watch */
+	for (size_t bucket = 0; bucket < states->bucket_count; bucket++) {
+		pthread_mutex_lock(&states->mutexes[bucket]);
+		
+		node_t **node_ptr = &states->buckets[bucket];
+		while (*node_ptr) {
+			node_t *node = *node_ptr;
+			
+			/* Remove entities with deactivated watch from this node */
+			entity_t **entity_ptr = &node->entities;
+			while (*entity_ptr) {
+				entity_t *entity = *entity_ptr;
+				if (watchref_equal(entity->watchref, ref)) {
+					log_message(DEBUG, "Removing deactivated entity for path: %s", 
+					           node->path ? node->path : "<null>");
+					*entity_ptr = entity->next;
+					state_free_entity(entity);
+					entities_removed++;
+				} else {
+					entity_ptr = &entity->next;
+				}
+			}
+			
+			/* If node has no entities left, remove entire node */
+			if (!node->entities) {
+				log_message(DEBUG, "Removing empty node after cleanup: %s", 
+				           node->path ? node->path : "<null>");
+				*node_ptr = node->next;
+				free(node->path);
+				free(node);
+				nodes_removed++;
+			} else {
+				node_ptr = &node->next;
+			}
+		}
+		
+		pthread_mutex_unlock(&states->mutexes[bucket]);
+	}
+	
+	if (entities_removed > 0 || nodes_removed > 0) {
+		log_message(DEBUG, "States cleanup complete: removed %d entities, %d nodes", 
+		           entities_removed, nodes_removed);
+	}
+}
+
 /* Hash function for a path string */
 unsigned int states_hash(const char *path, size_t bucket_count) {
 	unsigned int hash = 5381; /* djb2 hash initial value */
@@ -33,7 +101,7 @@ unsigned int states_hash(const char *path, size_t bucket_count) {
 }
 
 /* Create a new state table */
-states_t *states_create(size_t bucket_count) {
+states_t *states_create(size_t bucket_count, registry_t *registry) {
 	states_t *states = calloc(1, sizeof(states_t));
 	if (!states) {
 		log_message(ERROR, "Failed to allocate memory for state table");
@@ -73,18 +141,21 @@ states_t *states_create(size_t bucket_count) {
 		}
 	}
 
-	log_message(DEBUG, "State table created with %zu buckets", bucket_count);
-	return states;
-}
-
-/* Free resources used by an entity state */
-static void state_free_entity(entity_t *state) {
-	if (state) {
-		scanner_destroy(state->scanner);
-		stability_destroy(state->stability);
-		free(state->trigger);
-		free(state);
+	/* Initialize registry integration */
+	states->registry = registry;
+	states->observer.on_watch_deactivated = states_on_watch_deactivated;
+	states->observer.context = states;
+	states->observer.next = NULL;
+	
+	/* Register as observer with the registry */
+	if (registry && !register_observer(registry, &states->observer)) {
+		log_message(ERROR, "Failed to register states as observer with registry");
+		states_destroy(states);
+		return NULL;
 	}
+
+	log_message(DEBUG, "State table created with %zu buckets and registry observer registered", bucket_count);
+	return states;
 }
 
 /* Free resources used by a path state and all its entity states */
@@ -104,6 +175,11 @@ static void node_free(node_t *node) {
 /* Destroy a state table */
 void states_destroy(states_t *states) {
 	if (!states) return;
+
+	/* Unregister from registry observer notifications */
+	if (states->registry) {
+		unregister_observer(states->registry, &states->observer);
+	}
 
 	/* Lock all mutexes during cleanup to ensure thread safety */
 	for (size_t i = 0; i < states->bucket_count; i++) {
@@ -132,7 +208,7 @@ void states_destroy(states_t *states) {
 	states->mutexes = NULL;
 
 	free(states);
-	log_message(DEBUG, "State table destroyed");
+	log_message(DEBUG, "State table destroyed and observer unregistered");
 }
 
 /* Check if entity state is corrupted by verifying magic number */
@@ -259,25 +335,7 @@ entity_t *states_get(states_t *states, const char *path, kind_t kind, watchref_t
 	entity_t *state = node->entities;
 	while (state) {
 		if (watchref_equal(state->watchref, watchref)) {
-			/* Validate that the entity's watch reference is still valid */
-			if (!registry_valid(registry, state->watchref)) {
-				log_message(WARNING, "Found entity with invalid watch reference for %s, removing", path);
-				/* Remove invalid entity from list */
-				if (state == node->entities) {
-					node->entities = state->next;
-				} else {
-					entity_t *prev = node->entities;
-					while (prev && prev->next != state) {
-						prev = prev->next;
-					}
-					if (prev) {
-						prev->next = state->next;
-					}
-				}
-				free(state);
-				break; /* Continue with creating new entity */
-			}
-			
+			/* Update kind if it was previously unknown */
 			if (state->kind == ENTITY_UNKNOWN && kind != ENTITY_UNKNOWN) {
 				state->kind = kind;
 			}

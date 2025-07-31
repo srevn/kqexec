@@ -28,6 +28,8 @@ typedef struct states {
 	node_t **buckets;                      /* Hash table buckets for path states */
 	size_t bucket_count;                   /* Number of buckets in the hash table */
 	pthread_mutex_t *mutexes;              /* Array of mutexes, one per bucket */
+	registry_t *registry;                  /* Registry reference for lookups */
+	observer_t observer;                   /* Observer registration for cleanup */
 } states_t;
 
 /* Entity state tracking structure */
@@ -62,7 +64,7 @@ typedef struct entity {
 } entity_t;
 
 /* Function prototypes */
-states_t *states_create(size_t bucket_count);
+states_t *states_create(size_t bucket_count, registry_t *registry);
 void states_destroy(states_t *states);
 bool state_corrupted(const entity_t *state);
 entity_t *states_get(states_t *states, const char *path, kind_t kind, watchref_t watchref, registry_t *registry);

@@ -142,7 +142,7 @@ monitor_t *monitor_create(config_t *config, registry_t *registry) {
 	monitor->check_queue = queue_create(monitor->registry, 16); /* Initial capacity of 16 */
 
 	/* Initialize state table */
-	monitor->states = states_create(PATH_HASH_SIZE);
+	monitor->states = states_create(PATH_HASH_SIZE, monitor->registry);
 	if (!monitor->states) {
 		log_message(ERROR, "Failed to create state table for monitor");
 		queue_destroy(monitor->check_queue);
@@ -835,7 +835,7 @@ bool monitor_reload(monitor_t *monitor) {
 
 	/* Reset the state management system */
 	states_destroy(monitor->states);
-	monitor->states = states_create(PATH_HASH_SIZE);
+	monitor->states = states_create(PATH_HASH_SIZE, monitor->registry);
 	if (!monitor->states) {
 		log_message(ERROR, "Failed to recreate state table during reload");
 		return false;
