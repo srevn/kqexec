@@ -75,6 +75,7 @@ const char *filter_to_string(filter_t filter);
 /* Watch management functions */
 bool config_add_watch(config_t *config, watch_t *watch, registry_t *registry);
 void config_destroy_watch(watch_t *watch);
+watch_t *config_clone_watch(const watch_t *source);
 bool config_remove_watch(config_t *config, watchref_t watchref, registry_t *registry);
 
 /* Registry-aware functions */

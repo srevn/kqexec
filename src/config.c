@@ -221,6 +221,47 @@ void config_destroy_watch(watch_t *watch) {
 	free(watch);
 }
 
+/* Create a deep copy of a watch structure */
+watch_t *config_clone_watch(const watch_t *source) {
+	if (source == NULL) {
+		return NULL;
+	}
+
+	watch_t *clone = calloc(1, sizeof(watch_t));
+	if (clone == NULL) {
+		log_message(ERROR, "Failed to allocate memory for watch clone");
+		return NULL;
+	}
+
+	/* Copy all fields from the source watch */
+	clone->name = source->name ? strdup(source->name) : NULL;
+	clone->path = source->path ? strdup(source->path) : NULL;
+	clone->command = source->command ? strdup(source->command) : NULL;
+	clone->source_pattern = source->source_pattern ? strdup(source->source_pattern) : NULL;
+	clone->target = source->target;
+	clone->filter = source->filter;
+	clone->log_output = source->log_output;
+	clone->buffer_output = source->buffer_output;
+	clone->recursive = source->recursive;
+	clone->hidden = source->hidden;
+	clone->environment = source->environment;
+	clone->complexity = source->complexity;
+	clone->processing_delay = source->processing_delay;
+	clone->is_dynamic = source->is_dynamic;
+
+	/* Check for strdup failures */
+	if ((source->name && !clone->name) ||
+	    (source->path && !clone->path) ||
+	    (source->command && !clone->command) ||
+	    (source->source_pattern && !clone->source_pattern)) {
+		log_message(ERROR, "Failed to allocate strings for watch clone");
+		config_destroy_watch(clone);
+		return NULL;
+	}
+
+	return clone;
+}
+
 /* Create a new configuration structure */
 config_t *config_create(void) {
 	config_t *config = calloc(1, sizeof(config_t));

@@ -352,31 +352,19 @@ static void pending_promote_match(monitor_t *monitor, pending_t *pending, const 
 		return;
 	}
 
-	watch_t *resolved_watch = calloc(1, sizeof(watch_t));
+	watch_t *resolved_watch = config_clone_watch(pending_watch);
 	if (!resolved_watch) {
-		log_message(ERROR, "Failed to allocate memory for resolved watch for: %s", path);
+		log_message(ERROR, "Failed to clone watch for resolved path: %s", path);
 		return;
 	}
 
-	/* Manually copy properties and set dynamic fields */
-	resolved_watch->name = pending_watch->name ? strdup(pending_watch->name) : NULL;
+	/* Update path and set dynamic fields */
+	free(resolved_watch->path);
 	resolved_watch->path = strdup(path);
-	resolved_watch->target = pending_watch->target;
-	resolved_watch->filter = pending_watch->filter;
-	resolved_watch->command = pending_watch->command ? strdup(pending_watch->command) : NULL;
-	resolved_watch->log_output = pending_watch->log_output;
-	resolved_watch->buffer_output = pending_watch->buffer_output;
-	resolved_watch->recursive = pending_watch->recursive;
-	resolved_watch->hidden = pending_watch->hidden;
-	resolved_watch->environment = pending_watch->environment;
-	resolved_watch->complexity = pending_watch->complexity;
-	resolved_watch->processing_delay = pending_watch->processing_delay;
 	resolved_watch->is_dynamic = true;
 	resolved_watch->source_pattern = strdup(pending->glob_pattern);
 
-	if (!resolved_watch->path || !resolved_watch->source_pattern ||
-	    (pending_watch->name && !resolved_watch->name) ||
-	    (pending_watch->command && !resolved_watch->command)) {
+	if (!resolved_watch->path || !resolved_watch->source_pattern) {
 		log_message(ERROR, "Failed to allocate strings for resolved watch");
 		config_destroy_watch(resolved_watch);
 		return;

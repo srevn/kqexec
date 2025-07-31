@@ -815,35 +815,14 @@ bool monitor_reload(monitor_t *monitor) {
 
 			if (pattern_exists) {
 				/* Create a copy of the dynamic watch for the new config */
-				watch_t *preserved_watch = calloc(1, sizeof(watch_t));
-				if (preserved_watch) {
-					/* Copy all fields from old watch */
-					preserved_watch->name = old_watch->name ? strdup(old_watch->name) : NULL;
-					preserved_watch->path = old_watch->path ? strdup(old_watch->path) : NULL;
-					preserved_watch->command = old_watch->command ? strdup(old_watch->command) : NULL;
-					preserved_watch->source_pattern = old_watch->source_pattern ? strdup(old_watch->source_pattern) : NULL;
-					preserved_watch->target = old_watch->target;
-					preserved_watch->filter = old_watch->filter;
-					preserved_watch->log_output = old_watch->log_output;
-					preserved_watch->buffer_output = old_watch->buffer_output;
-					preserved_watch->recursive = old_watch->recursive;
-					preserved_watch->hidden = old_watch->hidden;
-					preserved_watch->environment = old_watch->environment;
-					preserved_watch->complexity = old_watch->complexity;
-					preserved_watch->processing_delay = old_watch->processing_delay;
-					preserved_watch->is_dynamic = true;
-				}
+				watch_t *preserved_watch = config_clone_watch(old_watch);
 				if (preserved_watch && config_add_watch(new_config, preserved_watch, new_registry)) {
 					log_message(DEBUG, "Preserved dynamic watch: %s (from pattern: %s)", 
 					           preserved_watch->path, preserved_watch->source_pattern);
 				} else {
 					log_message(WARNING, "Failed to preserve dynamic watch: %s", old_watch->path);
 					if (preserved_watch) {
-						free(preserved_watch->name);
-						free(preserved_watch->path);
-						free(preserved_watch->command);
-						free(preserved_watch->source_pattern);
-						free(preserved_watch);
+						config_destroy_watch(preserved_watch);
 					}
 				}
 			}
