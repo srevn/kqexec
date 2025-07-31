@@ -51,7 +51,7 @@ static void monitor_on_pending_watch_deactivated(watchref_t ref, void *context) 
 }
 
 /* Free resources used by a watcher structure */
-static void watcher_destroy(monitor_t *monitor, watcher_t *watcher) {
+static void watcher_destroy(monitor_t *monitor, watcher_t *watcher, bool is_stale) {
 	if (watcher == NULL) {
 		return;
 	}
@@ -63,8 +63,11 @@ static void watcher_destroy(monitor_t *monitor, watcher_t *watcher) {
 		if (watcher->shared_fd && monitor) {
 			/* Count other watchers using this FD */
 			int fd_users = 0;
-			for (int i = 0; i < monitor->num_watches; i++) {
-				watcher_t *other = monitor->watches[i];
+			watcher_t **list = is_stale ? monitor->watcher_graveyard.stale_watches : monitor->watches;
+			int count = is_stale ? monitor->watcher_graveyard.num_stale : monitor->num_watches;
+
+			for (int i = 0; i < count; i++) {
+				watcher_t *other = list[i];
 				if (other && other != watcher && other->wd == watcher->wd) {
 					fd_users++;
 				}
@@ -249,13 +252,13 @@ void monitor_destroy(monitor_t *monitor) {
 
 	/* Free watches */
 	for (int i = 0; i < monitor->num_watches; i++) {
-		watcher_destroy(monitor, monitor->watches[i]);
+		watcher_destroy(monitor, monitor->watches[i], false);
 		monitor->watches[i] = NULL; /* Prevent use-after-free in subsequent calls */
 	}
     if (monitor->watcher_graveyard.stale_watches) {
         log_message(DEBUG, "Cleaning up %d stale watchers from graveyard during monitor destruction.", monitor->watcher_graveyard.num_stale);
         for (int i = 0; i < monitor->watcher_graveyard.num_stale; i++) {
-            watcher_destroy(monitor, monitor->watcher_graveyard.stale_watches[i]);
+            watcher_destroy(monitor, monitor->watcher_graveyard.stale_watches[i], true);
         }
         free(monitor->watcher_graveyard.stale_watches);
     }
@@ -369,12 +372,12 @@ bool monitor_path(monitor_t *monitor, const char *path, watchref_t watchref) {
 		shared_watcher->shared_fd = true;
 
 		if (!watcher_stat(watcher)) {
-			watcher_destroy(monitor, watcher);
+			watcher_destroy(monitor, watcher, false);
 			return false;
 		}
 
 		if (!watcher_add(monitor, watcher)) {
-			watcher_destroy(monitor, watcher);
+			watcher_destroy(monitor, watcher, false);
 			return false;
 		}
 
@@ -402,12 +405,12 @@ bool monitor_path(monitor_t *monitor, const char *path, watchref_t watchref) {
 		watcher->shared_fd = false;
 
 		if (!watcher_stat(watcher)) {
-			watcher_destroy(monitor, watcher);
+			watcher_destroy(monitor, watcher, false);
 			return false;
 		}
 
 		if (!watcher_add(monitor, watcher)) {
-			watcher_destroy(monitor, watcher);
+			watcher_destroy(monitor, watcher, false);
 			return false;
 		}
 
@@ -938,7 +941,7 @@ bool monitor_reload(monitor_t *monitor) {
             /* If there's an old graveyard, clean it up now to make way for the new one */
             log_message(DEBUG, "Immediate cleanup of previous watcher graveyard to accommodate new one.");
             for (int i = 0; i < monitor->watcher_graveyard.num_stale; i++) {
-                watcher_destroy(monitor, monitor->watcher_graveyard.stale_watches[i]);
+                watcher_destroy(monitor, monitor->watcher_graveyard.stale_watches[i], true);
             }
             free(monitor->watcher_graveyard.stale_watches);
         }
@@ -990,7 +993,7 @@ bool monitor_prune(monitor_t *monitor, const char *parent) {
 			log_message(DEBUG, "Pruning stale subdirectory watch: %s", watcher->path);
 
 			/* Destroy the watcher (closes FD if not shared) */
-			watcher_destroy(monitor, watcher);
+			watcher_destroy(monitor, watcher, false);
 
 			/* Remove from array by shifting */
 			for (int j = i; j < monitor->num_watches - 1; j++) {
@@ -1044,7 +1047,7 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 				/* Finally, remove the watcher for the parent path itself */
 				for (int j = 0; j < monitor->num_watches; j++) {
 					if (monitor->watches[j] == watcher) {
-						watcher_destroy(monitor, monitor->watches[j]);
+						watcher_destroy(monitor, monitor->watches[j], false);
 						/* Shift remaining watchers */
 						for (int k = j; k < monitor->num_watches - 1; k++) {
 							monitor->watches[k] = monitor->watches[k + 1];
@@ -1069,7 +1072,7 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 				if (new_fd == -1) {
 					log_message(ERROR, "Failed to open recreated path %s: %s", path, strerror(errno));
 					/* Treat as deleted for current_time */
-					watcher_destroy(monitor, watcher);
+					watcher_destroy(monitor, watcher, false);
 					for (int j = i; j < monitor->num_watches - 1; j++) {
 						monitor->watches[j] = monitor->watches[j + 1];
 					}
@@ -1124,7 +1127,7 @@ void monitor_watcher_cleanup(monitor_t *monitor) {
     if (now >= monitor->watcher_graveyard.retirement_time) {
         log_message(DEBUG, "Cleaning up %d stale watchers from graveyard.", monitor->watcher_graveyard.num_stale);
         for (int i = 0; i < monitor->watcher_graveyard.num_stale; i++) {
-            watcher_destroy(monitor, monitor->watcher_graveyard.stale_watches[i]);
+            watcher_destroy(monitor, monitor->watcher_graveyard.stale_watches[i], true);
         }
         free(monitor->watcher_graveyard.stale_watches);
         monitor->watcher_graveyard.stale_watches = NULL;
