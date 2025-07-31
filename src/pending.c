@@ -12,6 +12,7 @@
 #include "pending.h"
 #include "logger.h"
 #include "config.h"
+#include "registry.h"
 
 /* Check if a path contains glob patterns */
 static bool pending_has_glob(const char *path) {
@@ -43,13 +44,13 @@ static char *pending_join(const char *parent, const char *component) {
 	return result;
 }
 
-/* Find watcher by path and watch */
-static watcher_t *pending_watcher(monitor_t *monitor, const char *path, watch_t *watch) {
-	if (!monitor || !path || !watch) return NULL;
+/* Find watcher by path and watch reference */
+static watcher_t *pending_watcher(monitor_t *monitor, const char *path, watchref_t watchref) {
+	if (!monitor || !path || !watchref_valid(watchref)) return NULL;
 	
 	for (int i = 0; i < monitor->num_watches; i++) {
 		if (strcmp(monitor->watches[i]->path, path) == 0 && 
-		    monitor->watches[i]->watch == watch) {
+		    watchref_equal(monitor->watches[i]->watchref, watchref)) {
 			return monitor->watches[i];
 		}
 	}
@@ -224,7 +225,12 @@ static void pending_remove(monitor_t *monitor, int index) {
 }
 
 /* Add a pending watch to the monitor's pending list */
-bool pending_add(monitor_t *monitor, const char *target_path, watch_t *watch) {
+bool pending_add(monitor_t *monitor, const char *target_path, watchref_t watchref) {
+	watch_t *watch = registry_get(monitor->registry, watchref);
+	if (!watch) {
+		log_message(ERROR, "Invalid watch reference for pending watch");
+		return false;
+	}
 	if (!monitor || !target_path || !watch) {
 		return false;
 	}
@@ -280,25 +286,28 @@ bool pending_add(monitor_t *monitor, const char *target_path, watch_t *watch) {
 	pending->is_glob = is_glob;
 	pending->unresolved_path = is_glob ? strdup(parent) : NULL;
 	pending->glob_pattern = is_glob ? strdup(target_path) : NULL;
-	pending->watch = watch;
+	pending->watchref = watchref;
 	pending->parent_watcher = NULL;
 
 	/* Add watch on the parent directory */
-	watch_t *pending_watch = is_glob ? monitor->glob_watch : watch;
+	watchref_t pending_watchref = is_glob ? monitor->glob_watchref : watchref;
 	if (is_glob) {
-		/* Copy relevant properties from original watch */
-		monitor->glob_watch->recursive = watch->recursive;
-		monitor->glob_watch->hidden = watch->hidden;
+		/* Copy relevant properties from original watch to glob watch */
+		watch_t *glob_watch = registry_get(monitor->registry, monitor->glob_watchref);
+		if (glob_watch && watch) {
+			glob_watch->recursive = watch->recursive;
+			glob_watch->hidden = watch->hidden;
+		}
 	}
 
-	if (!monitor_path(monitor, parent, pending_watch)) {
+	if (!monitor_path(monitor, parent, pending_watchref)) {
 		log_message(WARNING, "Failed to add parent watch for %s, parent: %s", target_path, parent);
 		pending_destroy(pending);
 		return false;
 	}
 
 	/* Find the watcher we just created for the parent */
-	pending->parent_watcher = pending_watcher(monitor, parent, watch);
+	pending->parent_watcher = pending_watcher(monitor, parent, pending_watchref);
 
 	/* Add to pending watches array */
 	pending_t **new_pending = realloc(monitor->pending, (monitor->num_pending + 1) * sizeof(pending_t *));
@@ -319,21 +328,57 @@ bool pending_add(monitor_t *monitor, const char *target_path, watch_t *watch) {
 
 /* Promote a fully matched glob path to a dynamic watch */
 static void pending_promote_match(monitor_t *monitor, pending_t *pending, const char *path) {
-	/* Check if a watch for this path already exists in the config */
+	/* Check if a watch for this path with the same name already exists */
 	if (monitor->config && path) {
+		watch_t *pending_watch = registry_get(monitor->registry, pending->watchref);
+		if (!pending_watch) {
+			log_message(ERROR, "Invalid pending watch reference during promotion check");
+			return;
+		}
+
 		for (int i = 0; i < monitor->config->num_watches; i++) {
-			watch_t *w = monitor->config->watches[i];
-			if (w && w->path && strcmp(w->path, path) == 0) {
-				log_message(DEBUG, "Watch for %s from pattern %s already exists.", path, pending->glob_pattern);
+			watch_t *w = config_get_watch(monitor->config, i);
+			if (w && w->path && w->name && strcmp(w->path, path) == 0 && strcmp(w->name, pending_watch->name) == 0) {
+				log_message(DEBUG, "Watch for %s with name '%s' from pattern %s already exists.", path, w->name, pending->glob_pattern);
 				return;
 			}
 		}
 	}
 	
-	/* Create a dynamic deep copy with the resolved path and source pattern tracking */
-	watch_t *resolved_watch = config_clone(pending->watch, path, pending->glob_pattern);
+	/* Create a dynamic watch from the original's properties */
+	watch_t *pending_watch = registry_get(monitor->registry, pending->watchref);
+	if (!pending_watch) {
+		log_message(ERROR, "Invalid pending watch reference during resolution");
+		return;
+	}
+
+	watch_t *resolved_watch = calloc(1, sizeof(watch_t));
 	if (!resolved_watch) {
-		log_message(ERROR, "Failed to create resolved watch for: %s", path);
+		log_message(ERROR, "Failed to allocate memory for resolved watch for: %s", path);
+		return;
+	}
+
+	/* Manually copy properties and set dynamic fields */
+	resolved_watch->name = pending_watch->name ? strdup(pending_watch->name) : NULL;
+	resolved_watch->path = strdup(path);
+	resolved_watch->target = pending_watch->target;
+	resolved_watch->filter = pending_watch->filter;
+	resolved_watch->command = pending_watch->command ? strdup(pending_watch->command) : NULL;
+	resolved_watch->log_output = pending_watch->log_output;
+	resolved_watch->buffer_output = pending_watch->buffer_output;
+	resolved_watch->recursive = pending_watch->recursive;
+	resolved_watch->hidden = pending_watch->hidden;
+	resolved_watch->environment = pending_watch->environment;
+	resolved_watch->complexity = pending_watch->complexity;
+	resolved_watch->processing_delay = pending_watch->processing_delay;
+	resolved_watch->is_dynamic = true;
+	resolved_watch->source_pattern = strdup(pending->glob_pattern);
+
+	if (!resolved_watch->path || !resolved_watch->source_pattern ||
+	    (pending_watch->name && !resolved_watch->name) ||
+	    (pending_watch->command && !resolved_watch->command)) {
+		log_message(ERROR, "Failed to allocate strings for resolved watch");
+		config_destroy_watch(resolved_watch);
 		return;
 	}
 	
@@ -348,11 +393,14 @@ static void pending_promote_match(monitor_t *monitor, pending_t *pending, const 
 		return;
 	}
 	
-	/* Add to monitoring system - now it's a first-class citizen */
-	if (monitor_add(monitor, resolved_watch, true)) {
+	/* Add to monitoring system */
+	watchref_t resolved_ref = config_get_watchref(monitor->config, monitor->config->num_watches - 1);
+	if (monitor_add(monitor, resolved_ref, true)) {
 		log_message(INFO, "Successfully promoted glob match: %s", path);
 	} else {
 		log_message(WARNING, "Failed to promote glob match: %s", path);
+		/* Remove from config since monitor add failed */
+		config_remove_watch(monitor->config, resolved_ref);
 	}
 }
 
@@ -396,17 +444,20 @@ static void pending_intermediate(monitor_t *monitor, pending_t *pending, const c
 
 	new_pending->is_glob = true;
 	new_pending->glob_pattern = strdup(pending->glob_pattern);
-	new_pending->watch = pending->watch;
+	new_pending->watchref = pending->watchref;
 	new_pending->parent_watcher = NULL;
 	
 	/* Use the special glob watch for intermediate directories */
-	watch_t *pending_watch = monitor->glob_watch;
-	pending_watch->recursive = pending->watch->recursive;
-	pending_watch->hidden = pending->watch->hidden;
+	watch_t *pending_watch = registry_get(monitor->registry, monitor->glob_watchref);
+	watch_t *orig_watch = registry_get(monitor->registry, pending->watchref);
+	if (pending_watch && orig_watch) {
+		pending_watch->recursive = orig_watch->recursive;
+		pending_watch->hidden = orig_watch->hidden;
+	}
 
-	if (new_pending->next_component && monitor_tree(monitor, path, pending_watch)) {
+	if (new_pending->next_component && monitor_tree(monitor, path, monitor->glob_watchref)) {
 		/* Find the watcher for this parent */
-		new_pending->parent_watcher = pending_watcher(monitor, path, pending_watch);
+		new_pending->parent_watcher = pending_watcher(monitor, path, monitor->glob_watchref);
 		
 		/* Add to pending array */
 		pending_t **new_pending_array = realloc(monitor->pending, (monitor->num_pending + 1) * sizeof(pending_t *));
@@ -469,7 +520,7 @@ static void pending_process_exact(monitor_t *monitor, pending_t *pending, int in
 			/* Full path now exists - promote to regular watch */
 			log_message(DEBUG, "Promoting pending watch to regular watch: %s", pending->target_path);
 
-			if (monitor_add(monitor, pending->watch, true)) {
+			if (monitor_add(monitor, pending->watchref, true)) {
 				log_message(INFO, "Successfully promoted pending watch: %s", pending->target_path);
 			} else {
 				log_message(WARNING, "Failed to promote pending watch: %s", pending->target_path);
@@ -494,14 +545,14 @@ static void pending_process_exact(monitor_t *monitor, pending_t *pending, int in
 			}
 
 			/* Add watch on the new parent directory */
-			if (!monitor_path(monitor, pending->current_parent, pending->watch)) {
+			if (!monitor_path(monitor, pending->current_parent, pending->watchref)) {
 				log_message(WARNING, "Failed to add watch on new parent: %s", pending->current_parent);
 				pending_remove(monitor, index);
 				return;
 			}
 
 			/* Update parent watcher reference */
-			pending->parent_watcher = pending_watcher(monitor, pending->current_parent, pending->watch);
+			pending->parent_watcher = pending_watcher(monitor, pending->current_parent, pending->watchref);
 
 			log_message(DEBUG, "Updated pending watch: target=%s, new_parent=%s, next=%s",
 						pending->target_path, pending->current_parent, pending->next_component);
@@ -569,12 +620,12 @@ void pending_delete(monitor_t *monitor, const char *deleted_path) {
 
 			/* Remove and re-add to find new deepest parent */
 			char *target_path = strdup(pending->target_path);
-			watch_t *watch = pending->watch;
+			watchref_t watchref = pending->watchref;
 			
 			pending_remove(monitor, i);
 			
 			if (target_path) {
-				pending_add(monitor, target_path, watch);
+				pending_add(monitor, target_path, watchref);
 				free(target_path);
 			}
 		}

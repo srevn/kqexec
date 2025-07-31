@@ -46,7 +46,6 @@ void stability_destroy(stability_t *stability);
 /* Main stability processing function */
 void stability_process(monitor_t *monitor, struct timespec *current_time);
 entity_t* stability_root(monitor_t *monitor, entity_t *state);
-watch_t *stability_watch(monitor_t *monitor, check_t *check);
 entity_t *stability_entry(monitor_t *monitor, check_t *check);
 
 /* Quiet period checking */
@@ -56,7 +55,7 @@ bool stability_quiet(monitor_t *monitor, entity_t *root, struct timespec *curren
 bool stability_ready(monitor_t *monitor, entity_t *state, optype_t optype, int base_debounce_ms);
 
 /* Directory stability verification */
-bool stability_scan(entity_t *root, const char *path, stats_t *stats_out);
+bool stability_scan(monitor_t *monitor, entity_t *root, const char *path, stats_t *stats_out);
 bool stability_new(monitor_t *monitor, check_t *check);
 failure_t stability_fail(monitor_t *monitor, check_t *check, entity_t *root, struct timespec *current_time);
 

@@ -94,7 +94,7 @@ static void command_substitute(char *result, const char *placeholder, const char
  * %u: User who triggered the event
  * %e: Event type which occurred
  */
-char *command_placeholders(monitor_t *monitor, const watch_t *watch, const char *command, const event_t *event) {
+char *command_placeholders(monitor_t *monitor, watchref_t watchref, const char *command, const event_t *event) {
 	char *result;
 	char time_str[64];
 	char user_str[64];
@@ -104,6 +104,7 @@ char *command_placeholders(monitor_t *monitor, const watch_t *watch, const char 
 	struct tm tm;
 	struct stat info;
 
+	const watch_t *watch = registry_get(monitor->registry, watchref);
 	if (command == NULL || event == NULL || watch == NULL) {
 		return NULL;
 	}
@@ -156,7 +157,10 @@ char *command_placeholders(monitor_t *monitor, const watch_t *watch, const char 
 	}
 
 	/* Get entity state for size and trigger file placeholders */
-	entity_t *state = states_get(monitor->states, event->path, ENTITY_UNKNOWN, (watch_t *) watch);
+	entity_t *state = NULL;
+	if (watchref_valid(watchref)) {
+		state = states_get(monitor->states, event->path, ENTITY_UNKNOWN, watchref, monitor->registry);
+	}
 
 	/* Substitute %f and %F with trigger file path and name */
 	if (strstr(result, "%f") || strstr(result, "%F")) {
@@ -273,7 +277,8 @@ static void buffer_flush(const watch_t *watch, char **buffer, int buffer_count) 
 }
 
 /* Command execution synchronous or asynchronous */
-bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *event, bool async) {
+bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *event, bool async) {
+	const watch_t *watch = registry_get(monitor->registry, watchref);
 	if (watch == NULL || event == NULL) {
 		log_message(ERROR, "Invalid arguments to command_execute");
 		return false;
@@ -281,27 +286,17 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 
 	/* For asynchronous execution, delegate to thread pool */
 	if (async) {
-		return threads_submit(command_threads, monitor, watch, event);
+		return threads_submit(command_threads, monitor, watchref, event);
 	}
 
-	/* Find the canonical watch object to avoid using a temporary copy from a worker thread */
-	const watch_t *canonical_watch = watch;
-	if (monitor && monitor->config) {
-		for (int i = 0; i < monitor->config->num_watches; i++) {
-			if (monitor->config->watches[i] && monitor->config->watches[i]->name && watch && watch->name &&
-			    strcmp(monitor->config->watches[i]->name, watch->name) == 0) {
-				canonical_watch = monitor->config->watches[i];
-				break;
-			}
-		}
-	}
+	
 
 	/* Synchronous execution with robust output capture */
 	pid_t pid;
 	char *command;
 	int stdout_pipe[2] = {-1, -1}, stderr_pipe[2] = {-1, -1};
-	bool capture_output = canonical_watch->log_output;
-	bool buffer_output = canonical_watch->buffer_output;
+	bool capture_output = watch->log_output;
+	bool buffer_output = watch->buffer_output;
 	time_t start, end_time;
 
 	/* Output buffering variables */
@@ -310,7 +305,7 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 	int output_capacity = 0;
 
 	/* Handle special config reload command */
-	if (strcmp(canonical_watch->command, "__config_reload__") == 0) {
+	if (strcmp(watch->command, "__config_reload__") == 0) {
 		/* This is handled by the monitor, not executed as a shell command */
 		return true;
 	}
@@ -319,7 +314,7 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 	time(&start);
 
 	/* Substitute placeholders in the command */
-	command = command_placeholders(monitor, canonical_watch, canonical_watch->command, event);
+	command = command_placeholders(monitor, watchref, watch->command, event);
 	if (command == NULL) {
 		return false;
 	}
@@ -367,8 +362,8 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 		}
 
 		/* Set environment variables for the command if enabled */
-		if (canonical_watch->environment) {
-			command_environment(monitor, canonical_watch, event);
+		if (watch->environment) {
+			command_environment(monitor, watchref, event);
 		}
 
 		/* Execute the command */
@@ -380,7 +375,10 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 	}
 
 	/* Parent process - get a reference to the state for post-execution cleanup */
-	entity_t *state = states_get(monitor->states, event->path, ENTITY_UNKNOWN, (watch_t *) canonical_watch);
+	entity_t *state = NULL;
+	if (watchref_valid(watchref)) {
+		state = states_get(monitor->states, event->path, ENTITY_UNKNOWN, watchref, monitor->registry);
+	}
 
 	/* Read and log output if configured - robust version */
 	if (capture_output) {
@@ -431,14 +429,13 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 								if (buffer_output) {
 									/* Add to buffer */
 									if (!buffer_append(&output_buffer, &output_count, &output_capacity, line_buffer)) {
-										log_message(WARNING, "[%s]: Failed to buffer output, switching to real-time",
-													canonical_watch->name);
+										log_message(WARNING, "[%s]: Failed to buffer output, switching to real-time", watch->name);
 										buffer_output = false;
-										log_message(NOTICE, "[%s]: %s", canonical_watch->name, line_buffer);
+										log_message(NOTICE, "[%s]: %s", watch->name, line_buffer);
 									}
 								} else {
 									/* Real-time logging */
-									log_message(NOTICE, "[%s]: %s", canonical_watch->name, line_buffer);
+									log_message(NOTICE, "[%s]: %s", watch->name, line_buffer);
 								}
 							}
 							line_pos = 0;
@@ -457,7 +454,7 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 					stderr_open = false;
 				} else {
 					buffer[bytes_read] = '\0';
-					log_message(WARNING, "[%s]: %s", canonical_watch->name, buffer);
+					log_message(WARNING, "[%s]: %s", watch->name, buffer);
 				}
 			}
 		}
@@ -467,10 +464,10 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 			line_buffer[line_pos] = '\0';
 			if (buffer_output) {
 				if (!buffer_append(&output_buffer, &output_count, &output_capacity, line_buffer)) {
-					log_message(NOTICE, "[%s]: %s", canonical_watch->name, line_buffer);
+					log_message(NOTICE, "[%s]: %s", watch->name, line_buffer);
 				}
 			} else {
-				log_message(NOTICE, "[%s]: %s", canonical_watch->name, line_buffer);
+				log_message(NOTICE, "[%s]: %s", watch->name, line_buffer);
 			}
 		}
 
@@ -488,7 +485,7 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 
 	/* Flush buffered output if buffering was enabled */
 	if (capture_output && buffer_output && output_buffer) {
-		buffer_flush(canonical_watch, output_buffer, output_count);
+		buffer_flush(watch, output_buffer, output_count);
 
 		/* Clean up buffer */
 		for (int i = 0; i < output_count; i++) {
@@ -499,7 +496,7 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 
 	/* Log command completion */
 	log_message(INFO, "[%s] Finished execution (pid %d, duration: %lds, exit: %d)",
-	            canonical_watch->name, pid, end_time - start, WEXITSTATUS(status));
+	            watch->name, pid, end_time - start, WEXITSTATUS(status));
 
 	/* Clear command executing flag and reset baseline */
 	if (state) {
@@ -527,7 +524,8 @@ bool command_execute(monitor_t *monitor, const watch_t *watch, const event_t *ev
 }
 
 /* Set environment variables for command execution */
-void command_environment(monitor_t *monitor, const watch_t *watch, const event_t *event) {
+void command_environment(monitor_t *monitor, watchref_t watchref, const event_t *event) {
+	const watch_t *watch = registry_get(monitor->registry, watchref);
 	char buffer[1024];
 	struct passwd *pwd;
 	struct tm tm;
@@ -571,7 +569,10 @@ void command_environment(monitor_t *monitor, const watch_t *watch, const event_t
 
 	/* KQ_TRIGGER_FILE_PATH - full path of the file that triggered the event */
 	const char *trigger_file = event->path; /* Default to event path */
-	entity_t *state = states_get(monitor->states, event->path, ENTITY_UNKNOWN, (watch_t *) watch);
+	entity_t *state = NULL;
+	if (watchref_valid(watchref)) {
+		state = states_get(monitor->states, event->path, ENTITY_UNKNOWN, watchref, monitor->registry);
+	}
 	if (state) {
 		entity_t *root = stability_root(monitor, state);
 		if (root && root->trigger) {

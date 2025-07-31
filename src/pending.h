@@ -3,10 +3,13 @@
 
 #include <stdbool.h>
 
+#include "registry.h"
+
 /* Forward declarations */
 typedef struct monitor monitor_t;
 typedef struct watcher watcher_t;
 typedef struct watch watch_t;
+typedef struct watchref watchref_t;
 
 /* Pending watch for non-existent paths */
 typedef struct pending {
@@ -16,12 +19,12 @@ typedef struct pending {
 	char *unresolved_path;                 /* The unresolved glob path up to the current parent */
 	char *glob_pattern;                    /* Original glob pattern for matching */
 	bool is_glob;                          /* Whether this is a glob pattern */
-	watch_t *watch;                        /* The original watch configuration */
+	watchref_t watchref;                   /* Reference to the original watch configuration */
 	watcher_t *parent_watcher;             /* The watcher on the current parent directory */
 } pending_t;
 
 /* Pending watch management functions */
-bool pending_add(monitor_t *monitor, const char *target_path, watch_t *watch);
+bool pending_add(monitor_t *monitor, const char *target_path, watchref_t watchref);
 void pending_process(monitor_t *monitor, const char *parent_path);
 void pending_delete(monitor_t *monitor, const char *deleted_path);
 void pending_cleanup(monitor_t *monitor);

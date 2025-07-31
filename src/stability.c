@@ -12,6 +12,7 @@
 #include "command.h"
 #include "queue.h"
 #include "events.h"
+#include "registry.h"
 
 /* Create a stability state */
 stability_t *stability_create(void) {
@@ -44,20 +45,26 @@ void stability_destroy(stability_t *stability) {
 
 /* Find the root state for a given entity state */
 entity_t *stability_root(monitor_t *monitor, entity_t *state) {
-	if (!monitor || !state || !state->watch || !state->watch->path || !state->node) {
-		if (state && state->node) {
+	if (!monitor || !state || !state->node) {
+		return NULL;
+	}
+
+	/* Get the watch for this state */
+	watch_t *watch = registry_get(monitor->registry, state->watchref);
+	if (!watch || !watch->path) {
+		if (state->node) {
 			log_message(WARNING, "Invalid watch info for state %s", state->node->path);
 		}
 		return NULL;
 	}
 
 	/* If current state is already the root, return it */
-	if (strcmp(state->node->path, state->watch->path) == 0) {
+	if (strcmp(state->node->path, watch->path) == 0) {
 		return state;
 	}
 
 	/* Otherwise, get the state for the watch path */
-	return states_get(monitor->states, state->watch->path, ENTITY_DIRECTORY, state->watch);
+	return states_get(monitor->states, watch->path, ENTITY_DIRECTORY, state->watchref, monitor->registry);
 }
 
 /* Determine if a command should be executed based on operation type and debouncing */
@@ -132,7 +139,8 @@ void stability_defer(monitor_t *monitor, entity_t *state) {
 		return;
 	}
 
-	if (!state->node || !state->watch) {
+	watch_t *state_watch = registry_get(monitor->registry, state->watchref);
+	if (!state->node || !state_watch) {
 		log_message(WARNING, "Cannot schedule deferred check - state has null node or watch");
 		return;
 	}
@@ -191,24 +199,25 @@ void stability_defer(monitor_t *monitor, entity_t *state) {
 		check_t *check = &monitor->check_queue->items[existing_index];
 
 		/* Add the current watch to the existing check to merge them */
-		if (!queue_add(check, root->watch->name)) {
+		watch_t *root_watch = registry_get(monitor->registry, root->watchref);
+		if (!queue_add(check, root->watchref)) {
 			log_message(WARNING, "Failed to merge watch %s into existing check for %s",
-			            root->watch->name, root->node->path);
+			            root_watch ? root_watch->name : "unknown", root->node->path);
 		} else {
 			log_message(DEBUG, "Merged watch %s into existing deferred check for %s",
-			            root->watch->name, root->node->path);
+			            root_watch ? root_watch->name : "unknown", root->node->path);
 		}
 
 		long locked_quiet = check->scheduled_quiet;
 
 		if (locked_quiet <= 0) {
 			/* Fallback if the period wasn't locked in correctly */
-			locked_quiet = scanner_delay(root);
+			locked_quiet = scanner_delay(monitor, root);
 			check->scheduled_quiet = locked_quiet;
 		}
 
 		/* Calculate current complexity and use maximum with locked-in period */
-		long current_complexity = scanner_delay(root);
+		long current_complexity = scanner_delay(monitor, root);
 
 		/* Allow responsive drops if new period is significantly lower */
 		long effective_quiet;
@@ -233,7 +242,7 @@ void stability_defer(monitor_t *monitor, entity_t *state) {
 	}
 
 	/* Calculate quiet period for first event of this burst */
-	long required_quiet = scanner_delay(root);
+	long required_quiet = scanner_delay(monitor, root);
 	log_message(DEBUG, "Calculated new quiet period for %s: %ld ms (first event of burst)",
 	            root->node->path, required_quiet);
 
@@ -248,7 +257,7 @@ void stability_defer(monitor_t *monitor, entity_t *state) {
 	}
 
 	/* Add to queue */
-	queue_upsert(monitor->check_queue, root->node->path, root->watch, next_check);
+	queue_upsert(monitor->check_queue, root->node->path, root->watchref, next_check);
 
 	/* Store the calculated quiet period for consistent use */
 	int queue_index = queue_find(monitor->check_queue, root->node->path);
@@ -261,37 +270,21 @@ void stability_defer(monitor_t *monitor, entity_t *state) {
 	            root->stability->stats.local_dirs);
 }
 
-/* Get the primary watch from a deferred check check */
-watch_t *stability_watch(monitor_t *monitor, check_t *check) {
-	if (!monitor || !check || check->num_watches <= 0) {
-		return NULL;
-	}
-	/* For simplicity, we often only need the first watch */
-	const char *primary_watch_name = check->watch_names[0];
-	for (int i = 0; i < monitor->config->num_watches; i++) {
-		watch_t *watch = monitor->config->watches[i];
-		if (strcmp(watch->name, primary_watch_name) == 0 && strcmp(watch->path, check->path) == 0) {
-			/* Found the specific, valid watch for this path and name */
-			return watch;
-		}
-	}
-	return NULL; /* Watch was deleted or its path has changed */
-}
-
 /* Get the root entity state for a deferred check */
 entity_t *stability_entry(monitor_t *monitor, check_t *check) {
-	if (!monitor) {
-		log_message(ERROR, "Monitor is null in stability_entry");
+	if (!monitor || !check || check->num_watches <= 0) {
+		log_message(ERROR, "Invalid parameters for stability_entry");
 		return NULL;
 	}
 
-	watch_t *primary_watch = stability_watch(monitor, check);
-	if (!primary_watch) {
+	/* Use the first watch reference to find the state. All watches for a check share the same path. */
+	watchref_t primary_watchref = check->watchrefs[0];
+	if (!registry_valid(monitor->registry, primary_watchref)) {
 		log_message(WARNING, "Deferred check for %s has a stale watch, skipping.", check->path);
 		return NULL;
 	}
 
-	entity_t *root = states_get(monitor->states, check->path, ENTITY_DIRECTORY, primary_watch);
+	entity_t *root = states_get(monitor->states, check->path, ENTITY_DIRECTORY, primary_watchref, monitor->registry);
 	if (!root) {
 		log_message(WARNING, "Cannot find state for %s", check->path);
 		return NULL;
@@ -366,15 +359,9 @@ bool stability_new(monitor_t *monitor, check_t *check) {
 
 	/* For recursive watches, scan for new directories */
 	for (int i = 0; i < check->num_watches; i++) {
-		watch_t *watch = NULL;
-		for (int j = 0; j < monitor->config->num_watches; j++) {
-			if (strcmp(monitor->config->watches[j]->name, check->watch_names[i]) == 0) {
-				watch = monitor->config->watches[j];
-				break;
-			}
-		}
+		watch_t *watch = registry_get(monitor->registry, check->watchrefs[i]);
 		if (watch && watch->recursive) {
-			monitor_tree(monitor, check->path, watch);
+			monitor_tree(monitor, check->path, check->watchrefs[i]);
 		}
 	}
 
@@ -382,13 +369,13 @@ bool stability_new(monitor_t *monitor, check_t *check) {
 }
 
 /* Perform directory stability verification */
-bool stability_scan(entity_t *root, const char *path, stats_t *stats_out) {
-	if (!root || !path || !stats_out) {
+bool stability_scan(monitor_t *monitor, entity_t *root, const char *path, stats_t *stats_out) {
+	if (!monitor || !root || !path || !stats_out) {
 		return false;
 	}
 
 	/* Perform recursive stability verification */
-	bool is_stable = scanner_stable(root, path, stats_out);
+	bool is_stable = scanner_stable(monitor, root, path, stats_out);
 
 	/* Always update stats and cumulative changes, even if unstable, to track progress */
 	root->stability->checks_failed = is_stable ? 0 : root->stability->checks_failed;
@@ -563,13 +550,7 @@ bool stability_execute(monitor_t *monitor, check_t *check, entity_t *root, struc
 	/* Determine if any command needs the trigger file path (%f or %F) */
 	bool needs_trigger = false;
 	for (int i = 0; i < check->num_watches; i++) {
-		watch_t *watch = NULL;
-		for (int j = 0; j < monitor->config->num_watches; j++) {
-			if (strcmp(monitor->config->watches[j]->name, check->watch_names[i]) == 0) {
-				watch = monitor->config->watches[j];
-				break;
-			}
-		}
+		watch_t *watch = registry_get(monitor->registry, check->watchrefs[i]);
 		if (watch && (strstr(watch->command, "%f") || strstr(watch->command, "%F"))) {
 			needs_trigger = true;
 			break;
@@ -608,21 +589,16 @@ bool stability_execute(monitor_t *monitor, check_t *check, entity_t *root, struc
 
 	/* Execute commands for all watches associated with the stability check */
 	for (int i = 0; i < check->num_watches; i++) {
-		watch_t *watch = NULL;
-		for (int j = 0; j < monitor->config->num_watches; j++) {
-			if (strcmp(monitor->config->watches[j]->name, check->watch_names[i]) == 0) {
-				watch = monitor->config->watches[j];
-				break;
-			}
-		}
+		watch_t *watch = registry_get(monitor->registry, check->watchrefs[i]);
 
 		if (!watch) {
-			log_message(DEBUG, "Skipping command for stale watch name: %s", check->watch_names[i]);
+			log_message(DEBUG, "Skipping command for stale watch reference: ID %u (gen %u)", 
+			           check->watchrefs[i].watch_id, check->watchrefs[i].generation);
 			continue;
 		}
 
 		/* Get or create state for this specific watch to update its command time */
-		entity_t *state = states_get(monitor->states, check->path, ENTITY_DIRECTORY, watch);
+		entity_t *state = states_get(monitor->states, check->path, ENTITY_DIRECTORY, check->watchrefs[i], monitor->registry);
 		if (!state) {
 			log_message(WARNING, "Unable to get state for %s with watch %s", check->path, watch->name);
 			continue;
@@ -630,7 +606,7 @@ bool stability_execute(monitor_t *monitor, check_t *check, entity_t *root, struc
 
 		/* Execute command */
 		log_message(INFO, "Executing deferred command for %s (watch: %s)", check->path, watch->name);
-		if (command_execute(monitor, watch, &synthetic_event, true)) {
+		if (command_execute(monitor, check->watchrefs[i], &synthetic_event, true)) {
 			executed_count++;
 			/* Update the specific state's command time for debouncing purposes */
 			state->command_time = current_time->tv_sec;
@@ -701,7 +677,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 			/* Use the stored quiet period from when this check was scheduled */
 			if (required_quiet <= 0) {
 				/* Fallback: calculate if not stored (shouldn't happen) */
-				required_quiet = scanner_delay(root);
+				required_quiet = scanner_delay(monitor, root);
 				check->scheduled_quiet = required_quiet;
 			}
 
@@ -709,7 +685,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 
 			if (!elapsed_quiet) {
 				/* Quiet period not yet elapsed, reschedule */
-				watch_t *primary_watch = stability_watch(monitor, check);
+				watch_t *primary_watch = registry_get(monitor->registry, check->watchrefs[0]);
 				log_message(DEBUG, "Quiet period not yet elapsed for %s (watch: %s), rescheduling",
 				            root->node->path, primary_watch ? primary_watch->name : "unknown");
 
@@ -758,7 +734,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 
 		/* Perform directory stability scan */
 		stats_t current_stats;
-		bool scan_completed = stability_scan(root, check->path, &current_stats);
+		bool scan_completed = stability_scan(monitor, root, check->path, &current_stats);
 
 		/* Handle scan failure */
 		if (!scan_completed) {
@@ -802,7 +778,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 			            check->path, root->stability->unstable_count);
 
 			/* Recalculate quiet period based on new instability */
-			required_quiet = scanner_delay(root);
+			required_quiet = scanner_delay(monitor, root);
 			log_message(DEBUG, "Recalculated quiet period for instability: %ld ms", required_quiet);
 			stability_delay(monitor, check, root, current_time, required_quiet);
 			return;

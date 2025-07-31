@@ -242,7 +242,7 @@ bool scanner_compare(stats_t *prev_stats, stats_t *current_stats) {
 }
 
 /* Collect statistics about a directory and its contents, and determine stability */
-bool scanner_stable(entity_t *context, const char *dir_path, stats_t *stats) {
+bool scanner_stable(monitor_t *monitor, entity_t *context, const char *dir_path, stats_t *stats) {
 	DIR *dir;
 	struct dirent *dirent;
 	struct stat info;
@@ -301,12 +301,13 @@ bool scanner_stable(entity_t *context, const char *dir_path, stats_t *stats) {
 			stats->local_dirs++;
 
 			/* Skip hidden directories if configured */
-			if (!context->watch->hidden && dirent->d_name[0] == '.') {
+			watch_t *context_watch = registry_get(monitor->registry, context->watchref);
+			if (context_watch && !context_watch->hidden && dirent->d_name[0] == '.') {
 				continue;
 			}
 
 			stats_t sub_stats;
-			if (!scanner_stable(context, path, &sub_stats)) {
+			if (!scanner_stable(monitor, context, path, &sub_stats)) {
 				is_stable = false; /* Propagate instability from subdirectories */
 			}
 
@@ -404,7 +405,8 @@ void scanner_sync(monitor_t *monitor, node_t *node, entity_t *source) {
 	for (entity_t *state = node->entities; state; state = state->next) {
 		if (state_corrupted(state)) continue;
 
-		log_message(DEBUG, "Synchronizing state for watch %s", state->watch->name);
+		watch_t *state_watch = registry_get(monitor->registry, state->watchref);
+		log_message(DEBUG, "Synchronizing state for watch %s", state_watch ? state_watch->name : "unknown");
 
 		/* Always share universal directory state regardless of watch configuration */
 		state->exists = source->exists;
@@ -430,8 +432,11 @@ void scanner_sync(monitor_t *monitor, node_t *node, entity_t *source) {
 
 		/* Synchronize directory statistics - source has canonical stats */
 		if (state->kind == ENTITY_DIRECTORY && source->kind == ENTITY_DIRECTORY) {
-			bool stats_compatible = (state->watch->recursive == source->watch->recursive &&
-			                         state->watch->hidden == source->watch->hidden);
+			watch_t *state_watch = registry_get(monitor->registry, state->watchref);
+			watch_t *source_watch = registry_get(monitor->registry, source->watchref);
+			bool stats_compatible = (state_watch && source_watch &&
+			                         state_watch->recursive == source_watch->recursive &&
+			                         state_watch->hidden == source_watch->hidden);
 
 			if (stats_compatible) {
 				/* Compatible watches: copy stats from source (canonical) to others */
@@ -443,7 +448,7 @@ void scanner_sync(monitor_t *monitor, node_t *node, entity_t *source) {
 						/* Perform a full copy of the entire stability struct */
 						*state->stability = *source->stability;
 					}
-					log_message(DEBUG, "Shared directory statistics with compatible watch %s", state->watch->name);
+					log_message(DEBUG, "Shared directory statistics with compatible watch %s", state_watch ? state_watch->name : "unknown");
 				}
 			} else {
 				/* Incompatible watches: each needs its own rescan */
@@ -459,11 +464,11 @@ void scanner_sync(monitor_t *monitor, node_t *node, entity_t *source) {
 					}
 					scanner_update(state);
 					log_message(DEBUG, "Rescanned directory for incompatible watch %s (recursive=%s, hidden=%s)",
-					            state->watch->name,
-					            state->watch->recursive ? "true" : "false",
-					            state->watch->hidden ? "true" : "false");
+					            state_watch ? state_watch->name : "unknown",
+					            state_watch && state_watch->recursive ? "true" : "false",
+					            state_watch && state_watch->hidden ? "true" : "false");
 				} else {
-					log_message(WARNING, "Failed to rescan directory for watch %s during sync", state->watch->name);
+					log_message(WARNING, "Failed to rescan directory for watch %s during sync", state_watch ? state_watch->name : "unknown");
 				}
 			}
 		}
@@ -534,6 +539,13 @@ static void scanner_stats(entity_t *state, optype_t optype) {
 
 /* Propagate activity to all parent directories between entity and root */
 static void scanner_propagate(monitor_t *monitor, entity_t *state, entity_t *root, optype_t optype, stats_t *root_stats) {
+	/* Get watches for state and root */
+	watch_t *root_watch = registry_get(monitor->registry, root->watchref);
+	if (!root_watch) {
+		log_message(WARNING, "Cannot get root watch for scanner propagation");
+		return;
+	}
+
 	char *path_copy = strdup(state->node->path);
 	if (path_copy) {
 		/* Get parent directory path */
@@ -542,12 +554,12 @@ static void scanner_propagate(monitor_t *monitor, entity_t *state, entity_t *roo
 			*last_slash = '\0'; /* Truncate to get parent directory */
 
 			/* Skip if we've reached or gone beyond the root watch path */
-			if (strlen(path_copy) < strlen(root->watch->path)) {
+			if (strlen(path_copy) < strlen(root_watch->path)) {
 				break;
 			}
 
 			/* Update state for this parent directory */
-			entity_t *parent = states_get(monitor->states, path_copy, ENTITY_DIRECTORY, state->watch);
+			entity_t *parent = states_get(monitor->states, path_copy, ENTITY_DIRECTORY, state->watchref, monitor->registry);
 			if (parent) {
 				/* Create activity state if needed */
 				if (!parent->scanner) {
@@ -576,9 +588,12 @@ static void scanner_propagate(monitor_t *monitor, entity_t *state, entity_t *roo
 				/* Update directory stats for parent if this is a content change */
 				if (optype == OP_DIR_CONTENT_CHANGED && parent->kind == ENTITY_DIRECTORY) {
 					/* For recursive watches within the same scope, propagate incremental changes */
-					bool in_scope = (root_stats && parent->watch->recursive &&
-					                 parent->watch == root->watch &&
-					                 strlen(path_copy) >= strlen(root->watch->path));
+					watch_t *parent_watch = registry_get(monitor->registry, parent->watchref);
+					watch_t *root_watch_for_scope = registry_get(monitor->registry, root->watchref);
+					bool in_scope = (root_stats && parent_watch && root_watch_for_scope &&
+					                 parent_watch->recursive &&
+					                 parent_watch == root_watch_for_scope &&
+					                 strlen(path_copy) >= strlen(root_watch_for_scope->path));
 
 					if (in_scope && root->stability && parent->stability) {
 						if (parent != root) {
@@ -697,12 +712,19 @@ void scanner_track(monitor_t *monitor, entity_t *state, optype_t optype) {
 	/* Record basic activity in circular buffer */
 	scanner_record(state, optype);
 
+	/* Get the watch for this state */
+	watch_t *state_watch = registry_get(monitor->registry, state->watchref);
+	if (!state_watch) {
+		log_message(WARNING, "Cannot get watch for state %s in scanner_track", state->node->path);
+		return;
+	}
+
 	/* If the event is on a directory that is the root of any watch, handle it */
-	if (state->kind == ENTITY_DIRECTORY && strcmp(state->node->path, state->watch->path) == 0) {
+	if (state->kind == ENTITY_DIRECTORY && strcmp(state->node->path, state_watch->path) == 0) {
 		scanner_root(monitor, state, optype);
 	}
 	/* Otherwise, if it's a recursive watch, it must be a sub-path event */
-	else if (state->watch && state->watch->recursive) {
+	else if (state_watch->recursive) {
 		scanner_recursive(monitor, state, optype);
 	}
 
@@ -874,7 +896,7 @@ static long scanner_backoff(entity_t *state, long required_ms) {
 }
 
 /* Apply final limits and complexity multiplier */
-static long scanner_limit(entity_t *state, long required_ms) {
+static long scanner_limit(monitor_t *monitor, entity_t *state, long required_ms) {
 	/* Set reasonable limits */
 	if (required_ms < 100) required_ms = 100;
 
@@ -888,18 +910,19 @@ static long scanner_limit(entity_t *state, long required_ms) {
 	}
 
 	/* Apply complexity multiplier from watch config */
-	if (state->watch && state->watch->complexity > 0) {
+	watch_t *state_watch = registry_get(monitor->registry, state->watchref);
+	if (state_watch && state_watch->complexity > 0) {
 		long pre_multiplier = required_ms;
-		required_ms = (long) (required_ms * state->watch->complexity);
+		required_ms = (long) (required_ms * state_watch->complexity);
 		log_message(DEBUG, "Applied complexity multiplier %.2f to %s: %ld ms -> %ld ms",
-		            state->watch->complexity, state->node->path, pre_multiplier, required_ms);
+		            state_watch->complexity, state->node->path, pre_multiplier, required_ms);
 	}
 
 	return required_ms;
 }
 
 /* Determine the required quiet period based on state type and activity */
-long scanner_delay(entity_t *state) {
+long scanner_delay(monitor_t *monitor, entity_t *state) {
 	if (!state) return QUIET_PERIOD_MS;
 
 	long required_ms = QUIET_PERIOD_MS;
@@ -959,7 +982,7 @@ long scanner_delay(entity_t *state) {
 	}
 
 	/* Apply final limits and complexity multiplier */
-	return scanner_limit(state, required_ms);
+	return scanner_limit(monitor, state, required_ms);
 }
 
 /* Check if enough quiet time has passed since the last activity */
@@ -969,8 +992,11 @@ bool scanner_ready(monitor_t *monitor, entity_t *state, struct timespec *current
 	struct timespec *scanner_time = NULL;
 	const char *source_path = state->node->path;
 
+	/* Get the watch for timestamp checking */
+	watch_t *state_watch = registry_get(monitor->registry, state->watchref);
+
 	/* Determine which timestamp to check against */
-	if (state->kind == ENTITY_DIRECTORY && state->watch && state->watch->recursive) {
+	if (state->kind == ENTITY_DIRECTORY && state_watch && state_watch->recursive) {
 		/* For recursive directory watches, always check the root's tree time */
 		entity_t *root = stability_root(monitor, state);
 		if (root) {

@@ -6,6 +6,7 @@
 #include <limits.h>
 
 #include "config.h"
+#include "registry.h"
 #include "logger.h"
 
 /* Trim whitespace from a string */
@@ -130,71 +131,45 @@ const char *filter_to_string(filter_t event) {
 	return buffer;
 }
 
-/* Deep copy a watch, optionally marking it as dynamic */
-watch_t *config_clone(const watch_t *original, const char *new_path, const char *source_pattern) {
-    if (!original || !new_path) {
-        return NULL;
-    }
 
-    watch_t *copy = calloc(1, sizeof(watch_t));
-    if (!copy) {
-        log_message(ERROR, "Failed to allocate memory for watch copy");
-        return NULL;
-    }
-
-    /* Copy all fields */
-    copy->name = original->name ? strdup(original->name) : NULL;
-    copy->path = strdup(new_path);
-    copy->target = original->target;
-    copy->filter = original->filter;
-    copy->command = original->command ? strdup(original->command) : NULL;
-    copy->log_output = original->log_output;
-    copy->buffer_output = original->buffer_output;
-    copy->recursive = original->recursive;
-    copy->hidden = original->hidden;
-    copy->environment = original->environment;
-    copy->complexity = original->complexity;
-    copy->processing_delay = original->processing_delay;
-
-    /* Handle dynamic properties */
-    copy->is_dynamic = (source_pattern != NULL);
-    copy->source_pattern = source_pattern ? strdup(source_pattern) : NULL;
-
-    /* Check for allocation failures */
-    if ((original->name && !copy->name) || !copy->path || (original->command && !copy->command) || (source_pattern && !copy->source_pattern)) {
-        log_message(ERROR, "Failed to copy watch strings");
-        if (copy->name) free(copy->name);
-        if (copy->path) free(copy->path);
-        if (copy->command) free(copy->command);
-        if (copy->source_pattern) free(copy->source_pattern);
-        free(copy);
-        return NULL;
-    }
-
-    return copy;
-}
 
 /* Add a watch entry to the configuration */
 bool config_add_watch(config_t *config, watch_t *watch) {
+	if (!config || !watch || !config->registry) {
+		log_message(ERROR, "Invalid parameters to config_add_watch");
+		return false;
+	}
+
 	/* For non-dynamic watches, check for duplicate names */
 	if (!watch->is_dynamic) {
 		for (int i = 0; i < config->num_watches; i++) {
-			if (config->watches[i] && config->watches[i]->name && watch->name &&
-				strcmp(config->watches[i]->name, watch->name) == 0) {
+			watch_t *existing = registry_get(config->registry, config->watchrefs[i]);
+			if (existing && existing->name && watch->name &&
+				strcmp(existing->name, watch->name) == 0) {
 				log_message(ERROR, "Duplicate watch name '%s' found in configuration", watch->name);
 				return false;
 			}
 		}
 	}
 
-	watch_t **new_watches = realloc(config->watches, (config->num_watches + 1) * sizeof(watch_t *));
-	if (new_watches == NULL) {
-		log_message(ERROR, "Failed to allocate memory for watch entry");
+	/* Add watch to registry */
+	watchref_t watchref = registry_add(config->registry, watch);
+	if (!watchref_valid(watchref)) {
+		log_message(ERROR, "Failed to add watch to registry");
 		return false;
 	}
 
-	config->watches = new_watches;
-	config->watches[config->num_watches] = watch;
+	/* Expand watchrefs array */
+	watchref_t *new_watchrefs = realloc(config->watchrefs, (config->num_watches + 1) * sizeof(watchref_t));
+	if (new_watchrefs == NULL) {
+		log_message(ERROR, "Failed to allocate memory for watch reference");
+		/* Clean up registry entry */
+		registry_deactivate(config->registry, watchref);
+		return false;
+	}
+
+	config->watchrefs = new_watchrefs;
+	config->watchrefs[config->num_watches] = watchref;
 	config->num_watches++;
 
 	if (watch->is_dynamic) {
@@ -205,22 +180,31 @@ bool config_add_watch(config_t *config, watch_t *watch) {
 }
 
 /* Remove a watch entry from the configuration */
-bool config_remove_watch(config_t *config, watch_t *watch) {
-	if (!config || !watch) return false;
+bool config_remove_watch(config_t *config, watchref_t watchref) {
+	if (!config || !config->registry || !watchref_valid(watchref)) {
+		return false;
+	}
 
 	for (int i = 0; i < config->num_watches; i++) {
-		if (config->watches[i] == watch) {
-			log_message(DEBUG, "Removing watch '%s' for path '%s' from config.", watch->name, watch->path);
-			config_destroy_watch(watch);
+		if (watchref_equal(config->watchrefs[i], watchref)) {
+			watch_t *watch = registry_get(config->registry, watchref);
+			if (watch) {
+				log_message(DEBUG, "Removing watch '%s' for path '%s' from config.", watch->name, watch->path);
+			}
+			
+			/* Deactivate in registry (triggers observer notifications) */
+			registry_deactivate(config->registry, watchref);
+			
+			/* Remove from config array */
 			for (int j = i; j < config->num_watches - 1; j++) {
-				config->watches[j] = config->watches[j+1];
+				config->watchrefs[j] = config->watchrefs[j+1];
 			}
 			config->num_watches--;
-			config->watches[config->num_watches] = NULL;
 			return true;
 		}
 	}
-	log_message(WARNING, "Could not find watch '%s' for path '%s' in config to remove.", watch->name, watch->path);
+	
+	log_message(WARNING, "Could not find watch reference in config to remove.");
 	return false;
 }
 
@@ -245,10 +229,18 @@ config_t *config_create(void) {
 		return NULL;
 	}
 
+	/* Create watch registry */
+	config->registry = registry_create(0); /* Use default capacity */
+	if (!config->registry) {
+		log_message(ERROR, "Failed to create watch registry");
+		free(config);
+		return NULL;
+	}
+
 	/* Set default values */
 	config->daemon_mode = false;
 	config->syslog_level = NOTICE;
-	config->watches = NULL;
+	config->watchrefs = NULL;
 	config->num_watches = 0;
 
 	return config;
@@ -262,11 +254,12 @@ void config_destroy(config_t *config) {
 
 	free(config->config_path);
 
-	for (int i = 0; i < config->num_watches; i++) {
-		config_destroy_watch(config->watches[i]);
+	/* Registry cleanup handles watch destruction */
+	if (config->registry) {
+		registry_destroy(config->registry);
 	}
 
-	free(config->watches);
+	free(config->watchrefs);
 	free(config);
 }
 
@@ -604,4 +597,22 @@ bool config_parse(config_t *config, const char *filename) {
 	}
 
 	return true;
+}
+
+/* Get watch by index using registry lookup */
+watch_t *config_get_watch(config_t *config, int index) {
+	if (!config || !config->registry || index < 0 || index >= config->num_watches) {
+		return NULL;
+	}
+	
+	return registry_get(config->registry, config->watchrefs[index]);
+}
+
+/* Get watch reference by index */
+watchref_t config_get_watchref(config_t *config, int index) {
+	if (!config || index < 0 || index >= config->num_watches) {
+		return WATCH_REF_INVALID;
+	}
+	
+	return config->watchrefs[index];
 }

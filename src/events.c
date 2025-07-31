@@ -14,6 +14,7 @@
 #include "states.h"
 #include "stability.h"
 #include "scanner.h"
+#include "registry.h"
 
 /* Initialize a sync request structure */
 void events_sync_init(sync_t *sync) {
@@ -75,8 +76,14 @@ void events_sync_cleanup(sync_t *sync) {
 }
 
 /* Schedule an event for delayed processing */
-void events_schedule(monitor_t *monitor, watch_t *watch, event_t *event, kind_t kind) {
-	if (!monitor || !watch || !event || watch->processing_delay <= 0) {
+void events_schedule(monitor_t *monitor, watchref_t watchref, event_t *event, kind_t kind) {
+	if (!monitor || !event || !watchref_valid(watchref)) {
+		return;
+	}
+
+	/* Resolve watch to get processing delay */
+	watch_t *watch = registry_get(monitor->registry, watchref);
+	if (!watch || watch->processing_delay <= 0) {
 		return;
 	}
 
@@ -95,7 +102,7 @@ void events_schedule(monitor_t *monitor, watch_t *watch, event_t *event, kind_t 
 	/* Look for existing delayed event for the same watch and path to enable debouncing */
 	for (int i = 0; i < monitor->delayed_count; i++) {
 		delayed_t *existing = &monitor->delayed_events[i];
-		if (existing->watch == watch && strcmp(existing->event.path, event->path) == 0) {
+		if (watchref_equal(existing->watchref, watchref) && strcmp(existing->event.path, event->path) == 0) {
 			/* Merge event types to preserve all event information */
 			existing->event.type |= event->type;
 
@@ -132,7 +139,7 @@ void events_schedule(monitor_t *monitor, watch_t *watch, event_t *event, kind_t 
 	delayed->event.time = event->time;
 	delayed->event.wall_time = event->wall_time;
 	delayed->event.user_id = event->user_id;
-	delayed->watch = watch;
+	delayed->watchref = watchref;
 	delayed->kind = kind;
 	delayed->process_time = process_time;
 
@@ -157,11 +164,23 @@ void events_delayed(monitor_t *monitor) {
 		/* Check if this event is ready to process */
 		if (current_time.tv_sec > delayed->process_time.tv_sec ||
 		    (current_time.tv_sec == delayed->process_time.tv_sec && current_time.tv_nsec >= delayed->process_time.tv_nsec)) {
+			
+			/* Resolve watch reference at processing time */
+			watch_t *watch = registry_get(monitor->registry, delayed->watchref);
+			if (!watch) {
+				/* Watch was deactivated, skip this event */
+				log_message(DEBUG, "Delayed event for %s skipped - watch was deactivated",
+				            delayed->event.path);
+				free(delayed->event.path);
+				processed++;
+				continue;
+			}
+
 			log_message(DEBUG, "Delayed event for %s (watch: %s) expired, initiating stability check",
-			            delayed->event.path, delayed->watch->name);
+			            delayed->event.path, watch->name);
 
 			/* Pass the event to the main processing function */
-			events_process(monitor, delayed->watch, &delayed->event, delayed->kind);
+			events_process(monitor, delayed->watchref, &delayed->event, delayed->kind);
 
 			/* The event is now handled, so we can remove it from the delayed queue */
 			free(delayed->event.path);
@@ -218,6 +237,8 @@ int events_timeout(monitor_t *monitor, struct timespec *current_time) {
 	return timeout_ms > 0 ? (int) timeout_ms : 1;
 }
 
+
+
 /* Convert kqueue flags to filter type bitmask */
 static filter_t flags_to_filter(uint32_t flags) {
 	filter_t event = EVENT_NONE;
@@ -250,6 +271,7 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 	for (int i = 0; i < event_count; i++) {
 		/* Get the watcher directly from udata for O(1) access */
 		watcher_t *primary_watcher = (watcher_t *) events[i].udata;
+
 		if (!primary_watcher) {
 			log_message(WARNING, "Received kevent with NULL udata, skipping");
 			continue;
@@ -270,14 +292,20 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 				clock_gettime(CLOCK_REALTIME, &event.wall_time);
 				event.user_id = getuid();
 
-				kind_t kind = (watcher->watch->target == WATCH_FILE) ? ENTITY_FILE : ENTITY_DIRECTORY;
+				watch_t *watch = registry_get(monitor->registry, watcher->watchref);
+				if (!watch) {
+					log_message(WARNING, "Invalid watch reference for watcher at %s", watcher->path);
+					continue;
+				}
+				
+				kind_t kind = (watch->target == WATCH_FILE) ? ENTITY_FILE : ENTITY_DIRECTORY;
 
 				log_message(DEBUG, "Event: path=%s, flags=0x%x -> type=%s (watch: %s)",
 				            watcher->path, events[i].fflags, filter_to_string(event.type),
-				            watcher->watch->name);
+				            watch->name);
 
 				/* Proactive validation for directory events on NOTE_WRITE */
-				if (watcher->watch->target == WATCH_DIRECTORY && (events[i].fflags & NOTE_WRITE)) {
+				if (watch->target == WATCH_DIRECTORY && (events[i].fflags & NOTE_WRITE)) {
 					log_message(DEBUG, "Write event on dir %s, requesting validation", watcher->path);
 					if (sync) {
 						events_sync_add(sync, watcher->path);
@@ -290,12 +318,12 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 				}
 
 				/* Check if this watch has a processing delay configured */
-				if (watcher->watch->processing_delay > 0) {
+				if (watch->processing_delay > 0) {
 					/* Schedule the event for delayed processing */
-					events_schedule(monitor, watcher->watch, &event, kind);
+					events_schedule(monitor, watcher->watchref, &event, kind);
 				} else {
 					/* Process the event immediately */
-					events_process(monitor, watcher->watch, &event, kind);
+					events_process(monitor, watcher->watchref, &event, kind);
 				}
 			}
 		}
@@ -474,10 +502,15 @@ optype_t events_operation(entity_t *state, filter_t filter) {
 }
 
 /* Process a single file system event */
-bool events_process(monitor_t *monitor, watch_t *watch, event_t *event, kind_t kind) {
-	if (watch == NULL || event == NULL || event->path == NULL) {
-		log_message(ERROR, "events_process: Received NULL watch, event, or event path");
+bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kind_t kind) {
+	if (event == NULL || event->path == NULL) {
+		log_message(ERROR, "events_process: Received NULL event or event path");
 		return false;
+	}
+
+	watch_t *watch = registry_get(monitor->registry, watchref);
+	if (!watch) {
+		return false; /* Error already logged by registry */
 	}
 
 	/* Handle intermediate glob events - they only trigger pending_process, not commands */
@@ -506,8 +539,8 @@ bool events_process(monitor_t *monitor, watch_t *watch, event_t *event, kind_t k
 		return true;
 	}
 
-	/* Get state using the event path and watch config */
-	entity_t *state = states_get(monitor->states, event->path, kind, watch);
+	/* Get state using the event path and watch reference */
+	entity_t *state = states_get(monitor->states, event->path, kind, watchref, monitor->registry);
 	if (state == NULL) {
 		return false; /* Error already logged by states_get */
 	}
@@ -518,7 +551,8 @@ bool events_process(monitor_t *monitor, watch_t *watch, event_t *event, kind_t k
 		log_message(DEBUG, "Deferring event for %s, command is currently executing %s",
 		            event->path, root ? root->node->path : "N/A");
 		/* Schedule event for reprocessing after a short delay */
-		events_schedule(monitor, watch, event, kind);
+		/* Use the watch reference we already found */
+		events_schedule(monitor, watchref, event, kind);
 		return false;
 	}
 
@@ -590,7 +624,7 @@ bool events_process(monitor_t *monitor, watch_t *watch, event_t *event, kind_t k
 			state->node->executing = true;
 		}
 
-		if (command_execute(monitor, watch, &synthetic_event, true)) {
+		if (command_execute(monitor, watchref, &synthetic_event, true)) {
 			log_message(INFO, "Command execution successful for %s", state->node->path);
 
 			/* Update last command time and reset change flags */

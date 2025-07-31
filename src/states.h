@@ -6,6 +6,7 @@
 
 #include "config.h"
 #include "scanner.h"
+#include "registry.h"
 
 /* Forward declarations */
 typedef struct stability stability_t;
@@ -35,7 +36,7 @@ typedef struct entity {
 	uint32_t magic;                        /* Magic number for corruption detection */
 	struct node *node;                     /* Back-pointer to the parent path state */
 	kind_t kind;                           /* File or directory */
-	watch_t *watch;                        /* The watch entry for this state */
+	watchref_t watchref;                   /* Watch reference for this state */
 
 	/* Basic state flags */
 	bool exists;                           /* Entity currently exists */
@@ -64,7 +65,8 @@ typedef struct entity {
 states_t *states_create(size_t bucket_count);
 void states_destroy(states_t *states);
 bool state_corrupted(const entity_t *state);
-entity_t *states_get(states_t *states, const char *path, kind_t kind, watch_t *watch);
+entity_t *states_get(states_t *states, const char *path, kind_t kind, watchref_t watchref, registry_t *registry);
+
 unsigned int states_hash(const char *path, size_t bucket_count);
 
 #endif /* STATES_H */

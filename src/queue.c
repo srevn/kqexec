@@ -8,9 +8,45 @@
 #include "monitor.h"
 #include "config.h"
 #include "logger.h"
+#include "registry.h"
+
+/* Observer callback for watch deactivation - THE CRITICAL BUG FIX */
+static void queue_on_watch_deactivated(watchref_t ref, void *context) {
+	queue_t *queue = (queue_t *)context;
+	if (!queue || !queue->items) {
+		return;
+	}
+	
+	log_message(DEBUG, "Queue observer: Watch ID %u (gen %u) deactivated, cleaning up queue", 
+	           ref.watch_id, ref.generation);
+	
+	/* Scan all queue items for the deactivated watch */
+	for (int i = queue->size - 1; i >= 0; i--) { /* Iterate backwards for safe removal */
+		check_t *check = &queue->items[i];
+		
+		/* Remove the deactivated watch from this check */
+		int write_pos = 0;
+		for (int read_pos = 0; read_pos < check->num_watches; read_pos++) {
+			if (!watchref_equal(check->watchrefs[read_pos], ref)) {
+				check->watchrefs[write_pos++] = check->watchrefs[read_pos];
+			} else {
+				log_message(DEBUG, "Removed deactivated watch from queue item: %s", 
+				           check->path ? check->path : "<null>");
+			}
+		}
+		check->num_watches = write_pos;
+		
+		/* If check has no watches left, remove entire check */
+		if (check->num_watches == 0) {
+			log_message(DEBUG, "Removing empty queue item after watch cleanup: %s", 
+			           check->path ? check->path : "<null>");
+			queue_remove_by_index(queue, i);
+		}
+	}
+}
 
 /* Initialize the priority queue */
-queue_t *queue_create(int initial_capacity) {
+queue_t *queue_create(registry_t *registry, int initial_capacity) {
 	if (initial_capacity < 8) initial_capacity = 8;
 
 	queue_t *queue = calloc(1, sizeof(queue_t));
@@ -29,7 +65,21 @@ queue_t *queue_create(int initial_capacity) {
 
 	queue->size = 0;
 	queue->items_capacity = initial_capacity;
-	log_message(DEBUG, "Initialized deferred check queue with capacity %d", initial_capacity);
+	
+	/* Initialize registry integration */
+	queue->registry = registry;
+	queue->observer.on_watch_deactivated = queue_on_watch_deactivated;
+	queue->observer.context = queue;
+	queue->observer.next = NULL;
+	
+	/* Register as observer with the registry */
+	if (registry && !register_observer(registry, &queue->observer)) {
+		log_message(ERROR, "Failed to register queue as observer with registry");
+		queue_destroy(queue);
+		return NULL;
+	}
+	
+	log_message(DEBUG, "Initialized deferred check queue with capacity %d (registry observer registered)", initial_capacity);
 	return queue;
 }
 
@@ -37,18 +87,20 @@ queue_t *queue_create(int initial_capacity) {
 void queue_destroy(queue_t *queue) {
 	if (!queue) return;
 
+	/* Unregister from registry observer notifications */
+	if (queue->registry) {
+		unregister_observer(queue->registry, &queue->observer);
+	}
+
 	/* Free path strings and watch arrays */
 	for (int i = 0; i < queue->size; i++) {
 		if (queue->items[i].path) {
 			free(queue->items[i].path);
 			queue->items[i].path = NULL;
 		}
-		if (queue->items[i].watch_names) {
-			for (int j = 0; j < queue->items[i].num_watches; j++) {
-				free(queue->items[i].watch_names[j]);
-			}
-			free(queue->items[i].watch_names);
-			queue->items[i].watch_names = NULL;
+		if (queue->items[i].watchrefs) {
+			free(queue->items[i].watchrefs);
+			queue->items[i].watchrefs = NULL;
 		}
 
 		/* Clear the struct to prevent double-free issues */
@@ -58,19 +110,19 @@ void queue_destroy(queue_t *queue) {
 	free(queue->items);
 	free(queue);
 
-	log_message(DEBUG, "Cleaned up deferred check queue");
+	log_message(DEBUG, "Cleaned up deferred check queue (observer unregistered)");
 }
 
-/* Add a watch to a queue entry */
-bool queue_add(check_t *check, const char *watch_name) {
-	if (!check || !watch_name) {
+/* Add a watch reference to a queue entry */
+bool queue_add(check_t *check, watchref_t watchref) {
+	if (!check || !watchref_valid(watchref)) {
 		log_message(ERROR, "Invalid parameters for queue_add");
 		return false;
 	}
 
-	/* Check if this watch is already in the array */
+	/* Check if this watch reference is already in the array */
 	for (int i = 0; i < check->num_watches; i++) {
-		if (check->watch_names && strcmp(check->watch_names[i], watch_name) == 0) {
+		if (check->watchrefs && watchref_equal(check->watchrefs[i], watchref)) {
 			return true; /* Already present */
 		}
 	}
@@ -78,26 +130,22 @@ bool queue_add(check_t *check, const char *watch_name) {
 	/* Ensure capacity */
 	if (check->num_watches >= check->watches_capacity) {
 		int new_capacity = check->watches_capacity == 0 ? 4 : check->watches_capacity * 2;
-		char **new_watches = realloc(check->watch_names, new_capacity * sizeof(char *));
+		watchref_t *new_watches = realloc(check->watchrefs, new_capacity * sizeof(watchref_t));
 		if (!new_watches) {
 			log_message(ERROR, "Failed to resize watches array in queue entry");
 			return false;
 		}
-		check->watch_names = new_watches;
+		check->watchrefs = new_watches;
 		check->watches_capacity = new_capacity;
 
 		/* Zero out new memory */
 		if (check->num_watches < new_capacity) {
-			memset(&check->watch_names[check->num_watches], 0, (new_capacity - check->num_watches) * sizeof(char *));
+			memset(&check->watchrefs[check->num_watches], 0, (new_capacity - check->num_watches) * sizeof(watchref_t));
 		}
 	}
 
-	/* Add the new watch */
-	check->watch_names[check->num_watches] = strdup(watch_name);
-	if (!check->watch_names[check->num_watches]) {
-		log_message(ERROR, "Failed to duplicate watch name for queue entry");
-		return false;
-	}
+	/* Add the new watch reference */
+	check->watchrefs[check->num_watches] = watchref;
 	check->num_watches++;
 	return true;
 }
@@ -214,9 +262,8 @@ int queue_find(queue_t *queue, const char *path) {
 }
 
 /* Add or update an entry in the queue */
-void queue_upsert(queue_t *queue, const char *path,
-                  watch_t *watch, struct timespec next_check) {
-	if (!queue || !queue->items || !path || !watch) {
+void queue_upsert(queue_t *queue, const char *path, watchref_t watchref, struct timespec next_check) {
+	if (!queue || !queue->items || !path || !watchref_valid(watchref)) {
 		log_message(WARNING, "Invalid parameters for queue_upsert");
 		return;
 	}
@@ -228,8 +275,8 @@ void queue_upsert(queue_t *queue, const char *path,
 		/* Entry exists - update it */
 		check_t *check = &queue->items[queue_index];
 
-		/* Add this watch if not already present */
-		if (!queue_add(check, watch->name)) {
+		/* Add this watch reference if not already present */
+		if (!queue_add(check, watchref)) {
 			log_message(WARNING, "Failed to add watch to existing queue entry for %s", path);
 		}
 
@@ -280,14 +327,14 @@ void queue_upsert(queue_t *queue, const char *path,
 
 	queue->items[new_index].path = path_copy;
 	queue->items[new_index].next_check = next_check;
-	queue->items[new_index].watch_names = NULL;
+	queue->items[new_index].watchrefs = NULL;
 	queue->items[new_index].num_watches = 0;
 	queue->items[new_index].watches_capacity = 0;
 	queue->items[new_index].verifying = false;
 	queue->items[new_index].scheduled_quiet = 0;
 
-	/* Add the watch */
-	if (!queue_add(&queue->items[new_index], watch->name)) {
+	/* Add the watch reference */
+	if (!queue_add(&queue->items[new_index], watchref)) {
 		log_message(ERROR, "Failed to add watch to new queue entry");
 		free(queue->items[new_index].path);
 		queue->items[new_index].path = NULL;
@@ -341,12 +388,9 @@ void queue_remove(queue_t *queue, const char *path) {
 		queue->items[queue_index].path = NULL;
 	}
 
-	if (queue->items[queue_index].watch_names) {
-		for (int i = 0; i < queue->items[queue_index].num_watches; i++) {
-			free(queue->items[queue_index].watch_names[i]);
-		}
-		free(queue->items[queue_index].watch_names);
-		queue->items[queue_index].watch_names = NULL;
+	if (queue->items[queue_index].watchrefs) {
+		free(queue->items[queue_index].watchrefs);
+		queue->items[queue_index].watchrefs = NULL;
 	}
 
 	/* Replace with the last element and restore heap property */
@@ -359,11 +403,62 @@ void queue_remove(queue_t *queue, const char *path) {
 		memset(&queue->items[queue->size], 0, sizeof(check_t));
 
 		/* Restore heap property for the moved element */
-		heap_down(queue->items, queue->size, queue_index);
+		int parent_index = (queue_index - 1) / 2;
+		if (queue_index > 0 && time_compare(&queue->items[queue_index].next_check, &queue->items[parent_index].next_check) < 0) {
+			heap_up(queue->items, queue_index);
+		} else {
+			heap_down(queue->items, queue->size, queue_index);
+		}
 	} else {
 		/* Removed the last element, just clear it */
 		memset(&queue->items[queue_index], 0, sizeof(check_t));
 	}
 
 	log_message(DEBUG, "Removed deferred check for %s", path_copy);
+}
+
+/* Remove an entry from the queue by index*/
+void queue_remove_by_index(queue_t *queue, int queue_index) {
+	if (!queue || !queue->items || queue->size <= 0 || queue_index < 0 || queue_index >= queue->size) {
+		return;
+	}
+
+	/* Store a copy of the path for logging if available */
+	char path_copy[PATH_MAX] = "<corrupted>";
+	if (queue->items[queue_index].path) {
+		strncpy(path_copy, queue->items[queue_index].path, PATH_MAX - 1);
+		path_copy[PATH_MAX - 1] = '\0';
+	}
+
+	/* Free resources */
+	if (queue->items[queue_index].path) {
+		free(queue->items[queue_index].path);
+		queue->items[queue_index].path = NULL;
+	}
+
+	if (queue->items[queue_index].watchrefs) {
+		free(queue->items[queue_index].watchrefs);
+		queue->items[queue_index].watchrefs = NULL;
+	}
+
+	/* Replace with the last element and restore heap property */
+	queue->size--;
+	if (queue_index < queue->size) {
+		/* Move the last element to the removed position */
+		memcpy(&queue->items[queue_index], &queue->items[queue->size], sizeof(check_t));
+
+		/* Clear the last element which was just moved */
+		memset(&queue->items[queue->size], 0, sizeof(check_t));
+
+		/* Restore heap property for the moved element */
+		int parent_index = (queue_index - 1) / 2;
+		if (queue_index > 0 && time_compare(&queue->items[queue_index].next_check, &queue->items[parent_index].next_check) < 0) {
+			heap_up(queue->items, queue_index);
+		} else {
+			heap_down(queue->items, queue->size, queue_index);
+		}
+	} else {
+		/* Removed the last element, just clear it */
+		memset(&queue->items[queue_index], 0, sizeof(check_t));
+	}
 }

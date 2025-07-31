@@ -17,6 +17,7 @@
 #include "command.h"
 #include "logger.h"
 #include "events.h"
+#include "registry.h"
 #include "scanner.h"
 
 /* Hash function for a path string */
@@ -152,10 +153,10 @@ bool state_corrupted(const entity_t *state) {
 }
 
 /* Initialize activity tracking for a new entity state */
-static void state_track(entity_t *state, watch_t *watch) {
+static void state_track(entity_t *state, watchref_t watchref) {
 	if (!state) return;
 
-	state->watch = watch;
+	state->watchref = watchref;
 
 	/* Activity tracking is created on demand */
 	state->scanner = NULL;
@@ -197,16 +198,25 @@ static void state_copy(entity_t *dest, const entity_t *src) {
 	}
 }
 
-/* Get or create an entity state for a given path and watch */
-entity_t *states_get(states_t *states, const char *path, kind_t kind, watch_t *watch) {
-	if (!states || !path || !watch || !states->buckets) {
+
+
+/* Get or create an entity state for a given path and watch reference */
+entity_t *states_get(states_t *states, const char *path, kind_t kind, watchref_t watchref, registry_t *registry) {
+	if (!states || !path || !watchref_valid(watchref) || !registry || !states->buckets) {
 		log_message(ERROR, "Invalid arguments to states_get");
 		return NULL;
 	}
 
-	/* Additional safety check for watch structure */
-	if (!watch->name) {
-		log_message(ERROR, "Watch has NULL name for path %s", path);
+	/* Validate watch reference against registry */
+	if (!registry_valid(registry, watchref)) {
+		log_message(WARNING, "Watch reference is invalid or deactivated");
+		return NULL;
+	}
+
+	/* Get watch for logging purposes */
+	watch_t *watch = registry_get(registry, watchref);
+	if (!watch || !watch->name) {
+		log_message(ERROR, "Could not resolve watch from registry for path %s", path);
 		return NULL;
 	}
 
@@ -245,10 +255,29 @@ entity_t *states_get(states_t *states, const char *path, kind_t kind, watch_t *w
 		states->buckets[hash] = node;
 	}
 
-	/* Find existing entity for this watch */
+	/* Find existing entity for this watch reference */
 	entity_t *state = node->entities;
 	while (state) {
-		if (strcmp(state->watch->name, watch->name) == 0) {
+		if (watchref_equal(state->watchref, watchref)) {
+			/* Validate that the entity's watch reference is still valid */
+			if (!registry_valid(registry, state->watchref)) {
+				log_message(WARNING, "Found entity with invalid watch reference for %s, removing", path);
+				/* Remove invalid entity from list */
+				if (state == node->entities) {
+					node->entities = state->next;
+				} else {
+					entity_t *prev = node->entities;
+					while (prev && prev->next != state) {
+						prev = prev->next;
+					}
+					if (prev) {
+						prev->next = state->next;
+					}
+				}
+				free(state);
+				break; /* Continue with creating new entity */
+			}
+			
 			if (state->kind == ENTITY_UNKNOWN && kind != ENTITY_UNKNOWN) {
 				state->kind = kind;
 			}
@@ -279,7 +308,7 @@ entity_t *states_get(states_t *states, const char *path, kind_t kind, watch_t *w
 
 	state->node = node;
 	state->kind = kind;
-	state->watch = watch;
+	state->watchref = watchref;
 
 	/* If an existing state for this path was found, inherit its existence status */
 	if (existing_state) {
@@ -304,7 +333,7 @@ entity_t *states_get(states_t *states, const char *path, kind_t kind, watch_t *w
 	clock_gettime(CLOCK_REALTIME, &state->wall_time);
 	state->trigger = NULL;
 
-	state_track(state, watch);
+	state_track(state, watchref);
 	state->command_time = 0;
 	state->op_time.tv_sec = 0;
 	state->op_time.tv_nsec = 0;

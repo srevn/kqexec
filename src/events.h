@@ -6,6 +6,7 @@
 #include <sys/event.h>
 
 #include "config.h"
+#include "registry.h"
 
 /* Forward declarations */
 typedef struct monitor monitor_t;
@@ -41,7 +42,7 @@ typedef struct event {
 /* Delayed event queue entry */
 typedef struct delayed {
 	event_t event;                         /* The event to process */
-	watch_t *watch;                        /* The watch configuration */
+	watchref_t watchref;                   /* The watch reference */
 	kind_t kind;                           /* Type of entity */
 	struct timespec process_time;          /* When to process this event */
 } delayed_t;
@@ -54,13 +55,13 @@ typedef struct sync {
 } sync_t;
 
 /* Event lifecycle management */
-void events_schedule(monitor_t *monitor, watch_t *watch, event_t *event, kind_t kind);
+void events_schedule(monitor_t *monitor, watchref_t watchref, event_t *event, kind_t kind);
 void events_delayed(monitor_t *monitor);
 int events_timeout(monitor_t *monitor, struct timespec *current_time);
 
 /* Event processing */
 bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, struct timespec *time, sync_t *sync);
-bool events_process(monitor_t *monitor, watch_t *watch, event_t *event, kind_t kind);
+bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kind_t kind);
 struct timespec *timeout_calculate(monitor_t *monitor, struct timespec *timeout, struct timespec *current_time);
 
 /* Sync request management */

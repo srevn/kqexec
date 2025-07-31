@@ -5,39 +5,7 @@
 #include "threads.h"
 #include "command.h"
 #include "logger.h"
-
-/* Deep copy a watch entry for thread safety */
-static watch_t *threads_copy_watch(const watch_t *watch) {
-	if (!watch) return NULL;
-
-	watch_t *copy = calloc(1, sizeof(watch_t));
-	if (!copy) return NULL;
-
-	copy->name = watch->name ? strdup(watch->name) : NULL;
-	copy->path = watch->path ? strdup(watch->path) : NULL;
-	copy->command = watch->command ? strdup(watch->command) : NULL;
-	copy->target = watch->target;
-	copy->filter = watch->filter;
-	copy->log_output = watch->log_output;
-	copy->buffer_output = watch->buffer_output;
-	copy->recursive = watch->recursive;
-	copy->hidden = watch->hidden;
-	copy->environment = watch->environment;
-	copy->complexity = watch->complexity;
-	copy->processing_delay = watch->processing_delay;
-
-	return copy;
-}
-
-/* Free a copied watch entry */
-static void threads_free_watch(watch_t *watch) {
-	if (!watch) return;
-
-	free(watch->name);
-	free(watch->path);
-	free(watch->command);
-	free(watch);
-}
+#include "registry.h"
 
 /* Deep copy a file event for thread safety */
 static event_t *threads_copy_event(const event_t *event) {
@@ -95,10 +63,19 @@ static void *threads_worker(void *arg) {
 
 		/* Execute the command */
 		if (task) {
-			command_execute(task->monitor, task->watch, task->event, false);
+			/* Resolve watch reference at execution time */
+			watch_t *watch = registry_get(task->monitor->registry, task->watchref);
+			if (watch) {
+				log_message(DEBUG, "Executing async command for %s (watch: %s)", 
+				            task->event->path, watch->name);
+				command_execute(task->monitor, task->watchref, task->event, false);
+			} else {
+				/* Watch was deactivated while task was queued */
+				log_message(DEBUG, "Skipping async command for %s - watch was deactivated", 
+				            task->event->path);
+			}
 
 			/* Clean up work task */
-			threads_free_watch(task->watch);
 			threads_free_event(task->event);
 			free(task);
 		}
@@ -184,7 +161,6 @@ void threads_destroy(threads_t *threads) {
 	task_t *task = threads->queue_head;
 	while (task) {
 		task_t *next = task->next;
-		threads_free_watch(task->watch);
 		threads_free_event(task->event);
 		free(task);
 		task = next;
@@ -201,9 +177,15 @@ void threads_destroy(threads_t *threads) {
 }
 
 /* Submit work to thread pool */
-bool threads_submit(threads_t *threads, monitor_t *monitor, const watch_t *watch, const event_t *event) {
-	if (!threads || !watch || !event) {
+bool threads_submit(threads_t *threads, monitor_t *monitor, watchref_t watchref, const event_t *event) {
+	if (!threads || !watchref_valid(watchref) || !event) {
 		log_message(ERROR, "Invalid parameters for threads_submit");
+		return false;
+	}
+
+	/* Validate watch reference before queuing */
+	if (!registry_valid(monitor->registry, watchref)) {
+		log_message(WARNING, "Skipping async command submission - watch reference is invalid");
 		return false;
 	}
 
@@ -215,13 +197,12 @@ bool threads_submit(threads_t *threads, monitor_t *monitor, const watch_t *watch
 	}
 
 	task->monitor = monitor;
-	task->watch = threads_copy_watch(watch);
+	task->watchref = watchref;
 	task->event = threads_copy_event(event);
 	task->next = NULL;
 
-	if (!task->watch || !task->event) {
-		log_message(ERROR, "Failed to copy watch/event data for work task");
-		threads_free_watch(task->watch);
+	if (!task->event) {
+		log_message(ERROR, "Failed to copy event data for work task");
 		threads_free_event(task->event);
 		free(task);
 		return false;
@@ -233,7 +214,6 @@ bool threads_submit(threads_t *threads, monitor_t *monitor, const watch_t *watch
 	if (threads->queue_size >= MAX_WORK_QUEUE_SIZE) {
 		pthread_mutex_unlock(&threads->queue_mutex);
 		log_message(WARNING, "Work queue is full, dropping command execution for %s", event->path);
-		threads_free_watch(task->watch);
 		threads_free_event(task->event);
 		free(task);
 		return false;

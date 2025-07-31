@@ -121,6 +121,7 @@ monitor_t *monitor_create(config_t *config) {
 	}
 
 	monitor->config = config;
+	monitor->registry = config->registry; /* Share registry with config */
 	monitor->kq = -1;
 	monitor->watches = NULL;
 	monitor->num_watches = 0;
@@ -128,14 +129,17 @@ monitor_t *monitor_create(config_t *config) {
 	monitor->num_pending = 0;
 	monitor->running = false;
 	monitor->reload = false;
+    monitor->watcher_graveyard.stale_watches = NULL;
+    monitor->watcher_graveyard.num_stale = 0;
+    monitor->config_graveyard.old_config = NULL;
 
 	/* Store config file path for reloading */
 	if (config->config_path != NULL) {
 		monitor->config_path = strdup(config->config_path);
 	}
 
-	/* Initialize the deferred check queue */
-	monitor->check_queue = queue_create(16); /* Initial capacity of 16 */
+	/* Initialize the deferred check queue with registry observer */
+	monitor->check_queue = queue_create(monitor->registry, 16); /* Initial capacity of 16 */
 
 	/* Initialize state table */
 	monitor->states = states_create(PATH_HASH_SIZE);
@@ -153,8 +157,8 @@ monitor_t *monitor_create(config_t *config) {
 	monitor->delayed_capacity = 0;
 
 	/* Initialize the special watch for intermediate glob directories */
-	monitor->glob_watch = calloc(1, sizeof(watch_t));
-	if (!monitor->glob_watch) {
+	watch_t *glob_watch = calloc(1, sizeof(watch_t));
+	if (!glob_watch) {
 		log_message(ERROR, "Failed to allocate memory for glob watch");
 		states_destroy(monitor->states);
 		queue_destroy(monitor->check_queue);
@@ -162,14 +166,26 @@ monitor_t *monitor_create(config_t *config) {
 		free(monitor);
 		return NULL;
 	}
-	monitor->glob_watch->name = strdup("__glob_intermediate__");
-	monitor->glob_watch->target = WATCH_DIRECTORY;
-	monitor->glob_watch->filter = EVENT_STRUCTURE;
-	monitor->glob_watch->command = NULL; /* No command execution */
+	glob_watch->name = strdup("__glob_intermediate__");
+	glob_watch->target = WATCH_DIRECTORY;
+	glob_watch->filter = EVENT_STRUCTURE;
+	glob_watch->command = NULL; /* No command execution */
 	
 	/* Initialize dynamic tracking fields (glob intermediate watch is not dynamic) */
-	monitor->glob_watch->is_dynamic = false;
-	monitor->glob_watch->source_pattern = NULL;
+	glob_watch->is_dynamic = false;
+	glob_watch->source_pattern = NULL;
+	
+	/* Add glob watch to registry and store reference */
+	monitor->glob_watchref = registry_add(monitor->registry, glob_watch);
+	if (!watchref_valid(monitor->glob_watchref)) {
+		log_message(ERROR, "Failed to add glob watch to registry");
+		config_destroy_watch(glob_watch);
+		states_destroy(monitor->states);
+		queue_destroy(monitor->check_queue);
+		free(monitor->config_path);
+		free(monitor);
+		return NULL;
+	}
 
 	return monitor;
 }
@@ -190,6 +206,17 @@ void monitor_destroy(monitor_t *monitor) {
 		watcher_destroy(monitor, monitor->watches[i]);
 		monitor->watches[i] = NULL; /* Prevent use-after-free in subsequent calls */
 	}
+    if (monitor->watcher_graveyard.stale_watches) {
+        log_message(DEBUG, "Cleaning up %d stale watchers from graveyard during monitor destruction.", monitor->watcher_graveyard.num_stale);
+        for (int i = 0; i < monitor->watcher_graveyard.num_stale; i++) {
+            watcher_destroy(monitor, monitor->watcher_graveyard.stale_watches[i]);
+        }
+        free(monitor->watcher_graveyard.stale_watches);
+    }
+    if (monitor->config_graveyard.old_config) {
+        log_message(DEBUG, "Cleaning up old config from graveyard during monitor destruction.");
+        config_destroy(monitor->config_graveyard.old_config);
+    }
 
 	free(monitor->watches);
 
@@ -212,14 +239,7 @@ void monitor_destroy(monitor_t *monitor) {
 	/* Clean up state table */
 	states_destroy(monitor->states);
 
-	/* Destroy the special glob watch */
-	if (monitor->glob_watch) {
-		free(monitor->glob_watch->name);
-		free(monitor->glob_watch->source_pattern);  /* Free dynamic tracking field */
-		free(monitor->glob_watch);
-	}
-
-	/* Destroy the configuration */
+	/* Destroy the configuration (which destroys registry) */
 	config_destroy(monitor->config);
 
 	free(monitor);
@@ -233,15 +253,17 @@ static bool monitor_kq(monitor_t *monitor, watcher_t *watcher) {
 	/* Consolidate event filters from ALL watches on this file descriptor */
 	for (int i = 0; i < monitor->num_watches; i++) {
 		if (monitor->watches[i]->wd == watcher->wd) {
-			watch_t *shared_watch = monitor->watches[i]->watch;
-			if (shared_watch->filter & EVENT_STRUCTURE) {
-				flags |= NOTE_WRITE | NOTE_EXTEND;
-			}
-			if (shared_watch->filter & EVENT_METADATA) {
-				flags |= NOTE_ATTRIB | NOTE_LINK;
-			}
-			if (shared_watch->filter & EVENT_CONTENT) {
-				flags |= NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE | NOTE_WRITE;
+			watch_t *shared_watch = registry_get(monitor->registry, monitor->watches[i]->watchref);
+			if (shared_watch) {
+				if (shared_watch->filter & EVENT_STRUCTURE) {
+					flags |= NOTE_WRITE | NOTE_EXTEND;
+				}
+				if (shared_watch->filter & EVENT_METADATA) {
+					flags |= NOTE_ATTRIB | NOTE_LINK;
+				}
+				if (shared_watch->filter & EVENT_CONTENT) {
+					flags |= NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE | NOTE_WRITE;
+				}
 			}
 		}
 	}
@@ -258,13 +280,13 @@ static bool monitor_kq(monitor_t *monitor, watcher_t *watcher) {
 }
 
 /* Add a watch for a single path, creating or sharing file descriptors as needed */
-bool monitor_path(monitor_t *monitor, const char *path, watch_t *watch) {
+bool monitor_path(monitor_t *monitor, const char *path, watchref_t watchref) {
 	/* Clean up any stale watchers for this path first */
 	monitor_sync(monitor, path);
 	
 	/* Check if a watcher for this path and watch config already exists to avoid duplicates */
 	for (int i = 0; i < monitor->num_watches; i++) {
-		if (strcmp(monitor->watches[i]->path, path) == 0 && monitor->watches[i]->watch == watch) {
+		if (strcmp(monitor->watches[i]->path, path) == 0 && watchref_equal(monitor->watches[i]->watchref, watchref)) {
 			log_message(DEBUG, "Watch for path %s with same config already exists", path);
 			return true;
 		}
@@ -281,7 +303,7 @@ bool monitor_path(monitor_t *monitor, const char *path, watch_t *watch) {
 		}
 		watcher->wd = shared_watcher->wd;
 		watcher->path = strdup(path);
-		watcher->watch = watch;
+		watcher->watchref = watchref;
 		watcher->shared_fd = true;
 		shared_watcher->shared_fd = true;
 
@@ -315,7 +337,7 @@ bool monitor_path(monitor_t *monitor, const char *path, watch_t *watch) {
 		}
 		watcher->wd = fd;
 		watcher->path = strdup(path);
-		watcher->watch = watch;
+		watcher->watchref = watchref;
 		watcher->shared_fd = false;
 
 		if (!watcher_stat(watcher)) {
@@ -330,9 +352,10 @@ bool monitor_path(monitor_t *monitor, const char *path, watch_t *watch) {
 
 		/* Establish baseline state */
 		struct stat info;
-		if (stat(path, &info) == 0) {
+		watch_t *watch = registry_get(monitor->registry, watchref);
+		if (stat(path, &info) == 0 && watch) {
 			kind_t kind = S_ISDIR(info.st_mode) ? ENTITY_DIRECTORY : ENTITY_FILE;
-			states_get(monitor->states, path, kind, watch);
+			states_get(monitor->states, path, kind, watchref, monitor->registry);
 		}
 
 		/* Add to kqueue */
@@ -341,7 +364,13 @@ bool monitor_path(monitor_t *monitor, const char *path, watch_t *watch) {
 }
 
 /* Recursively add watches for a directory and its subdirectories */
-bool monitor_tree(monitor_t *monitor, const char *dir_path, watch_t *watch) {
+bool monitor_tree(monitor_t *monitor, const char *dir_path, watchref_t watchref) {
+	watch_t *watch = registry_get(monitor->registry, watchref);
+	if (!watch) {
+		log_message(ERROR, "Invalid watch reference for directory tree scan");
+		return false;
+	}
+	
 	/* Skip hidden directories unless hidden is true */
 	if (!watch->hidden && path_hidden(dir_path)) {
 		log_message(DEBUG, "Skipping hidden directory: %s", dir_path);
@@ -349,7 +378,7 @@ bool monitor_tree(monitor_t *monitor, const char *dir_path, watch_t *watch) {
 	}
 
 	/* Add a watch for the directory itself */
-	if (!monitor_path(monitor, dir_path, watch)) {
+	if (!monitor_path(monitor, dir_path, watchref)) {
 		log_message(WARNING, "Failed to add watch for directory %s", dir_path);
 		return false; /* If we can't watch the root, we shouldn't proceed */
 	}
@@ -383,7 +412,7 @@ bool monitor_tree(monitor_t *monitor, const char *dir_path, watch_t *watch) {
 
 		if (S_ISDIR(info.st_mode)) {
 			/* Recursively watch subdirectory */
-			monitor_tree(monitor, path, watch);
+			monitor_tree(monitor, path, watchref);
 		}
 	}
 
@@ -391,9 +420,10 @@ bool monitor_tree(monitor_t *monitor, const char *dir_path, watch_t *watch) {
 	return true;
 }
 
-/* Add a watch for a file or directory based on a watch entry */
-bool monitor_add(monitor_t *monitor, watch_t *watch, bool skip_pending) {
-	if (monitor == NULL || watch == NULL || watch->path == NULL) {
+/* Add a watch for a file or directory based on a watch reference */
+bool monitor_add(monitor_t *monitor, watchref_t watchref, bool skip_pending) {
+	watch_t *watch = registry_get(monitor->registry, watchref);
+	if (monitor == NULL || !watch || watch->path == NULL) {
 		log_message(ERROR, "Invalid arguments to monitor_add");
 		return false;
 	}
@@ -407,7 +437,7 @@ bool monitor_add(monitor_t *monitor, watch_t *watch, bool skip_pending) {
 		if (errno == ENOENT && !skip_pending) {
 			/* Path does not exist - add to pending watches for event-driven monitoring */
 			log_message(DEBUG, "Path does not exist, adding to pending watches: %s", watch->path);
-			if (pending_add(monitor, watch->path, watch)) {
+			if (pending_add(monitor, watch->path, watchref)) {
 				/* Immediately process the parent to catch existing paths */
 				pending_process(monitor, monitor->pending[monitor->num_pending - 1]->current_parent);
 				return true;
@@ -427,7 +457,7 @@ bool monitor_add(monitor_t *monitor, watch_t *watch, bool skip_pending) {
 			log_message(WARNING, "%s is a directory but configured as a file", watch->path);
 			watch->target = WATCH_DIRECTORY;
 		}
-		return monitor_tree(monitor, watch->path, watch);
+		return monitor_tree(monitor, watch->path, watchref);
 	}
 	/* Handle regular files */
 	else if (S_ISREG(info.st_mode)) {
@@ -435,7 +465,7 @@ bool monitor_add(monitor_t *monitor, watch_t *watch, bool skip_pending) {
 			log_message(WARNING, "%s is a file but configured as a directory", watch->path);
 			watch->target = WATCH_FILE;
 		}
-		return monitor_path(monitor, watch->path, watch);
+		return monitor_path(monitor, watch->path, watchref);
 	}
 	/* Unsupported file type */
 	else {
@@ -500,8 +530,12 @@ bool monitor_setup(monitor_t *monitor) {
 
 	/* Add watches for each entry in the configuration */
 	for (int i = 0; i < monitor->config->num_watches; i++) {
-		if (!monitor_add(monitor, monitor->config->watches[i], false)) {
-			log_message(WARNING, "Failed to add watch for %s, skipping", monitor->config->watches[i]->path);
+		watchref_t watchref = config_get_watchref(monitor->config, i);
+		if (watchref_valid(watchref)) {
+			if (!monitor_add(monitor, watchref, false)) {
+				watch_t *watch = config_get_watch(monitor->config, i);
+				log_message(WARNING, "Failed to add watch for %s, skipping", watch ? watch->path : "unknown");
+			}
 		}
 	}
 
@@ -516,25 +550,18 @@ bool monitor_setup(monitor_t *monitor) {
 		watch_t *config_watch = monitor_config(monitor->config_path);
 		if (config_watch) {
 			/* Add to config structure so it gets managed properly */
-			watch_t **new_watches = realloc(monitor->config->watches, (monitor->config->num_watches + 1) * sizeof(watch_t *));
-			if (new_watches == NULL) {
-				log_message(WARNING, "Failed to add config watch to config structure");
-				free(config_watch->name);
-				free(config_watch->path);
-				free(config_watch->command);
-				free(config_watch);
-			} else {
-				monitor->config->watches = new_watches;
-				monitor->config->watches[monitor->config->num_watches] = config_watch;
-				monitor->config->num_watches++;
-
-				if (!monitor_add(monitor, config_watch, false)) {
+			if (config_add_watch(monitor->config, config_watch)) {
+				watchref_t config_watchref = config_get_watchref(monitor->config, monitor->config->num_watches - 1);
+				if (!monitor_add(monitor, config_watchref, false)) {
 					log_message(WARNING, "Failed to add config file watch for %s", monitor->config_path);
 					/* Remove from config since it wasn't added to monitor */
-					monitor->config->num_watches--;
+					config_remove_watch(monitor->config, config_watchref);
 				} else {
 					log_message(DEBUG, "Added config file watch for %s", monitor->config_path);
 				}
+			} else {
+				log_message(WARNING, "Failed to add config watch to config structure");
+				config_destroy_watch(config_watch);
 			}
 		}
 	}
@@ -621,6 +648,12 @@ bool monitor_poll(monitor_t *monitor) {
 	/* Process delayed events */
 	events_delayed(monitor);
 
+	/* Clean up retired watchers */
+	monitor_watcher_cleanup(monitor);
+
+	/* Clean up retired config */
+	monitor_config_cleanup(monitor);
+
 	return true; /* Continue monitoring */
 }
 
@@ -659,6 +692,16 @@ bool monitor_reload(monitor_t *monitor) {
 	/* Wait for any pending commands to finish before destroying state */
 	command_cleanup(NULL);
 
+	/* Close and recreate kqueue to invalidate all existing watchers and their udata pointers */
+	if (monitor->kq >= 0) {
+		close(monitor->kq);
+	}
+	monitor->kq = kqueue();
+	if (monitor->kq == -1) {
+		log_message(ERROR, "Failed to create new kqueue during reload: %s", strerror(errno));
+		return false;
+	}
+
 	/* Save existing config to compare later */
 	config_t *old_config = monitor->config;
 
@@ -684,22 +727,37 @@ bool monitor_reload(monitor_t *monitor) {
 
 	/* Replace old config with new one so that dynamic promotions are added to the new config */
 	monitor->config = new_config;
+	monitor->registry = new_config->registry;
+
+	/* Re-initialize the special watch for intermediate glob directories in the new registry */
+	watch_t *glob_watch = calloc(1, sizeof(watch_t));
+	if (!glob_watch) {
+		log_message(ERROR, "Failed to allocate memory for glob watch during reload");
+		config_destroy(new_config);
+		return false;
+	}
+	glob_watch->name = strdup("__glob_intermediate__");
+	glob_watch->target = WATCH_DIRECTORY;
+	glob_watch->filter = EVENT_STRUCTURE;
+	glob_watch->command = NULL;
+	glob_watch->is_dynamic = false;
+	glob_watch->source_pattern = NULL;
+	
+	monitor->glob_watchref = registry_add(monitor->registry, glob_watch);
+	if (!watchref_valid(monitor->glob_watchref)) {
+		log_message(ERROR, "Failed to add glob watch to registry during reload");
+		config_destroy_watch(glob_watch);
+		config_destroy(new_config);
+		return false;
+	}
 
 	/* Add config file watch to the new config so it gets re-added */
 	if (monitor->config_path != NULL) {
 		watch_t *config_watch = monitor_config(monitor->config_path);
 		if (config_watch) {
-			watch_t **new_entries = realloc(new_config->watches, (new_config->num_watches + 1) * sizeof(watch_t *));
-			if (new_entries == NULL) {
+			if (!config_add_watch(new_config, config_watch)) {
 				log_message(WARNING, "Failed to add config watch to new config structure");
-				free(config_watch->name);
-				free(config_watch->path);
-				free(config_watch->command);
-				free(config_watch);
-			} else {
-				new_config->watches = new_entries;
-				new_config->watches[new_config->num_watches] = config_watch;
-				new_config->num_watches++;
+				config_destroy_watch(config_watch);
 			}
 		}
 	}
@@ -714,7 +772,7 @@ bool monitor_reload(monitor_t *monitor) {
 
 	/* Clear deferred and delayed queues to prevent access to old states */
 	queue_destroy(monitor->check_queue);
-	monitor->check_queue = queue_create(16);
+	monitor->check_queue = queue_create(monitor->registry, 16);
 
 	/* Also clear delayed events queue that may reference old watches */
 	if (monitor->delayed_events) {
@@ -733,13 +791,13 @@ bool monitor_reload(monitor_t *monitor) {
 
 	/* Preserve dynamic watches whose source patterns still exist in the new configuration */
 	for (int i = 0; i < old_config->num_watches; i++) {
-		watch_t *old_watch = old_config->watches[i];
-		if (old_watch->is_dynamic && old_watch->source_pattern) {
+		watch_t *old_watch = config_get_watch(old_config, i);
+		if (old_watch && old_watch->is_dynamic && old_watch->source_pattern) {
 			/* Check if the source pattern exists in the new configuration */
 			bool pattern_exists = false;
 			for (int j = 0; j < new_config->num_watches; j++) {
-				watch_t *new_watch = new_config->watches[j];
-				if (!new_watch->is_dynamic && strcmp(new_watch->path, old_watch->source_pattern) == 0) {
+				watch_t *new_watch = config_get_watch(new_config, j);
+				if (new_watch && !new_watch->is_dynamic && strcmp(new_watch->path, old_watch->source_pattern) == 0) {
 					pattern_exists = true;
 					break;
 				}
@@ -751,8 +809,24 @@ bool monitor_reload(monitor_t *monitor) {
 				bool pattern_matches = (fnmatch(old_watch->source_pattern, old_watch->path, FNM_PATHNAME) == 0);
 				
 				if (path_exists && pattern_matches) {
-					/* Create a copy of the dynamic watch to preserve it */
-					watch_t *preserved_watch = config_clone(old_watch, old_watch->path, old_watch->source_pattern);
+					/* Create a new watch struct to preserve the dynamic watch */
+					watch_t *preserved_watch = calloc(1, sizeof(watch_t));
+					if (preserved_watch) {
+						preserved_watch->name = old_watch->name ? strdup(old_watch->name) : NULL;
+						preserved_watch->path = old_watch->path ? strdup(old_watch->path) : NULL;
+						preserved_watch->command = old_watch->command ? strdup(old_watch->command) : NULL;
+						preserved_watch->source_pattern = old_watch->source_pattern ? strdup(old_watch->source_pattern) : NULL;
+						preserved_watch->target = old_watch->target;
+						preserved_watch->filter = old_watch->filter;
+						preserved_watch->log_output = old_watch->log_output;
+						preserved_watch->buffer_output = old_watch->buffer_output;
+						preserved_watch->recursive = old_watch->recursive;
+						preserved_watch->hidden = old_watch->hidden;
+						preserved_watch->environment = old_watch->environment;
+						preserved_watch->complexity = old_watch->complexity;
+						preserved_watch->processing_delay = old_watch->processing_delay;
+						preserved_watch->is_dynamic = true;
+					}
 					if (preserved_watch && config_add_watch(monitor->config, preserved_watch)) {
 						log_message(INFO, "Preserved dynamic watch: %s (from pattern: %s)", 
 						           preserved_watch->path, preserved_watch->source_pattern);
@@ -778,7 +852,7 @@ bool monitor_reload(monitor_t *monitor) {
 		}
 	}
 
-	/* Save old watches to be destroyed later */
+	/* Save old watches to be moved to the graveyard */
 	watcher_t **stale_watches = monitor->watches;
 	int stale_count = monitor->num_watches;
 
@@ -788,19 +862,39 @@ bool monitor_reload(monitor_t *monitor) {
 
 	/* Add watches from the new configuration (including the config file watch) */
 	for (int i = 0; i < monitor->config->num_watches; i++) {
-		if (!monitor_add(monitor, monitor->config->watches[i], false)) {
-			log_message(WARNING, "Failed to add watch for %s", monitor->config->watches[i]->path);
+		watchref_t watchref = config_get_watchref(monitor->config, i);
+		if (watchref_valid(watchref)) {
+			watch_t *watch = config_get_watch(monitor->config, i);
+			log_message(DEBUG, "Reloading watch: %s (%s)", watch->name, watch->path);
+			if (!monitor_add(monitor, watchref, false)) {
+				log_message(WARNING, "Failed to add watch for %s", watch ? watch->path : "unknown");
+			}
 		}
 	}
 
-	/* Destroy the old watches */
-	for (int i = 0; i < stale_count; i++) {
-		watcher_destroy(monitor, stale_watches[i]);
-	}
-	free(stale_watches);
+	/* Retire the old watchers to the graveyard */
+    if (stale_count > 0) {
+        if (monitor->watcher_graveyard.stale_watches) {
+            /* If there's an old graveyard, clean it up now to make way for the new one */
+            log_message(DEBUG, "Immediate cleanup of previous watcher graveyard to accommodate new one.");
+            for (int i = 0; i < monitor->watcher_graveyard.num_stale; i++) {
+                watcher_destroy(monitor, monitor->watcher_graveyard.stale_watches[i]);
+            }
+            free(monitor->watcher_graveyard.stale_watches);
+        }
+        monitor->watcher_graveyard.stale_watches = stale_watches;
+        monitor->watcher_graveyard.num_stale = stale_count;
+        monitor->watcher_graveyard.retirement_time = time(NULL) + WATCHER_GRAVEYARD_SECONDS;
+        log_message(DEBUG, "Retired %d watchers to graveyard. They will be cleaned up after %d seconds.", stale_count, WATCHER_GRAVEYARD_SECONDS);
+    }
 
-	/* Destroy the old config object */
-	config_destroy(old_config);
+	/* Retire the old config to its graveyard */
+    if (monitor->config_graveyard.old_config) {
+        log_message(DEBUG, "Immediate cleanup of previous config graveyard to accommodate new one.");
+        config_destroy(monitor->config_graveyard.old_config);
+    }
+    monitor->config_graveyard.old_config = old_config;
+    monitor->config_graveyard.retirement_time = time(NULL) + WATCHER_GRAVEYARD_SECONDS;
 
 	/* After reloading, explicitly validate the config file watch to handle editor atomic saves */
 	monitor_sync(monitor, monitor->config_path);
@@ -862,7 +956,7 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 				log_message(DEBUG, "Path deleted: %s. Cleaning up watch resources.", path);
 				
 				/* Store watch config before watcher becomes invalid */
-				watch_t *target_watch = watcher->watch;
+				watch_t *target_watch = registry_get(monitor->registry, watcher->watchref);
 
 				/* Clear any pending deferred checks to prevent use-after-free */
 				queue_remove(monitor->check_queue, path);
@@ -877,7 +971,7 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 
 				/*  Remove dynamic watch from config to prevent resurrection during reload */
 				if (target_watch && target_watch->is_dynamic) {
-					config_remove_watch(monitor->config, target_watch);
+					config_remove_watch(monitor->config, watcher->watchref);
 				}
 
 				/* Finally, remove the watcher for the parent path itself */
@@ -928,10 +1022,11 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 				monitor_kq(monitor, watcher);
 
 				/* If it was a recursive directory, rescan subdirectories */
-				if (watcher->watch->target == WATCH_DIRECTORY && watcher->watch->recursive) {
+				watch_t *watch = registry_get(monitor->registry, watcher->watchref);
+				if (watch && watch->target == WATCH_DIRECTORY && watch->recursive) {
 					log_message(DEBUG, "Re-scanning subdirectories for recreated path: %s", path);
 					monitor_prune(monitor, path);
-					monitor_tree(monitor, path, watcher->watch);
+					monitor_tree(monitor, path, watcher->watchref);
 				}
 				list_modified = true;
 			} else {
@@ -951,4 +1046,34 @@ void monitor_stop(monitor_t *monitor) {
 	}
 
 	monitor->running = false;
+}
+
+void monitor_watcher_cleanup(monitor_t *monitor) {
+    if (!monitor || !monitor->watcher_graveyard.stale_watches) {
+        return;
+    }
+
+    time_t now = time(NULL);
+    if (now >= monitor->watcher_graveyard.retirement_time) {
+        log_message(DEBUG, "Cleaning up %d stale watchers from graveyard.", monitor->watcher_graveyard.num_stale);
+        for (int i = 0; i < monitor->watcher_graveyard.num_stale; i++) {
+            watcher_destroy(monitor, monitor->watcher_graveyard.stale_watches[i]);
+        }
+        free(monitor->watcher_graveyard.stale_watches);
+        monitor->watcher_graveyard.stale_watches = NULL;
+        monitor->watcher_graveyard.num_stale = 0;
+    }
+}
+
+void monitor_config_cleanup(monitor_t *monitor) {
+    if (!monitor || !monitor->config_graveyard.old_config) {
+        return;
+    }
+
+    time_t now = time(NULL);
+    if (now >= monitor->config_graveyard.retirement_time) {
+        log_message(DEBUG, "Cleaning up old config from graveyard.");
+        config_destroy(monitor->config_graveyard.old_config);
+        monitor->config_graveyard.old_config = NULL;
+    }
 }

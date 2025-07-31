@@ -3,6 +3,8 @@
 
 #include <stdbool.h>
 
+#include "registry.h"
+
 /* Maximum line length in config file */
 #define MAX_LINE_LEN 1024
 
@@ -59,8 +61,9 @@ typedef struct config {
 	char *config_path;                     /* Path to config file */
 	bool daemon_mode;                      /* Run as daemon */
 	int syslog_level;                      /* Syslog verbosity */
-	watch_t **watches;                     /* Array of watch entries */
+	watchref_t *watchrefs;                 /* Array of watch references */
 	int num_watches;                       /* Number of watch entries */
+	registry_t *registry;                  /* Watch registry reference */
 } config_t;
 
 /* Function prototypes */
@@ -71,9 +74,12 @@ bool config_events(const char *events_str, filter_t *events);
 const char *filter_to_string(filter_t filter);
 
 /* Watch management functions */
-watch_t *config_clone(const watch_t *original, const char *new_path, const char *source_pattern);
 bool config_add_watch(config_t *config, watch_t *watch);
 void config_destroy_watch(watch_t *watch);
-bool config_remove_watch(config_t *config, watch_t *watch);
+bool config_remove_watch(config_t *config, watchref_t watchref);
+
+/* Registry-aware functions */
+watch_t *config_get_watch(config_t *config, int index);
+watchref_t config_get_watchref(config_t *config, int index);
 
 #endif /* CONFIG_H */

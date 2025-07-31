@@ -40,6 +40,7 @@ SRCS = src/main.c \
 	   src/monitor.c \
 	   src/pending.c \
 	   src/scanner.c \
+	   src/registry.c \
 	   src/stability.c \
 	   src/command.c \
 	   src/threads.c \
