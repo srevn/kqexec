@@ -18,6 +18,43 @@
 #include "logger.h"
 #include "queue.h"
 #include "events.h"
+#include "pending.h"
+
+/* Observer callback for watch deactivation */
+static void monitor_on_pending_watch_deactivated(watchref_t ref, void *context) {
+	monitor_t *monitor = (monitor_t *)context;
+	if (!monitor || !monitor->pending) {
+		return;
+	}
+	
+	log_message(DEBUG, "Monitor observer: Watch ID %u (gen %u) deactivated, cleaning up pending entries", 
+	           ref.watch_id, ref.generation);
+	
+	int entries_removed = 0;
+	
+	/* Scan pending entries for the deactivated watch (iterate backwards for safe removal) */
+	for (int i = monitor->num_pending - 1; i >= 0; i--) {
+		pending_t *pending = monitor->pending[i];
+		if (pending && watchref_equal(pending->watchref, ref)) {
+			log_message(DEBUG, "Removing orphaned pending entry for path: %s", 
+			           pending->target_path ? pending->target_path : "<null>");
+			
+			/* Remove using existing pending_remove function for proper cleanup */
+			pending_destroy(pending);
+			
+			/* Shift remaining entries down */
+			for (int j = i; j < monitor->num_pending - 1; j++) {
+				monitor->pending[j] = monitor->pending[j + 1];
+			}
+			monitor->num_pending--;
+			entries_removed++;
+		}
+	}
+	
+	if (entries_removed > 0) {
+		log_message(DEBUG, "Pending cleanup complete: removed %d orphaned entries", entries_removed);
+	}
+}
 
 /* Free resources used by a watcher structure */
 static void watcher_destroy(monitor_t *monitor, watcher_t *watcher) {
@@ -151,6 +188,21 @@ monitor_t *monitor_create(config_t *config, registry_t *registry) {
 		return NULL;
 	}
 
+	/* Initialize pending watch observer */
+	monitor->pending_observer.on_watch_deactivated = monitor_on_pending_watch_deactivated;
+	monitor->pending_observer.context = monitor;
+	monitor->pending_observer.next = NULL;
+	
+	/* Register pending observer with the registry */
+	if (monitor->registry && !register_observer(monitor->registry, &monitor->pending_observer)) {
+		log_message(ERROR, "Failed to register pending observer with registry");
+		states_destroy(monitor->states);
+		queue_destroy(monitor->check_queue);
+		free(monitor->config_path);
+		free(monitor);
+		return NULL;
+	}
+
 	/* Initialize delayed event queue */
 	monitor->delayed_events = NULL;
 	monitor->delayed_count = 0;
@@ -219,6 +271,11 @@ void monitor_destroy(monitor_t *monitor) {
     }
 
 	free(monitor->watches);
+
+	/* Unregister pending observer from registry */
+	if (monitor->registry) {
+		unregister_observer(monitor->registry, &monitor->pending_observer);
+	}
 
 	/* Clean up pending watches */
 	pending_cleanup(monitor);

@@ -198,7 +198,7 @@ static bool glob_find_matches(const char *parent_path, const char *glob_componen
 }
 
 /* Destroy a pending watch entry */
-static void pending_destroy(pending_t *pending) {
+void pending_destroy(pending_t *pending) {
 	if (!pending) return;
 
 	free(pending->target_path);

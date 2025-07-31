@@ -28,6 +28,7 @@ bool pending_add(monitor_t *monitor, const char *target_path, watchref_t watchre
 void pending_process(monitor_t *monitor, const char *parent_path);
 void pending_delete(monitor_t *monitor, const char *deleted_path);
 void pending_cleanup(monitor_t *monitor);
+void pending_destroy(pending_t *pending);
 
 /* Glob scanning functions */
 char **glob_scan_paths(const char *pattern, int *count);

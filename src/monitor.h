@@ -67,6 +67,9 @@ typedef struct monitor {
 	watchref_t glob_watchref;              /* Special watch for intermediate glob directories */
     watcher_graveyard_t watcher_graveyard;
     config_graveyard_t config_graveyard;
+	
+	/* Observer for pending watch cleanup */
+	observer_t pending_observer;           /* Observer registration for pending cleanup */
 } monitor_t;
 
 /* Monitor lifecycle management */

@@ -30,7 +30,7 @@ static void state_free_entity(entity_t *state) {
 	}
 }
 
-/* Observer callback for watch deactivation - proactive cleanup */
+/* Observer callback for watch deactivation */
 static void states_on_watch_deactivated(watchref_t ref, void *context) {
 	states_t *states = (states_t *)context;
 	if (!states || !states->buckets) {
@@ -154,7 +154,8 @@ states_t *states_create(size_t bucket_count, registry_t *registry) {
 		return NULL;
 	}
 
-	log_message(DEBUG, "State table created with %zu buckets and registry observer registered", bucket_count);
+	log_message(DEBUG, "State table created with %zu buckets and registry observer registered",
+				bucket_count);
 	return states;
 }
 
