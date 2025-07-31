@@ -210,7 +210,7 @@ void pending_destroy(pending_t *pending) {
 }
 
 /* Remove a pending watch from the monitor's pending list */
-static void pending_remove(monitor_t *monitor, int index) {
+void pending_remove(monitor_t *monitor, int index) {
 	if (!monitor || index < 0 || index >= monitor->num_pending) {
 		return;
 	}

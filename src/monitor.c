@@ -39,14 +39,8 @@ static void monitor_on_pending_watch_deactivated(watchref_t ref, void *context) 
 			log_message(DEBUG, "Removing orphaned pending entry for path: %s", 
 			           pending->target_path ? pending->target_path : "<null>");
 			
-			/* Remove using existing pending_remove function for proper cleanup */
-			pending_destroy(pending);
-			
-			/* Shift remaining entries down */
-			for (int j = i; j < monitor->num_pending - 1; j++) {
-				monitor->pending[j] = monitor->pending[j + 1];
-			}
-			monitor->num_pending--;
+			/* Remove using the public pending_remove function for proper cleanup */
+			pending_remove(monitor, i);
 			entries_removed++;
 		}
 	}
