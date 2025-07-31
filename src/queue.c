@@ -6,40 +6,40 @@
 
 #include "queue.h"
 #include "monitor.h"
-#include "config.h"
 #include "logger.h"
 #include "registry.h"
 
-/* Observer callback for watch deactivation - THE CRITICAL BUG FIX */
-static void queue_on_watch_deactivated(watchref_t ref, void *context) {
-	queue_t *queue = (queue_t *)context;
+/* Observer callback for watch deactivation */
+static void queue_handle_deactivation(watchref_t watchref, void *context) {
+	queue_t *queue = (queue_t *) context;
 	if (!queue || !queue->items) {
 		return;
 	}
-	
-	log_message(DEBUG, "Queue observer: Watch ID %u (gen %u) deactivated, cleaning up queue", 
-	           ref.watch_id, ref.generation);
-	
+
+	log_message(DEBUG, "Queue observer: Watch ID %u (gen %u) deactivated, cleaning up queue",
+	            watchref.watch_id, watchref.generation);
+
 	/* Scan all queue items for the deactivated watch */
-	for (int i = queue->size - 1; i >= 0; i--) { /* Iterate backwards for safe removal */
+	for (int i = queue->size - 1; i >= 0; i--) {
+		/* Iterate backwards for safe removal */
 		check_t *check = &queue->items[i];
-		
+
 		/* Remove the deactivated watch from this check */
 		int write_pos = 0;
 		for (int read_pos = 0; read_pos < check->num_watches; read_pos++) {
-			if (!watchref_equal(check->watchrefs[read_pos], ref)) {
+			if (!watchref_equal(check->watchrefs[read_pos], watchref)) {
 				check->watchrefs[write_pos++] = check->watchrefs[read_pos];
 			} else {
-				log_message(DEBUG, "Removed deactivated watch from queue item: %s", 
-				           check->path ? check->path : "<null>");
+				log_message(DEBUG, "Removed deactivated watch from queue item: %s",
+				            check->path ? check->path : "<null>");
 			}
 		}
 		check->num_watches = write_pos;
-		
+
 		/* If check has no watches left, remove entire check */
 		if (check->num_watches == 0) {
-			log_message(DEBUG, "Removing empty queue item after watch cleanup: %s", 
-			           check->path ? check->path : "<null>");
+			log_message(DEBUG, "Removing empty queue item after watch cleanup: %s",
+			            check->path ? check->path : "<null>");
 			queue_remove_by_index(queue, i);
 		}
 	}
@@ -65,21 +65,22 @@ queue_t *queue_create(registry_t *registry, int initial_capacity) {
 
 	queue->size = 0;
 	queue->items_capacity = initial_capacity;
-	
+
 	/* Initialize registry integration */
 	queue->registry = registry;
-	queue->observer.on_watch_deactivated = queue_on_watch_deactivated;
+	queue->observer.handle_deactivation = queue_handle_deactivation;
 	queue->observer.context = queue;
 	queue->observer.next = NULL;
-	
+
 	/* Register as observer with the registry */
 	if (registry && !register_observer(registry, &queue->observer)) {
 		log_message(ERROR, "Failed to register queue as observer with registry");
 		queue_destroy(queue);
 		return NULL;
 	}
-	
-	log_message(DEBUG, "Initialized deferred check queue with capacity %d (registry observer registered)", initial_capacity);
+
+	log_message(DEBUG, "Initialized deferred check queue with capacity %d (registry observer registered)",
+				initial_capacity);
 	return queue;
 }
 

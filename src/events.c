@@ -5,7 +5,6 @@
 #include <sys/time.h>
 #include <sys/event.h>
 #include <sys/stat.h>
-#include <fnmatch.h>
 
 #include "events.h"
 #include "monitor.h"
@@ -164,7 +163,6 @@ void events_delayed(monitor_t *monitor) {
 		/* Check if this event is ready to process */
 		if (current_time.tv_sec > delayed->process_time.tv_sec ||
 		    (current_time.tv_sec == delayed->process_time.tv_sec && current_time.tv_nsec >= delayed->process_time.tv_nsec)) {
-			
 			/* Resolve watch reference at processing time */
 			watch_t *watch = registry_get(monitor->registry, delayed->watchref);
 			if (!watch) {
@@ -237,8 +235,6 @@ int events_timeout(monitor_t *monitor, struct timespec *current_time) {
 	return timeout_ms > 0 ? (int) timeout_ms : 1;
 }
 
-
-
 /* Convert kqueue flags to filter type bitmask */
 static filter_t flags_to_filter(uint32_t flags) {
 	filter_t event = EVENT_NONE;
@@ -297,7 +293,7 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 					log_message(WARNING, "Invalid watch reference for watcher at %s", watcher->path);
 					continue;
 				}
-				
+
 				kind_t kind = (watch->target == WATCH_FILE) ? ENTITY_FILE : ENTITY_DIRECTORY;
 
 				log_message(DEBUG, "Event: path=%s, flags=0x%x -> type=%s (watch: %s)",
@@ -571,18 +567,17 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 	/* Handle directory content changes - check for deleted child directories */
 	if (optype == OP_DIR_CONTENT_CHANGED && monitor->num_pending > 0) {
 		log_message(DEBUG, "Directory content changed, checking for deleted child directories: %s", state->node->path);
-		
+
 		/* Check all pending watches to see if any are waiting for children of this directory */
 		for (int i = monitor->num_pending - 1; i >= 0; i--) {
 			pending_t *pending = monitor->pending[i];
 			if (!pending || !pending->current_parent) continue;
-			
+
 			/* Check if this pending watch's current_parent is a child of the changed directory */
 			size_t parent_len = strlen(state->node->path);
 			if (strlen(pending->current_parent) > parent_len &&
 			    strncmp(pending->current_parent, state->node->path, parent_len) == 0 &&
 			    pending->current_parent[parent_len] == '/') {
-				
 				/* Check if the current_parent still exists */
 				struct stat info;
 				if (stat(pending->current_parent, &info) != 0) {

@@ -3,8 +3,6 @@
 
 #include <stdbool.h>
 
-#include "config.h"
-#include "logger.h"
 #include "registry.h"
 
 /* Deferred directory check queue entry */

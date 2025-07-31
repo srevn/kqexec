@@ -31,33 +31,31 @@ static void state_free_entity(entity_t *state) {
 }
 
 /* Observer callback for watch deactivation */
-static void states_on_watch_deactivated(watchref_t ref, void *context) {
-	states_t *states = (states_t *)context;
+static void states_handle_deactivation(watchref_t watchref, void *context) {
+	states_t *states = (states_t *) context;
 	if (!states || !states->buckets) {
 		return;
 	}
-	
-	log_message(DEBUG, "States observer: Watch ID %u (gen %u) deactivated, cleaning up states", 
-	           ref.watch_id, ref.generation);
-	
+
+	log_message(DEBUG, "Watch ID %u (gen %u) deactivated, cleaning up states", watchref.watch_id, watchref.generation);
+
 	int entities_removed = 0;
 	int nodes_removed = 0;
-	
+
 	/* Scan all buckets for entities with the deactivated watch */
 	for (size_t bucket = 0; bucket < states->bucket_count; bucket++) {
 		pthread_mutex_lock(&states->mutexes[bucket]);
-		
+
 		node_t **node_ptr = &states->buckets[bucket];
 		while (*node_ptr) {
 			node_t *node = *node_ptr;
-			
+
 			/* Remove entities with deactivated watch from this node */
 			entity_t **entity_ptr = &node->entities;
 			while (*entity_ptr) {
 				entity_t *entity = *entity_ptr;
-				if (watchref_equal(entity->watchref, ref)) {
-					log_message(DEBUG, "Removing deactivated entity for path: %s", 
-					           node->path ? node->path : "<null>");
+				if (watchref_equal(entity->watchref, watchref)) {
+					log_message(DEBUG, "Removing deactivated entity for path: %s", node->path ? node->path : "<null>");
 					*entity_ptr = entity->next;
 					state_free_entity(entity);
 					entities_removed++;
@@ -65,11 +63,10 @@ static void states_on_watch_deactivated(watchref_t ref, void *context) {
 					entity_ptr = &entity->next;
 				}
 			}
-			
+
 			/* If node has no entities left, remove entire node */
 			if (!node->entities) {
-				log_message(DEBUG, "Removing empty node after cleanup: %s", 
-				           node->path ? node->path : "<null>");
+				log_message(DEBUG, "Removing empty node after cleanup: %s", node->path ? node->path : "<null>");
 				*node_ptr = node->next;
 				free(node->path);
 				free(node);
@@ -78,13 +75,12 @@ static void states_on_watch_deactivated(watchref_t ref, void *context) {
 				node_ptr = &node->next;
 			}
 		}
-		
+
 		pthread_mutex_unlock(&states->mutexes[bucket]);
 	}
-	
+
 	if (entities_removed > 0 || nodes_removed > 0) {
-		log_message(DEBUG, "States cleanup complete: removed %d entities, %d nodes", 
-		           entities_removed, nodes_removed);
+		log_message(DEBUG, "States cleanup complete: removed %d entities, %d nodes", entities_removed, nodes_removed);
 	}
 }
 
@@ -143,10 +139,10 @@ states_t *states_create(size_t bucket_count, registry_t *registry) {
 
 	/* Initialize registry integration */
 	states->registry = registry;
-	states->observer.on_watch_deactivated = states_on_watch_deactivated;
+	states->observer.handle_deactivation = states_handle_deactivation;
 	states->observer.context = states;
 	states->observer.next = NULL;
-	
+
 	/* Register as observer with the registry */
 	if (registry && !register_observer(registry, &states->observer)) {
 		log_message(ERROR, "Failed to register states as observer with registry");
@@ -154,8 +150,7 @@ states_t *states_create(size_t bucket_count, registry_t *registry) {
 		return NULL;
 	}
 
-	log_message(DEBUG, "State table created with %zu buckets and registry observer registered",
-				bucket_count);
+	log_message(DEBUG, "State table created with %zu buckets and registry observer registered", bucket_count);
 	return states;
 }
 
@@ -274,8 +269,6 @@ static void state_copy(entity_t *dest, const entity_t *src) {
 		free(saved_path);
 	}
 }
-
-
 
 /* Get or create an entity state for a given path and watch reference */
 entity_t *states_get(states_t *states, const char *path, kind_t kind, watchref_t watchref, registry_t *registry) {

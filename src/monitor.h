@@ -15,7 +15,7 @@
 #define MAX_PATH_LEN 1024
 #define MAX_CHECKS_FAILED 3
 #define MAX_EVENTS 64
-#define WATCHER_GRAVEYARD_SECONDS 5
+#define GRAVEYARD_SECONDS 5
 
 /* Watched file/directory information */
 typedef struct watcher {
@@ -28,16 +28,13 @@ typedef struct watcher {
 	time_t validated;                      /* Last time this path was validated */
 } watcher_t;
 
-typedef struct watcher_graveyard {
+/* Graveyard for stale watchers and old configurations */
+typedef struct graveyard {
 	watcher_t **stale_watches;             /* Array of watchers pending cleanup */
 	int num_stale;                         /* Count of stale watchers in array */
-	time_t retirement_time;                /* Timestamp when cleanup becomes safe */
-} watcher_graveyard_t;
-
-typedef struct config_graveyard {
 	config_t *old_config;                  /* Previous configuration awaiting cleanup */
 	time_t retirement_time;                /* Timestamp when cleanup becomes safe */
-} config_graveyard_t;
+} graveyard_t;
 
 /* Structure to hold monitoring context */
 typedef struct monitor {
@@ -65,8 +62,7 @@ typedef struct monitor {
 	bool reload;                           /* Flag to indicate reload requested */
 	char *config_path;                     /* Copy of config file path for reloading */
 	watchref_t glob_watchref;              /* Special watch for intermediate glob directories */
-    watcher_graveyard_t watcher_graveyard;
-    config_graveyard_t config_graveyard;
+    graveyard_t graveyard;                 /* Graveyard for stale items */
 	
 	/* Observer for pending watch cleanup */
 	observer_t pending_observer;           /* Observer registration for pending cleanup */
@@ -87,11 +83,13 @@ bool monitor_poll(monitor_t *monitor);
 bool monitor_add(monitor_t *monitor, watchref_t watchref, bool skip_pending);
 bool monitor_tree(monitor_t *monitor, const char *dir_path, watchref_t watchref);
 bool monitor_path(monitor_t *monitor, const char *path, watchref_t watchref);
-void monitor_watcher_cleanup(monitor_t *monitor);
-void monitor_config_cleanup(monitor_t *monitor);
+void monitor_graveyard(monitor_t *monitor);
 
 /* Path synchronization */
 bool monitor_sync(monitor_t *monitor, const char *path);
 bool monitor_prune(monitor_t *monitor, const char *parent);
+
+/* Observer callback for watch deactivation */
+void cleanup_pending(watchref_t watchref, void *context);
 
 #endif /* MONITOR_H */

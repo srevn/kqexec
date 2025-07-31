@@ -277,7 +277,7 @@ entity_t *stability_entry(monitor_t *monitor, check_t *check) {
 		return NULL;
 	}
 
-	/* Use the first watch reference to find the state. All watches for a check share the same path. */
+	/* Use the first watch reference to find the state. All watches for a check share the same path */
 	watchref_t primary_watchref = check->watchrefs[0];
 
 	entity_t *root = states_get(monitor->states, check->path, ENTITY_DIRECTORY, primary_watchref, monitor->registry);
@@ -588,8 +588,8 @@ bool stability_execute(monitor_t *monitor, check_t *check, entity_t *root, struc
 		watch_t *watch = registry_get(monitor->registry, check->watchrefs[i]);
 
 		if (!watch) {
-			log_message(DEBUG, "Skipping command for stale watch reference: ID %u (gen %u)", 
-			           check->watchrefs[i].watch_id, check->watchrefs[i].generation);
+			log_message(DEBUG, "Skipping command for stale watch reference: ID %u (gen %u)",
+			            check->watchrefs[i].watch_id, check->watchrefs[i].generation);
 			continue;
 		}
 

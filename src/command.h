@@ -3,7 +3,6 @@
 
 #include <stdbool.h>
 
-#include "config.h"
 #include "monitor.h"
 #include "threads.h"
 

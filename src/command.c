@@ -289,8 +289,6 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 		return threads_submit(command_threads, monitor, watchref, event);
 	}
 
-	
-
 	/* Synchronous execution with robust output capture */
 	pid_t pid;
 	char *command;
@@ -618,14 +616,14 @@ void command_cleanup(threads_t *threads) {
 		pthread_mutex_lock(&exec_threads->queue_mutex);
 		int pending_commands = exec_threads->queue_size + exec_threads->active_tasks;
 		pthread_mutex_unlock(&exec_threads->queue_mutex);
-		
+
 		if (pending_commands > 0) {
-			log_message(INFO, "Waiting for %d pending command%s to finish...", 
-			           pending_commands, pending_commands == 1 ? "" : "s");
+			log_message(INFO, "Waiting for %d pending command%s to finish...",
+			            pending_commands, pending_commands == 1 ? "" : "s");
 		}
-		
+
 		threads_wait(exec_threads);
-		
+
 		if (pending_commands > 0) {
 			log_message(INFO, "All pending commands finished");
 		}

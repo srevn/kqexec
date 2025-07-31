@@ -5,7 +5,6 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <dirent.h>
-#include <fnmatch.h>
 #include <sys/types.h>
 #include <sys/event.h>
 #include <sys/time.h>
@@ -20,36 +19,6 @@
 #include "events.h"
 #include "pending.h"
 
-/* Observer callback for watch deactivation */
-static void monitor_on_pending_watch_deactivated(watchref_t ref, void *context) {
-	monitor_t *monitor = (monitor_t *)context;
-	if (!monitor || !monitor->pending) {
-		return;
-	}
-	
-	log_message(DEBUG, "Monitor observer: Watch ID %u (gen %u) deactivated, cleaning up pending entries", 
-	           ref.watch_id, ref.generation);
-	
-	int entries_removed = 0;
-	
-	/* Scan pending entries for the deactivated watch (iterate backwards for safe removal) */
-	for (int i = monitor->num_pending - 1; i >= 0; i--) {
-		pending_t *pending = monitor->pending[i];
-		if (pending && watchref_equal(pending->watchref, ref)) {
-			log_message(DEBUG, "Removing orphaned pending entry for path: %s", 
-			           pending->target_path ? pending->target_path : "<null>");
-			
-			/* Remove using the public pending_remove function for proper cleanup */
-			pending_remove(monitor, i);
-			entries_removed++;
-		}
-	}
-	
-	if (entries_removed > 0) {
-		log_message(DEBUG, "Pending cleanup complete: removed %d orphaned entries", entries_removed);
-	}
-}
-
 /* Free resources used by a watcher structure */
 static void watcher_destroy(monitor_t *monitor, watcher_t *watcher, bool is_stale) {
 	if (watcher == NULL) {
@@ -63,8 +32,8 @@ static void watcher_destroy(monitor_t *monitor, watcher_t *watcher, bool is_stal
 		if (watcher->shared_fd && monitor) {
 			/* Count other watchers using this FD */
 			int fd_users = 0;
-			watcher_t **list = is_stale ? monitor->watcher_graveyard.stale_watches : monitor->watches;
-			int count = is_stale ? monitor->watcher_graveyard.num_stale : monitor->num_watches;
+			watcher_t **list = is_stale ? monitor->graveyard.stale_watches : monitor->watches;
+			int count = is_stale ? monitor->graveyard.num_stale : monitor->num_watches;
 
 			for (int i = 0; i < count; i++) {
 				watcher_t *other = list[i];
@@ -163,9 +132,9 @@ monitor_t *monitor_create(config_t *config, registry_t *registry) {
 	monitor->num_pending = 0;
 	monitor->running = false;
 	monitor->reload = false;
-    monitor->watcher_graveyard.stale_watches = NULL;
-    monitor->watcher_graveyard.num_stale = 0;
-    monitor->config_graveyard.old_config = NULL;
+	monitor->graveyard.stale_watches = NULL;
+	monitor->graveyard.num_stale = 0;
+	monitor->graveyard.old_config = NULL;
 
 	/* Store config file path for reloading */
 	if (config->config_path != NULL) {
@@ -186,10 +155,10 @@ monitor_t *monitor_create(config_t *config, registry_t *registry) {
 	}
 
 	/* Initialize pending watch observer */
-	monitor->pending_observer.on_watch_deactivated = monitor_on_pending_watch_deactivated;
+	monitor->pending_observer.handle_deactivation = cleanup_pending;
 	monitor->pending_observer.context = monitor;
 	monitor->pending_observer.next = NULL;
-	
+
 	/* Register pending observer with the registry */
 	if (monitor->registry && !register_observer(monitor->registry, &monitor->pending_observer)) {
 		log_message(ERROR, "Failed to register pending observer with registry");
@@ -219,11 +188,11 @@ monitor_t *monitor_create(config_t *config, registry_t *registry) {
 	glob_watch->target = WATCH_DIRECTORY;
 	glob_watch->filter = EVENT_STRUCTURE;
 	glob_watch->command = NULL; /* No command execution */
-	
+
 	/* Initialize dynamic tracking fields (glob intermediate watch is not dynamic) */
 	glob_watch->is_dynamic = false;
 	glob_watch->source_pattern = NULL;
-	
+
 	/* Add glob watch to registry and store reference */
 	monitor->glob_watchref = registry_add(monitor->registry, glob_watch);
 	if (!watchref_valid(monitor->glob_watchref)) {
@@ -255,17 +224,17 @@ void monitor_destroy(monitor_t *monitor) {
 		watcher_destroy(monitor, monitor->watches[i], false);
 		monitor->watches[i] = NULL; /* Prevent use-after-free in subsequent calls */
 	}
-    if (monitor->watcher_graveyard.stale_watches) {
-        log_message(DEBUG, "Cleaning up %d stale watchers from graveyard during monitor destruction.", monitor->watcher_graveyard.num_stale);
-        for (int i = 0; i < monitor->watcher_graveyard.num_stale; i++) {
-            watcher_destroy(monitor, monitor->watcher_graveyard.stale_watches[i], true);
-        }
-        free(monitor->watcher_graveyard.stale_watches);
-    }
-    if (monitor->config_graveyard.old_config) {
-        log_message(DEBUG, "Cleaning up old config from graveyard during monitor destruction.");
-        config_destroy(monitor->config_graveyard.old_config);
-    }
+	if (monitor->graveyard.stale_watches) {
+		log_message(DEBUG, "Cleaning up %d stale watchers from graveyard during monitor destruction.", monitor->graveyard.num_stale);
+		for (int i = 0; i < monitor->graveyard.num_stale; i++) {
+			watcher_destroy(monitor, monitor->graveyard.stale_watches[i], true);
+		}
+		free(monitor->graveyard.stale_watches);
+	}
+	if (monitor->graveyard.old_config) {
+		log_message(DEBUG, "Cleaning up old config from graveyard during monitor destruction");
+		config_destroy(monitor->graveyard.old_config);
+	}
 
 	free(monitor->watches);
 
@@ -348,7 +317,7 @@ static bool monitor_kq(monitor_t *monitor, watcher_t *watcher) {
 bool monitor_path(monitor_t *monitor, const char *path, watchref_t watchref) {
 	/* Clean up any stale watchers for this path first */
 	monitor_sync(monitor, path);
-	
+
 	/* Check if a watcher for this path and watch config already exists to avoid duplicates */
 	for (int i = 0; i < monitor->num_watches; i++) {
 		if (strcmp(monitor->watches[i]->path, path) == 0 && watchref_equal(monitor->watches[i]->watchref, watchref)) {
@@ -434,7 +403,7 @@ bool monitor_tree(monitor_t *monitor, const char *dir_path, watchref_t watchref)
 		log_message(ERROR, "Invalid watch reference for directory tree scan");
 		return false;
 	}
-	
+
 	/* Skip hidden directories unless hidden is true */
 	if (!watch->hidden && path_hidden(dir_path)) {
 		log_message(DEBUG, "Skipping hidden directory: %s", dir_path);
@@ -510,7 +479,7 @@ bool monitor_add(monitor_t *monitor, watchref_t watchref, bool skip_pending) {
 		} else {
 			/* Other stat error or skipping pending */
 			log_message(WARNING, "Failed to stat %s: %s%s", watch->path, strerror(errno),
-			           skip_pending ? " (skipping pending)" : ". It may have been deleted");
+			            skip_pending ? " (skipping pending)" : ". It may have been deleted");
 			return skip_pending ? false : true; /* Fail if skipping pending, else not fatal */
 		}
 	}
@@ -560,7 +529,7 @@ static watch_t *monitor_config(const char *config_file_path) {
 	config_watch->environment = false;
 	config_watch->complexity = 1.0;
 	config_watch->processing_delay = 100;
-	
+
 	/* Initialize dynamic tracking fields (config watches are not dynamic) */
 	config_watch->is_dynamic = false;
 	config_watch->source_pattern = NULL;
@@ -712,11 +681,8 @@ bool monitor_poll(monitor_t *monitor) {
 	/* Process delayed events */
 	events_delayed(monitor);
 
-	/* Clean up retired watchers */
-	monitor_watcher_cleanup(monitor);
-
-	/* Clean up retired config */
-	monitor_config_cleanup(monitor);
+	/* Clean up retired items from the graveyard */
+	monitor_graveyard(monitor);
 
 	return true; /* Continue monitoring */
 }
@@ -817,8 +783,8 @@ bool monitor_reload(monitor_t *monitor) {
 				/* Create a copy of the dynamic watch for the new config */
 				watch_t *preserved_watch = config_clone_watch(old_watch);
 				if (preserved_watch && config_add_watch(new_config, preserved_watch, new_registry)) {
-					log_message(DEBUG, "Preserved dynamic watch: %s (from pattern: %s)", 
-					           preserved_watch->path, preserved_watch->source_pattern);
+					log_message(DEBUG, "Preserved dynamic watch: %s (from pattern: %s)",
+					            preserved_watch->path, preserved_watch->source_pattern);
 				} else {
 					log_message(WARNING, "Failed to preserve dynamic watch: %s", old_watch->path);
 					if (preserved_watch) {
@@ -846,7 +812,7 @@ bool monitor_reload(monitor_t *monitor) {
 	glob_watch->command = NULL;
 	glob_watch->is_dynamic = false;
 	glob_watch->source_pattern = NULL;
-	
+
 	monitor->glob_watchref = registry_add(monitor->registry, glob_watch);
 	if (!watchref_valid(monitor->glob_watchref)) {
 		log_message(ERROR, "Failed to add glob watch to registry during reload");
@@ -893,7 +859,6 @@ bool monitor_reload(monitor_t *monitor) {
 	/* Clear pending watches that may reference old watches */
 	pending_cleanup(monitor);
 
-
 	/* Save old watches to be moved to the graveyard */
 	watcher_t **stale_watches = monitor->watches;
 	int stale_count = monitor->num_watches;
@@ -914,21 +879,19 @@ bool monitor_reload(monitor_t *monitor) {
 		}
 	}
 
-	/* Retire the old watchers to the graveyard */
-    if (stale_count > 0) {
-        if (monitor->watcher_graveyard.stale_watches) {
-            /* If there's an old graveyard, clean it up now to make way for the new one */
-            log_message(DEBUG, "Immediate cleanup of previous watcher graveyard to accommodate new one.");
-            for (int i = 0; i < monitor->watcher_graveyard.num_stale; i++) {
-                watcher_destroy(monitor, monitor->watcher_graveyard.stale_watches[i], true);
-            }
-            free(monitor->watcher_graveyard.stale_watches);
-        }
-        monitor->watcher_graveyard.stale_watches = stale_watches;
-        monitor->watcher_graveyard.num_stale = stale_count;
-        monitor->watcher_graveyard.retirement_time = time(NULL) + WATCHER_GRAVEYARD_SECONDS;
-        log_message(DEBUG, "Retired %d watchers to graveyard. They will be cleaned up after %d seconds.", stale_count, WATCHER_GRAVEYARD_SECONDS);
-    }
+	/* Retire the old watchers and config to the graveyard */
+	if (stale_count > 0 || old_config) {
+		if (monitor->graveyard.stale_watches || monitor->graveyard.old_config) {
+			/* If there's an old graveyard, clean it up now to make way for the new one */
+			log_message(DEBUG, "Immediate cleanup of previous graveyard to accommodate new one");
+			monitor_graveyard(monitor);
+		}
+		monitor->graveyard.stale_watches = stale_watches;
+		monitor->graveyard.num_stale = stale_count;
+		monitor->graveyard.old_config = old_config;
+		monitor->graveyard.retirement_time = time(NULL) + GRAVEYARD_SECONDS;
+		log_message(DEBUG, "Retired %d watchers and old config to graveyard", stale_count, GRAVEYARD_SECONDS);
+	}
 
 	/* Perform garbage collection and destroy old registry */
 	if (old_registry) {
@@ -936,14 +899,6 @@ bool monitor_reload(monitor_t *monitor) {
 		registry_destroy(old_registry);
 		log_message(DEBUG, "Performed garbage collection and destroyed old registry during reload");
 	}
-
-	/* Retire the old config to its graveyard */
-    if (monitor->config_graveyard.old_config) {
-        log_message(DEBUG, "Immediate cleanup of previous config graveyard to accommodate new one.");
-        config_destroy(monitor->config_graveyard.old_config);
-    }
-    monitor->config_graveyard.old_config = old_config;
-    monitor->config_graveyard.retirement_time = time(NULL) + WATCHER_GRAVEYARD_SECONDS;
 
 	/* After reloading, explicitly validate the config file watch to handle editor atomic saves */
 	monitor_sync(monitor, monitor->config_path);
@@ -986,6 +941,32 @@ bool monitor_prune(monitor_t *monitor, const char *parent) {
 	return changed;
 }
 
+/* Clean up stale items in the graveyard */
+void monitor_graveyard(monitor_t *monitor) {
+	if (!monitor || (!monitor->graveyard.stale_watches && !monitor->graveyard.old_config)) {
+		return;
+	}
+
+	time_t now = time(NULL);
+	if (now >= monitor->graveyard.retirement_time) {
+		if (monitor->graveyard.stale_watches) {
+			log_message(DEBUG, "Cleaning up %d stale watchers from graveyard", monitor->graveyard.num_stale);
+			for (int i = 0; i < monitor->graveyard.num_stale; i++) {
+				watcher_destroy(monitor, monitor->graveyard.stale_watches[i], true);
+			}
+			free(monitor->graveyard.stale_watches);
+			monitor->graveyard.stale_watches = NULL;
+			monitor->graveyard.num_stale = 0;
+		}
+
+		if (monitor->graveyard.old_config) {
+			log_message(DEBUG, "Cleaning up old config from graveyard");
+			config_destroy(monitor->graveyard.old_config);
+			monitor->graveyard.old_config = NULL;
+		}
+	}
+}
+
 /* Validate a path and refresh it if it has been recreated */
 bool monitor_sync(monitor_t *monitor, const char *path) {
 	if (!monitor || !path) {
@@ -1003,7 +984,7 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 			if (!path_exists) {
 				/* Path deleted - clean up all related resources */
 				log_message(DEBUG, "Path deleted: %s. Cleaning up watch resources.", path);
-				
+
 				/* Store watch config before watcher becomes invalid */
 				watch_t *target_watch = registry_get(monitor->registry, watcher->watchref);
 
@@ -1039,7 +1020,7 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 				list_modified = true;
 			} else if (watcher->inode != info.st_ino || watcher->device != info.st_dev) {
 				/* Path exists but inode/device changed - it was recreated */
-				log_message(DEBUG, "Path recreated: %s. Refreshing watch.", path);
+				log_message(DEBUG, "Path recreated: %s. Refreshing watch", path);
 
 				/* Close old file descriptor if not shared */
 				if (!watcher->shared_fd && watcher->wd >= 0) {
@@ -1097,32 +1078,32 @@ void monitor_stop(monitor_t *monitor) {
 	monitor->running = false;
 }
 
-void monitor_watcher_cleanup(monitor_t *monitor) {
-    if (!monitor || !monitor->watcher_graveyard.stale_watches) {
-        return;
-    }
+/* Observer callback for watch deactivation */
+void cleanup_pending(watchref_t watchref, void *context) {
+	monitor_t *monitor = (monitor_t *) context;
+	if (!monitor || !monitor->pending) {
+		return;
+	}
 
-    time_t now = time(NULL);
-    if (now >= monitor->watcher_graveyard.retirement_time) {
-        log_message(DEBUG, "Cleaning up %d stale watchers from graveyard.", monitor->watcher_graveyard.num_stale);
-        for (int i = 0; i < monitor->watcher_graveyard.num_stale; i++) {
-            watcher_destroy(monitor, monitor->watcher_graveyard.stale_watches[i], true);
-        }
-        free(monitor->watcher_graveyard.stale_watches);
-        monitor->watcher_graveyard.stale_watches = NULL;
-        monitor->watcher_graveyard.num_stale = 0;
-    }
-}
+	log_message(DEBUG, "Monitor observer: Watch ID %u (gen %u) deactivated, cleaning up pending entries",
+	            watchref.watch_id, watchref.generation);
 
-void monitor_config_cleanup(monitor_t *monitor) {
-    if (!monitor || !monitor->config_graveyard.old_config) {
-        return;
-    }
+	int entries_removed = 0;
 
-    time_t now = time(NULL);
-    if (now >= monitor->config_graveyard.retirement_time) {
-        log_message(DEBUG, "Cleaning up old config from graveyard.");
-        config_destroy(monitor->config_graveyard.old_config);
-        monitor->config_graveyard.old_config = NULL;
-    }
+	/* Scan pending entries for the deactivated watch (iterate backwards for safe removal) */
+	for (int i = monitor->num_pending - 1; i >= 0; i--) {
+		pending_t *pending = monitor->pending[i];
+		if (pending && watchref_equal(pending->watchref, watchref)) {
+			log_message(DEBUG, "Removing orphaned pending entry for path: %s",
+			            pending->target_path ? pending->target_path : "<null>");
+
+			/* Remove using the public pending_remove function for proper cleanup */
+			pending_remove(monitor, i);
+			entries_removed++;
+		}
+	}
+
+	if (entries_removed > 0) {
+		log_message(DEBUG, "Pending cleanup complete: removed %d orphaned entries", entries_removed);
+	}
 }

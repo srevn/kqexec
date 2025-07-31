@@ -66,12 +66,12 @@ static void *threads_worker(void *arg) {
 			/* Resolve watch reference at execution time */
 			watch_t *watch = registry_get(task->monitor->registry, task->watchref);
 			if (watch) {
-				log_message(DEBUG, "Executing async command for %s (watch: %s)", 
+				log_message(DEBUG, "Executing async command for %s (watch: %s)",
 				            task->event->path, watch->name);
 				command_execute(task->monitor, task->watchref, task->event, false);
 			} else {
 				/* Watch was deactivated while task was queued */
-				log_message(DEBUG, "Skipping async command for %s - watch was deactivated", 
+				log_message(DEBUG, "Skipping async command for %s - watch was deactivated",
 				            task->event->path);
 			}
 

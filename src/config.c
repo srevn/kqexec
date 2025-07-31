@@ -189,7 +189,7 @@ bool config_remove_watch(config_t *config, watchref_t watchref, registry_t *regi
 		if (watchref_equal(config->watchrefs[i], watchref)) {
 			watch_t *watch = registry_get(registry, watchref);
 			if (watch) {
-				log_message(DEBUG, "Removing watch '%s' for path '%s' from config.", watch->name, watch->path);
+				log_message(DEBUG, "Removing watch '%s' for path '%s' from config", watch->name, watch->path);
 			}
 			
 			/* Deactivate in registry (triggers observer notifications) */
@@ -204,7 +204,7 @@ bool config_remove_watch(config_t *config, watchref_t watchref, registry_t *regi
 		}
 	}
 	
-	log_message(WARNING, "Could not find watch reference in config to remove.");
+	log_message(WARNING, "Could not find watch reference in config to remove");
 	return false;
 }
 
