@@ -11,6 +11,7 @@
 #include "states.h"
 #include "daemon.h"
 #include "logger.h"
+#include "registry.h"
 
 /* Default configuration file */
 #define DEFAULT_CONFIG_FILE "/usr/local/etc/kqexec.conf"
@@ -102,10 +103,19 @@ int main(int argc, char *argv[]) {
 	/* Initialize logging */
 	log_init(program_name, LOG_DAEMON, loglevel, !daemon_mode);
 
+	/* Create watch registry */
+	registry_t *registry = registry_create(0); /* Use default capacity */
+	if (registry == NULL) {
+		log_message(ERROR, "Failed to create watch registry");
+		log_close();
+		return EXIT_FAILURE;
+	}
+
 	/* Create configuration */
 	config = config_create();
 	if (config == NULL) {
 		log_message(ERROR, "Failed to create configuration");
+		registry_destroy(registry);
 		log_close();
 		return EXIT_FAILURE;
 	}
@@ -115,9 +125,10 @@ int main(int argc, char *argv[]) {
 	config->syslog_level = loglevel;
 
 	/* Parse configuration file */
-	if (!config_parse(config, config_path)) {
+	if (!config_parse(config, config_path, registry)) {
 		log_message(ERROR, "Failed to parse configuration file: %s", config_path);
 		config_destroy(config);
+		registry_destroy(registry);
 		log_close();
 		return EXIT_FAILURE;
 	}
@@ -127,6 +138,7 @@ int main(int argc, char *argv[]) {
 		if (!daemon_start(config)) {
 			log_message(ERROR, "Failed to start daemon");
 			config_destroy(config);
+			registry_destroy(registry);
 			log_close();
 			return EXIT_FAILURE;
 		}
@@ -141,6 +153,7 @@ int main(int argc, char *argv[]) {
 	if (threads == NULL) {
 		log_message(ERROR, "Failed to create thread pool");
 		config_destroy(config);
+		registry_destroy(registry);
 		log_close();
 		return EXIT_FAILURE;
 	}
@@ -150,17 +163,19 @@ int main(int argc, char *argv[]) {
 		log_message(ERROR, "Failed to initialize command subsystem");
 		threads_destroy(threads);
 		config_destroy(config);
+		registry_destroy(registry);
 		log_close();
 		return EXIT_FAILURE;
 	}
 
 	/* Create monitor */
-	monitor = monitor_create(config);
+	monitor = monitor_create(config, registry);
 	if (monitor == NULL) {
 		log_message(ERROR, "Failed to create monitor");
 		command_cleanup(threads);
 		threads_destroy(threads);
 		config_destroy(config);
+		registry_destroy(registry);
 		log_close();
 		return EXIT_FAILURE;
 	}

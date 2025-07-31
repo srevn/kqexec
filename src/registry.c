@@ -343,6 +343,6 @@ void registry_garbage(registry_t *registry) {
     pthread_rwlock_unlock(&registry->lock);
 
     if (freed_count > 0) {
-        log_message(INFO, "Garbage collected %u inactive watches", freed_count);
+        log_message(DEBUG, "Garbage collected %u inactive watches", freed_count);
     }
 }

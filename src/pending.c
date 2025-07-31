@@ -337,7 +337,7 @@ static void pending_promote_match(monitor_t *monitor, pending_t *pending, const 
 		}
 
 		for (int i = 0; i < monitor->config->num_watches; i++) {
-			watch_t *w = config_get_watch(monitor->config, i);
+			watch_t *w = config_get_watch(monitor->config, i, monitor->registry);
 			if (w && w->path && w->name && strcmp(w->path, path) == 0 && strcmp(w->name, pending_watch->name) == 0) {
 				log_message(DEBUG, "Watch for %s with name '%s' from pattern %s already exists.", path, w->name, pending->glob_pattern);
 				return;
@@ -383,7 +383,7 @@ static void pending_promote_match(monitor_t *monitor, pending_t *pending, const 
 	}
 	
 	/* Add to configuration for proper lifecycle management */
-	if (!config_add_watch(monitor->config, resolved_watch)) {
+	if (!config_add_watch(monitor->config, resolved_watch, monitor->registry)) {
 		log_message(ERROR, "Failed to add dynamic watch to config: %s", path);
 		/* Clean up manually since config addition failed */
 		free(resolved_watch->name);
@@ -400,7 +400,7 @@ static void pending_promote_match(monitor_t *monitor, pending_t *pending, const 
 	} else {
 		log_message(WARNING, "Failed to promote glob match: %s", path);
 		/* Remove from config since monitor add failed */
-		config_remove_watch(monitor->config, resolved_ref);
+		config_remove_watch(monitor->config, resolved_ref, monitor->registry);
 	}
 }
 

@@ -70,7 +70,7 @@ typedef struct monitor {
 } monitor_t;
 
 /* Monitor lifecycle management */
-monitor_t *monitor_create(config_t *config);
+monitor_t *monitor_create(config_t *config, registry_t *registry);
 void monitor_destroy(monitor_t *monitor);
 bool monitor_setup(monitor_t *monitor);
 

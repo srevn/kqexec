@@ -279,10 +279,6 @@ entity_t *stability_entry(monitor_t *monitor, check_t *check) {
 
 	/* Use the first watch reference to find the state. All watches for a check share the same path. */
 	watchref_t primary_watchref = check->watchrefs[0];
-	if (!registry_valid(monitor->registry, primary_watchref)) {
-		log_message(WARNING, "Deferred check for %s has a stale watch, skipping.", check->path);
-		return NULL;
-	}
 
 	entity_t *root = states_get(monitor->states, check->path, ENTITY_DIRECTORY, primary_watchref, monitor->registry);
 	if (!root) {

@@ -63,23 +63,22 @@ typedef struct config {
 	int syslog_level;                      /* Syslog verbosity */
 	watchref_t *watchrefs;                 /* Array of watch references */
 	int num_watches;                       /* Number of watch entries */
-	registry_t *registry;                  /* Watch registry reference */
 } config_t;
 
 /* Function prototypes */
 config_t *config_create(void);
 void config_destroy(config_t *config);
-bool config_parse(config_t *config, const char *filename);
+bool config_parse(config_t *config, const char *filename, registry_t *registry);
 bool config_events(const char *events_str, filter_t *events);
 const char *filter_to_string(filter_t filter);
 
 /* Watch management functions */
-bool config_add_watch(config_t *config, watch_t *watch);
+bool config_add_watch(config_t *config, watch_t *watch, registry_t *registry);
 void config_destroy_watch(watch_t *watch);
-bool config_remove_watch(config_t *config, watchref_t watchref);
+bool config_remove_watch(config_t *config, watchref_t watchref, registry_t *registry);
 
 /* Registry-aware functions */
-watch_t *config_get_watch(config_t *config, int index);
+watch_t *config_get_watch(config_t *config, int index, registry_t *registry);
 watchref_t config_get_watchref(config_t *config, int index);
 
 #endif /* CONFIG_H */

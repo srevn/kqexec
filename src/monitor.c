@@ -106,11 +106,11 @@ static bool path_hidden(const char *path) {
 }
 
 /* Create a new file/directory monitor */
-monitor_t *monitor_create(config_t *config) {
+monitor_t *monitor_create(config_t *config, registry_t *registry) {
 	monitor_t *monitor;
 
-	if (config == NULL) {
-		log_message(ERROR, "Invalid configuration for monitor");
+	if (config == NULL || registry == NULL) {
+		log_message(ERROR, "Invalid configuration or registry for monitor");
 		return NULL;
 	}
 
@@ -121,7 +121,7 @@ monitor_t *monitor_create(config_t *config) {
 	}
 
 	monitor->config = config;
-	monitor->registry = config->registry; /* Share registry with config */
+	monitor->registry = registry; /* Take ownership of registry */
 	monitor->kq = -1;
 	monitor->watches = NULL;
 	monitor->num_watches = 0;
@@ -239,8 +239,19 @@ void monitor_destroy(monitor_t *monitor) {
 	/* Clean up state table */
 	states_destroy(monitor->states);
 
-	/* Destroy the configuration (which destroys registry) */
+	/* Perform final garbage collection before destroying registry */
+	if (monitor->registry) {
+		registry_garbage(monitor->registry);
+		log_message(DEBUG, "Performed final garbage collection during monitor destruction");
+	}
+
+	/* Destroy the configuration */
 	config_destroy(monitor->config);
+
+	/* Destroy the registry (monitor owns it) */
+	if (monitor->registry) {
+		registry_destroy(monitor->registry);
+	}
 
 	free(monitor);
 }
@@ -287,7 +298,6 @@ bool monitor_path(monitor_t *monitor, const char *path, watchref_t watchref) {
 	/* Check if a watcher for this path and watch config already exists to avoid duplicates */
 	for (int i = 0; i < monitor->num_watches; i++) {
 		if (strcmp(monitor->watches[i]->path, path) == 0 && watchref_equal(monitor->watches[i]->watchref, watchref)) {
-			log_message(DEBUG, "Watch for path %s with same config already exists", path);
 			return true;
 		}
 	}
@@ -533,7 +543,7 @@ bool monitor_setup(monitor_t *monitor) {
 		watchref_t watchref = config_get_watchref(monitor->config, i);
 		if (watchref_valid(watchref)) {
 			if (!monitor_add(monitor, watchref, false)) {
-				watch_t *watch = config_get_watch(monitor->config, i);
+				watch_t *watch = config_get_watch(monitor->config, i, monitor->registry);
 				log_message(WARNING, "Failed to add watch for %s, skipping", watch ? watch->path : "unknown");
 			}
 		}
@@ -550,12 +560,12 @@ bool monitor_setup(monitor_t *monitor) {
 		watch_t *config_watch = monitor_config(monitor->config_path);
 		if (config_watch) {
 			/* Add to config structure so it gets managed properly */
-			if (config_add_watch(monitor->config, config_watch)) {
+			if (config_add_watch(monitor->config, config_watch, monitor->registry)) {
 				watchref_t config_watchref = config_get_watchref(monitor->config, monitor->config->num_watches - 1);
 				if (!monitor_add(monitor, config_watchref, false)) {
 					log_message(WARNING, "Failed to add config file watch for %s", monitor->config_path);
 					/* Remove from config since it wasn't added to monitor */
-					config_remove_watch(monitor->config, config_watchref);
+					config_remove_watch(monitor->config, config_watchref, monitor->registry);
 				} else {
 					log_message(DEBUG, "Added config file watch for %s", monitor->config_path);
 				}
@@ -712,22 +722,83 @@ bool monitor_reload(monitor_t *monitor) {
 		return false;
 	}
 
+	/* Create new registry for the reload */
+	registry_t *new_registry = registry_create(0);
+	if (!new_registry) {
+		log_message(ERROR, "Failed to create new registry during reload");
+		config_destroy(new_config);
+		return false;
+	}
+
 	/* Copy daemon mode and log level from existing config */
 	new_config->daemon_mode = old_config->daemon_mode;
 	new_config->syslog_level = old_config->syslog_level;
 
 	/* Parse configuration file */
-	if (!config_parse(new_config, monitor->config_path)) {
+	if (!config_parse(new_config, monitor->config_path, new_registry)) {
 		log_message(ERROR, "Failed to parse new config, keeping old one: %s", monitor->config_path);
 		config_destroy(new_config);
+		registry_destroy(new_registry);
 		/* Re-validate the watch on the config file to detect subsequent changes */
 		monitor_sync(monitor, monitor->config_path);
 		return false;
 	}
 
-	/* Replace old config with new one so that dynamic promotions are added to the new config */
+	/* Preserve dynamic watches whose source patterns still exist in the new configuration */
+	registry_t *old_registry = monitor->registry;
+	for (int i = 0; i < old_config->num_watches; i++) {
+		watch_t *old_watch = config_get_watch(old_config, i, old_registry);
+		if (old_watch && old_watch->is_dynamic && old_watch->source_pattern) {
+			/* Check if the source pattern exists in the new configuration */
+			bool pattern_exists = false;
+			for (int j = 0; j < new_config->num_watches; j++) {
+				watch_t *new_watch = config_get_watch(new_config, j, new_registry);
+				if (new_watch && !new_watch->is_dynamic && strcmp(new_watch->path, old_watch->source_pattern) == 0) {
+					pattern_exists = true;
+					break;
+				}
+			}
+
+			if (pattern_exists) {
+				/* Create a copy of the dynamic watch for the new config */
+				watch_t *preserved_watch = calloc(1, sizeof(watch_t));
+				if (preserved_watch) {
+					/* Copy all fields from old watch */
+					preserved_watch->name = old_watch->name ? strdup(old_watch->name) : NULL;
+					preserved_watch->path = old_watch->path ? strdup(old_watch->path) : NULL;
+					preserved_watch->command = old_watch->command ? strdup(old_watch->command) : NULL;
+					preserved_watch->source_pattern = old_watch->source_pattern ? strdup(old_watch->source_pattern) : NULL;
+					preserved_watch->target = old_watch->target;
+					preserved_watch->filter = old_watch->filter;
+					preserved_watch->log_output = old_watch->log_output;
+					preserved_watch->buffer_output = old_watch->buffer_output;
+					preserved_watch->recursive = old_watch->recursive;
+					preserved_watch->hidden = old_watch->hidden;
+					preserved_watch->environment = old_watch->environment;
+					preserved_watch->complexity = old_watch->complexity;
+					preserved_watch->processing_delay = old_watch->processing_delay;
+					preserved_watch->is_dynamic = true;
+				}
+				if (preserved_watch && config_add_watch(new_config, preserved_watch, new_registry)) {
+					log_message(DEBUG, "Preserved dynamic watch: %s (from pattern: %s)", 
+					           preserved_watch->path, preserved_watch->source_pattern);
+				} else {
+					log_message(WARNING, "Failed to preserve dynamic watch: %s", old_watch->path);
+					if (preserved_watch) {
+						free(preserved_watch->name);
+						free(preserved_watch->path);
+						free(preserved_watch->command);
+						free(preserved_watch->source_pattern);
+						free(preserved_watch);
+					}
+				}
+			}
+		}
+	}
+
+	/* Replace old config and registry with new ones */
 	monitor->config = new_config;
-	monitor->registry = new_config->registry;
+	monitor->registry = new_registry;
 
 	/* Re-initialize the special watch for intermediate glob directories in the new registry */
 	watch_t *glob_watch = calloc(1, sizeof(watch_t));
@@ -755,7 +826,7 @@ bool monitor_reload(monitor_t *monitor) {
 	if (monitor->config_path != NULL) {
 		watch_t *config_watch = monitor_config(monitor->config_path);
 		if (config_watch) {
-			if (!config_add_watch(new_config, config_watch)) {
+			if (!config_add_watch(new_config, config_watch, monitor->registry)) {
 				log_message(WARNING, "Failed to add config watch to new config structure");
 				config_destroy_watch(config_watch);
 			}
@@ -789,68 +860,6 @@ bool monitor_reload(monitor_t *monitor) {
 	/* Clear pending watches that may reference old watches */
 	pending_cleanup(monitor);
 
-	/* Preserve dynamic watches whose source patterns still exist in the new configuration */
-	for (int i = 0; i < old_config->num_watches; i++) {
-		watch_t *old_watch = config_get_watch(old_config, i);
-		if (old_watch && old_watch->is_dynamic && old_watch->source_pattern) {
-			/* Check if the source pattern exists in the new configuration */
-			bool pattern_exists = false;
-			for (int j = 0; j < new_config->num_watches; j++) {
-				watch_t *new_watch = config_get_watch(new_config, j);
-				if (new_watch && !new_watch->is_dynamic && strcmp(new_watch->path, old_watch->source_pattern) == 0) {
-					pattern_exists = true;
-					break;
-				}
-			}
-			
-			if (pattern_exists) {
-				/* Validate that the dynamic watch path still exists and matches the pattern */
-				bool path_exists = (access(old_watch->path, F_OK) == 0);
-				bool pattern_matches = (fnmatch(old_watch->source_pattern, old_watch->path, FNM_PATHNAME) == 0);
-				
-				if (path_exists && pattern_matches) {
-					/* Create a new watch struct to preserve the dynamic watch */
-					watch_t *preserved_watch = calloc(1, sizeof(watch_t));
-					if (preserved_watch) {
-						preserved_watch->name = old_watch->name ? strdup(old_watch->name) : NULL;
-						preserved_watch->path = old_watch->path ? strdup(old_watch->path) : NULL;
-						preserved_watch->command = old_watch->command ? strdup(old_watch->command) : NULL;
-						preserved_watch->source_pattern = old_watch->source_pattern ? strdup(old_watch->source_pattern) : NULL;
-						preserved_watch->target = old_watch->target;
-						preserved_watch->filter = old_watch->filter;
-						preserved_watch->log_output = old_watch->log_output;
-						preserved_watch->buffer_output = old_watch->buffer_output;
-						preserved_watch->recursive = old_watch->recursive;
-						preserved_watch->hidden = old_watch->hidden;
-						preserved_watch->environment = old_watch->environment;
-						preserved_watch->complexity = old_watch->complexity;
-						preserved_watch->processing_delay = old_watch->processing_delay;
-						preserved_watch->is_dynamic = true;
-					}
-					if (preserved_watch && config_add_watch(monitor->config, preserved_watch)) {
-						log_message(INFO, "Preserved dynamic watch: %s (from pattern: %s)", 
-						           preserved_watch->path, preserved_watch->source_pattern);
-					} else {
-						log_message(WARNING, "Failed to preserve dynamic watch: %s", old_watch->path);
-						if (preserved_watch) {
-							free(preserved_watch->name);
-							free(preserved_watch->path);
-							free(preserved_watch->command);  
-							free(preserved_watch->source_pattern);
-							free(preserved_watch);
-						}
-					}
-				} else {
-					log_message(DEBUG, "Dynamic watch not preserved - path %s or pattern mismatch: %s (pattern: %s)", 
-					           path_exists ? "exists but doesn't match" : "no longer exists", 
-					           old_watch->path, old_watch->source_pattern);
-				}
-			} else {
-				log_message(DEBUG, "Dynamic watch not preserved - source pattern removed: %s (pattern: %s)", 
-				           old_watch->path, old_watch->source_pattern);
-			}
-		}
-	}
 
 	/* Save old watches to be moved to the graveyard */
 	watcher_t **stale_watches = monitor->watches;
@@ -864,7 +873,7 @@ bool monitor_reload(monitor_t *monitor) {
 	for (int i = 0; i < monitor->config->num_watches; i++) {
 		watchref_t watchref = config_get_watchref(monitor->config, i);
 		if (watchref_valid(watchref)) {
-			watch_t *watch = config_get_watch(monitor->config, i);
+			watch_t *watch = config_get_watch(monitor->config, i, monitor->registry);
 			log_message(DEBUG, "Reloading watch: %s (%s)", watch->name, watch->path);
 			if (!monitor_add(monitor, watchref, false)) {
 				log_message(WARNING, "Failed to add watch for %s", watch ? watch->path : "unknown");
@@ -887,6 +896,13 @@ bool monitor_reload(monitor_t *monitor) {
         monitor->watcher_graveyard.retirement_time = time(NULL) + WATCHER_GRAVEYARD_SECONDS;
         log_message(DEBUG, "Retired %d watchers to graveyard. They will be cleaned up after %d seconds.", stale_count, WATCHER_GRAVEYARD_SECONDS);
     }
+
+	/* Perform garbage collection and destroy old registry */
+	if (old_registry) {
+		registry_garbage(old_registry);
+		registry_destroy(old_registry);
+		log_message(DEBUG, "Performed garbage collection and destroyed old registry during reload");
+	}
 
 	/* Retire the old config to its graveyard */
     if (monitor->config_graveyard.old_config) {
@@ -971,7 +987,7 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 
 				/*  Remove dynamic watch from config to prevent resurrection during reload */
 				if (target_watch && target_watch->is_dynamic) {
-					config_remove_watch(monitor->config, watcher->watchref);
+					config_remove_watch(monitor->config, watcher->watchref, monitor->registry);
 				}
 
 				/* Finally, remove the watcher for the parent path itself */
