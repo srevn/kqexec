@@ -139,6 +139,7 @@ monitor_t *monitor_create(config_t *config, registry_t *registry) {
 	monitor->num_pending = 0;
 	monitor->running = false;
 	monitor->reload = false;
+	
 	monitor->graveyard.stale_watches = NULL;
 	monitor->graveyard.num_stale = 0;
 	monitor->graveyard.old_config = NULL;

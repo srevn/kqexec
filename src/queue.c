@@ -1,11 +1,9 @@
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
 #include <sys/types.h>
 
 #include "queue.h"
-#include "monitor.h"
 #include "logger.h"
 #include "registry.h"
 

@@ -70,8 +70,6 @@ void registry_destroy(registry_t *registry) {
 	free(registry->generations);
 	free(registry->states);
 
-	/* Note: We don't free observer structs as they're owned by callers */
-
 	pthread_rwlock_unlock(&registry->lock);
 	pthread_rwlock_destroy(&registry->lock);
 

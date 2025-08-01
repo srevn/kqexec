@@ -10,11 +10,9 @@
 #include <dirent.h>
 #include <pthread.h>
 
-#include "monitor.h"
 #include "states.h"
 #include "scanner.h"
 #include "stability.h"
-#include "command.h"
 #include "logger.h"
 #include "events.h"
 #include "registry.h"

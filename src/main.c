@@ -8,7 +8,6 @@
 #include "monitor.h"
 #include "command.h"
 #include "threads.h"
-#include "states.h"
 #include "daemon.h"
 #include "logger.h"
 #include "registry.h"
