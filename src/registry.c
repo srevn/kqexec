@@ -196,9 +196,9 @@ bool watchref_valid(watchref_t watchref) {
 }
 
 /* Register an observer for watch lifecycle events */
-bool register_observer(registry_t *registry, observer_t *observer) {
+bool observer_register(registry_t *registry, observer_t *observer) {
 	if (!registry || !observer || !observer->handle_deactivation) {
-		log_message(ERROR, "Invalid parameters to register_observer");
+		log_message(ERROR, "Invalid parameters to observer_register");
 		return false;
 	}
 
@@ -224,7 +224,7 @@ bool register_observer(registry_t *registry, observer_t *observer) {
 }
 
 /* Unregister an observer */
-void unregister_observer(registry_t *registry, observer_t *observer) {
+void observer_unregister(registry_t *registry, observer_t *observer) {
 	if (!registry || !observer) return;
 
 	pthread_rwlock_wrlock(&registry->lock);

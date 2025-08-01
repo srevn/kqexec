@@ -536,7 +536,7 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 	}
 
 	/* Get state using the event path and watch reference */
-	entity_t *state = states_get(monitor->states, event->path, kind, watchref, monitor->registry);
+	entity_t *state = states_get(monitor->states, monitor->registry, event->path, watchref, kind);
 	if (state == NULL) {
 		return false; /* Error already logged by states_get */
 	}
@@ -547,7 +547,6 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 		log_message(DEBUG, "Deferring event for %s, command is currently executing %s",
 		            event->path, root ? root->node->path : "N/A");
 		/* Schedule event for reprocessing after a short delay */
-		/* Use the watch reference we already found */
 		events_schedule(monitor, watchref, event, kind);
 		return false;
 	}

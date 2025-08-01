@@ -55,7 +55,7 @@ static char *canonize_path(const char *path, int line_number) {
 	} else {
 		/* realpath() failed - log warning and use original path */
 		log_message(DEBUG, "Failed to canonicalize path '%s' at line %d: %s (using original path)",
-					path, line_number, strerror(errno));
+		            path, line_number, strerror(errno));
 		result = strdup(path);
 	}
 
@@ -131,10 +131,8 @@ const char *filter_to_string(filter_t event) {
 	return buffer;
 }
 
-
-
 /* Add a watch entry to the configuration */
-bool config_add_watch(config_t *config, watch_t *watch, registry_t *registry) {
+bool config_add_watch(config_t *config, registry_t *registry, watch_t *watch) {
 	if (!config || !watch || !registry) {
 		log_message(ERROR, "Invalid parameters to config_add_watch");
 		return false;
@@ -145,7 +143,7 @@ bool config_add_watch(config_t *config, watch_t *watch, registry_t *registry) {
 		for (int i = 0; i < config->num_watches; i++) {
 			watch_t *existing = registry_get(registry, config->watchrefs[i]);
 			if (existing && existing->name && watch->name &&
-				strcmp(existing->name, watch->name) == 0) {
+			    strcmp(existing->name, watch->name) == 0) {
 				log_message(ERROR, "Duplicate watch name '%s' found in configuration", watch->name);
 				return false;
 			}
@@ -180,7 +178,7 @@ bool config_add_watch(config_t *config, watch_t *watch, registry_t *registry) {
 }
 
 /* Remove a watch entry from the configuration */
-bool config_remove_watch(config_t *config, watchref_t watchref, registry_t *registry) {
+bool config_remove_watch(config_t *config, registry_t *registry, watchref_t watchref) {
 	if (!config || !registry || !watchref_valid(watchref)) {
 		return false;
 	}
@@ -191,19 +189,19 @@ bool config_remove_watch(config_t *config, watchref_t watchref, registry_t *regi
 			if (watch) {
 				log_message(DEBUG, "Removing watch '%s' for path '%s' from config", watch->name, watch->path);
 			}
-			
+
 			/* Deactivate in registry (triggers observer notifications) */
 			registry_deactivate(registry, watchref);
-			
+
 			/* Remove from config array */
 			for (int j = i; j < config->num_watches - 1; j++) {
-				config->watchrefs[j] = config->watchrefs[j+1];
+				config->watchrefs[j] = config->watchrefs[j + 1];
 			}
 			config->num_watches--;
 			return true;
 		}
 	}
-	
+
 	log_message(WARNING, "Could not find watch reference in config to remove");
 	return false;
 }
@@ -291,7 +289,7 @@ void config_destroy(config_t *config) {
 }
 
 /* Parse the configuration file */
-bool config_parse(config_t *config, const char *filename, registry_t *registry) {
+bool config_parse(config_t *config, registry_t *registry, const char *filename) {
 	FILE *fp;
 	char line[MAX_LINE_LEN];
 	section_t state = SECTION_NONE;
@@ -414,7 +412,7 @@ bool config_parse(config_t *config, const char *filename, registry_t *registry) 
 				}
 
 				/* Add the watch entry to the configuration */
-				if (!config_add_watch(config, current_watch, registry)) {
+				if (!config_add_watch(config, registry, current_watch)) {
 					config_destroy_watch(current_watch);
 					fclose(fp);
 					return false;
@@ -437,7 +435,7 @@ bool config_parse(config_t *config, const char *filename, registry_t *registry) 
 			current_watch->environment = false; /* Default to not injecting environment variables */
 			current_watch->processing_delay = 0; /* Default to no delay */
 			current_watch->complexity = 1.0; /* Default complexity multiplier */
-			
+
 			/* Initialize dynamic tracking fields */
 			current_watch->is_dynamic = false;
 			current_watch->source_pattern = NULL;
@@ -608,7 +606,7 @@ bool config_parse(config_t *config, const char *filename, registry_t *registry) 
 		}
 
 		/* Add the watch entry to the configuration */
-		if (!config_add_watch(config, current_watch, registry)) {
+		if (!config_add_watch(config, registry, current_watch)) {
 			config_destroy_watch(current_watch);
 			fclose(fp);
 			return false;
@@ -627,11 +625,11 @@ bool config_parse(config_t *config, const char *filename, registry_t *registry) 
 }
 
 /* Get watch by index using registry lookup */
-watch_t *config_get_watch(config_t *config, int index, registry_t *registry) {
+watch_t *config_get_watch(config_t *config, registry_t *registry, int index) {
 	if (!config || !registry || index < 0 || index >= config->num_watches) {
 		return NULL;
 	}
-	
+
 	return registry_get(registry, config->watchrefs[index]);
 }
 
@@ -640,6 +638,6 @@ watchref_t config_get_watchref(config_t *config, int index) {
 	if (!config || index < 0 || index >= config->num_watches) {
 		return WATCH_REF_INVALID;
 	}
-	
+
 	return config->watchrefs[index];
 }

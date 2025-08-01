@@ -333,9 +333,9 @@ static void pending_promote_match(monitor_t *monitor, pending_t *pending, const 
 		log_message(ERROR, "Invalid parameters to pending_promote_match");
 		return;
 	}
-	
+
 	log_message(DEBUG, "Promoting glob match: %s from pattern %s", path, pending->glob_pattern ? pending->glob_pattern : "unknown");
-	
+
 	/* Check if a watch for this path with the same name already exists */
 	if (monitor->config && path) {
 		watch_t *pending_watch = registry_get(monitor->registry, pending->watchref);
@@ -346,10 +346,10 @@ static void pending_promote_match(monitor_t *monitor, pending_t *pending, const 
 
 		/* Check for existing watches with same path and name */
 		for (int i = 0; i < monitor->config->num_watches; i++) {
-			watch_t *w = config_get_watch(monitor->config, i, monitor->registry);
+			watch_t *w = config_get_watch(monitor->config, monitor->registry, i);
 			if (w && w->path && w->name && strcmp(w->path, path) == 0 && strcmp(w->name, pending_watch->name) == 0) {
-				log_message(INFO, "Watch for %s with name '%s' from pattern %s already exists, skipping promotion", 
-				           path, w->name, pending->glob_pattern);
+				log_message(INFO, "Watch for %s with name '%s' from pattern %s already exists, skipping promotion",
+				            path, w->name, pending->glob_pattern);
 				return;
 			}
 		}
@@ -382,7 +382,7 @@ static void pending_promote_match(monitor_t *monitor, pending_t *pending, const 
 	}
 
 	/* Add dynamic watch to config */
-	if (!config_add_watch(monitor->config, resolved_watch, monitor->registry)) {
+	if (!config_add_watch(monitor->config, monitor->registry, resolved_watch)) {
 		log_message(ERROR, "Failed to add dynamic watch to config: %s", path);
 		/* Clean up manually since config addition failed */
 		free(resolved_watch->name);
@@ -394,15 +394,15 @@ static void pending_promote_match(monitor_t *monitor, pending_t *pending, const 
 
 	/* Add to monitoring system */
 	watchref_t resolved_ref = config_get_watchref(monitor->config, monitor->config->num_watches - 1);
-	log_message(INFO, "Adding resolved watch to monitoring system: %s (watchref %u:%u)", 
-	           path, resolved_ref.watch_id, resolved_ref.generation);
-	           
+	log_message(INFO, "Adding resolved watch to monitoring system: %s (watchref %u:%u)",
+	            path, resolved_ref.watch_id, resolved_ref.generation);
+
 	if (monitor_add(monitor, resolved_ref, true)) {
 		log_message(INFO, "Successfully promoted glob match: %s from pattern %s", path, pending->glob_pattern);
 	} else {
 		log_message(WARNING, "Failed to promote glob match: %s from pattern %s", path, pending->glob_pattern);
 		/* Remove from config since monitor add failed */
-		config_remove_watch(monitor->config, resolved_ref, monitor->registry);
+		config_remove_watch(monitor->config, monitor->registry, resolved_ref);
 	}
 }
 
@@ -671,4 +671,34 @@ void glob_free_paths(char **matches, int count) {
 		free(matches[i]);
 	}
 	free(matches);
+}
+
+/* Observer callback for watch deactivation */
+void pending_handle_deactivation(watchref_t watchref, void *context) {
+	monitor_t *monitor = (monitor_t *) context;
+	if (!monitor || !monitor->pending) {
+		return;
+	}
+
+	log_message(DEBUG, "Watch ID %u (gen %u) deactivated, cleaning up pending entries",
+	            watchref.watch_id, watchref.generation);
+
+	int entries_removed = 0;
+
+	/* Scan pending entries for the deactivated watch (iterate backwards for safe removal) */
+	for (int i = monitor->num_pending - 1; i >= 0; i--) {
+		pending_t *pending = monitor->pending[i];
+		if (pending && watchref_equal(pending->watchref, watchref)) {
+			log_message(DEBUG, "Removing orphaned pending entry for path: %s",
+			            pending->target_path ? pending->target_path : "<null>");
+
+			/* Remove using the public pending_remove function for proper cleanup */
+			pending_remove(monitor, i);
+			entries_removed++;
+		}
+	}
+
+	if (entries_removed > 0) {
+		log_message(DEBUG, "Pending cleanup complete: removed %d orphaned entries", entries_removed);
+	}
 }

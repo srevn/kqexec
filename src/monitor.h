@@ -19,9 +19,9 @@
 
 /* Watched file/directory information */
 typedef struct watcher {
+	watchref_t watchref;                   /* Associated watch reference */
 	int wd;                                /* Watch descriptor */
 	char *path;                            /* Full path */
-	watchref_t watchref;                   /* Associated watch reference */
 	ino_t inode;                           /* Inode number for validation */
 	dev_t device;                          /* Device ID for validation */
 	bool shared_fd;                        /* Whether this FD is shared with other watches */
@@ -42,12 +42,14 @@ typedef struct monitor {
 	config_t *config;                      /* Configuration */
 	states_t *states;                      /* State table for this monitor */
 	registry_t *registry;                  /* Watch registry */
+	graveyard_t graveyard;                 /* Graveyard for stale items */
 	
 	/* Watch tracking */
 	watcher_t **watches;                   /* Array of watch information */
 	int num_watches;                       /* Number of watches */
 	
 	/* Pending watches for non-existent paths */
+	watchref_t glob_watchref;              /* Special watch for intermediate glob directories */
 	pending_t **pending;                   /* Array of pending watch information */
 	int num_pending;                       /* Number of pending watches */
 
@@ -61,8 +63,6 @@ typedef struct monitor {
 	bool running;                          /* Monitor running flag */
 	bool reload;                           /* Flag to indicate reload requested */
 	char *config_path;                     /* Copy of config file path for reloading */
-	watchref_t glob_watchref;              /* Special watch for intermediate glob directories */
-    graveyard_t graveyard;                 /* Graveyard for stale items */
 	
 	/* Observer for pending watch cleanup */
 	observer_t pending_observer;           /* Observer registration for pending cleanup */
@@ -88,8 +88,5 @@ void monitor_graveyard(monitor_t *monitor);
 /* Path synchronization */
 bool monitor_sync(monitor_t *monitor, const char *path);
 bool monitor_prune(monitor_t *monitor, const char *parent);
-
-/* Observer callback for watch deactivation */
-void cleanup_pending(watchref_t watchref, void *context);
 
 #endif /* MONITOR_H */

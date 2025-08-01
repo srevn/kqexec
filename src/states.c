@@ -144,7 +144,7 @@ states_t *states_create(size_t bucket_count, registry_t *registry) {
 	states->observer.next = NULL;
 
 	/* Register as observer with the registry */
-	if (registry && !register_observer(registry, &states->observer)) {
+	if (registry && !observer_register(registry, &states->observer)) {
 		log_message(ERROR, "Failed to register states as observer with registry");
 		states_destroy(states);
 		return NULL;
@@ -174,7 +174,7 @@ void states_destroy(states_t *states) {
 
 	/* Unregister from registry observer notifications */
 	if (states->registry) {
-		unregister_observer(states->registry, &states->observer);
+		observer_unregister(states->registry, &states->observer);
 	}
 
 	/* Lock all mutexes during cleanup to ensure thread safety */
@@ -271,7 +271,7 @@ static void state_copy(entity_t *dest, const entity_t *src) {
 }
 
 /* Get or create an entity state for a given path and watch reference */
-entity_t *states_get(states_t *states, const char *path, kind_t kind, watchref_t watchref, registry_t *registry) {
+entity_t *states_get(states_t *states, registry_t *registry, const char *path, watchref_t watchref, kind_t kind) {
 	if (!states || !path || !watchref_valid(watchref) || !registry || !states->buckets) {
 		log_message(ERROR, "Invalid arguments to states_get");
 		return NULL;

@@ -125,7 +125,7 @@ int main(int argc, char *argv[]) {
 	config->syslog_level = loglevel;
 
 	/* Parse configuration file */
-	if (!config_parse(config, config_path, registry)) {
+	if (!config_parse(config, registry, config_path)) {
 		log_message(ERROR, "Failed to parse configuration file: %s", config_path);
 		config_destroy(config);
 		registry_destroy(registry);

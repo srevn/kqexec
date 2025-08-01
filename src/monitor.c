@@ -89,12 +89,12 @@ static watcher_t *watcher_find(monitor_t *monitor, const char *path) {
 	if (!monitor || !path) {
 		return NULL;
 	}
-	
+
 	for (int i = 0; i < monitor->num_watches; i++) {
 		if (monitor->watches[i] && monitor->watches[i]->path) {
 			if (strcmp(monitor->watches[i]->path, path) == 0) {
-				log_message(DEBUG, "Found existing watcher for path %s (fd %d)", 
-							path, monitor->watches[i]->wd);
+				log_message(DEBUG, "Found existing watcher for path %s (fd %d)",
+				            path, monitor->watches[i]->wd);
 				return monitor->watches[i];
 			}
 		}
@@ -162,12 +162,12 @@ monitor_t *monitor_create(config_t *config, registry_t *registry) {
 	}
 
 	/* Initialize pending watch observer */
-	monitor->pending_observer.handle_deactivation = cleanup_pending;
+	monitor->pending_observer.handle_deactivation = pending_handle_deactivation;
 	monitor->pending_observer.context = monitor;
 	monitor->pending_observer.next = NULL;
 
 	/* Register pending observer with the registry */
-	if (monitor->registry && !register_observer(monitor->registry, &monitor->pending_observer)) {
+	if (monitor->registry && !observer_register(monitor->registry, &monitor->pending_observer)) {
 		log_message(ERROR, "Failed to register pending observer with registry");
 		states_destroy(monitor->states);
 		queue_destroy(monitor->check_queue);
@@ -247,7 +247,7 @@ void monitor_destroy(monitor_t *monitor) {
 
 	/* Unregister pending observer from registry */
 	if (monitor->registry) {
-		unregister_observer(monitor->registry, &monitor->pending_observer);
+		observer_unregister(monitor->registry, &monitor->pending_observer);
 	}
 
 	/* Clean up pending watches */
@@ -312,16 +312,16 @@ static bool monitor_kq(monitor_t *monitor, watcher_t *watcher) {
 	}
 
 	if (shared_count > 1) {
-		log_message(DEBUG, "Configuring kqueue for fd %d with %d shared watches, combined flags: 0x%x", 
-					watcher->wd, shared_count, flags);
+		log_message(DEBUG, "Configuring kqueue for fd %d with %d shared watches, combined flags: 0x%x",
+		            watcher->wd, shared_count, flags);
 	}
 
 	/* Register for events */
 	EV_SET(&changes[0], watcher->wd, EVFILT_VNODE, EV_ADD | EV_CLEAR, flags, 0, watcher);
 
 	if (kevent(monitor->kq, changes, 1, NULL, 0, NULL) == -1) {
-		log_message(ERROR, "Failed to register kqueue events for %s (fd %d): %s", 
-					watcher->path, watcher->wd, strerror(errno));
+		log_message(ERROR, "Failed to register kqueue events for %s (fd %d): %s",
+		            watcher->path, watcher->wd, strerror(errno));
 		return false;
 	}
 
@@ -341,8 +341,8 @@ bool monitor_path(monitor_t *monitor, const char *path, watchref_t watchref) {
 	/* Check if this exact combination already exists to avoid true duplicates */
 	for (int i = 0; i < monitor->num_watches; i++) {
 		if (strcmp(monitor->watches[i]->path, path) == 0 && watchref_equal(monitor->watches[i]->watchref, watchref)) {
-			log_message(DEBUG, "Exact watcher already exists for path %s (watchref %u:%u)", 
-			           path, watchref.watch_id, watchref.generation);
+			log_message(DEBUG, "Exact watcher already exists for path %s (watchref %u:%u)",
+			            path, watchref.watch_id, watchref.generation);
 			return true;
 		}
 	}
@@ -351,15 +351,15 @@ bool monitor_path(monitor_t *monitor, const char *path, watchref_t watchref) {
 	watcher_t *shared_watcher = watcher_find(monitor, path);
 	if (shared_watcher) {
 		/* Path is already being watched, share the fd */
-		log_message(INFO, "Sharing file descriptor for path %s (watchref %u:%u with existing fd %d)", 
-					path, watchref.watch_id, watchref.generation, shared_watcher->wd);
-		
+		log_message(INFO, "Sharing file descriptor for path %s (watchref %u:%u with existing fd %d)",
+		            path, watchref.watch_id, watchref.generation, shared_watcher->wd);
+
 		watcher_t *watcher = calloc(1, sizeof(watcher_t));
 		if (!watcher) {
 			log_message(ERROR, "Failed to allocate memory for shared watcher for path %s", path);
 			return false;
 		}
-		
+
 		watcher->wd = shared_watcher->wd;
 		watcher->path = strdup(path);
 		if (!watcher->path) {
@@ -367,7 +367,7 @@ bool monitor_path(monitor_t *monitor, const char *path, watchref_t watchref) {
 			free(watcher);
 			return false;
 		}
-		
+
 		watcher->watchref = watchref;
 		watcher->shared_fd = true;
 		shared_watcher->shared_fd = true;
@@ -389,14 +389,14 @@ bool monitor_path(monitor_t *monitor, const char *path, watchref_t watchref) {
 			log_message(ERROR, "Failed to update kqueue for shared watcher: %s", path);
 			return false;
 		}
-		
+
 		/* Shared watcher created successfully */
 		return true;
 	} else {
 		/* New path, create a new watcher and get a new fd */
-		log_message(DEBUG, "Creating new file descriptor for path %s (watchref %u:%u)", 
-		           path, watchref.watch_id, watchref.generation);
-		
+		log_message(DEBUG, "Creating new file descriptor for path %s (watchref %u:%u)",
+		            path, watchref.watch_id, watchref.generation);
+
 		int fd = open(path, O_RDONLY);
 		if (fd == -1) {
 			/* It's possible the file was deleted since the initial scan */
@@ -410,7 +410,7 @@ bool monitor_path(monitor_t *monitor, const char *path, watchref_t watchref) {
 			close(fd);
 			return false;
 		}
-		
+
 		watcher->wd = fd;
 		watcher->path = strdup(path);
 		if (!watcher->path) {
@@ -419,7 +419,7 @@ bool monitor_path(monitor_t *monitor, const char *path, watchref_t watchref) {
 			free(watcher);
 			return false;
 		}
-		
+
 		watcher->watchref = watchref;
 		watcher->shared_fd = false;
 
@@ -440,7 +440,7 @@ bool monitor_path(monitor_t *monitor, const char *path, watchref_t watchref) {
 		watch_t *watch = registry_get(monitor->registry, watchref);
 		if (stat(path, &info) == 0 && watch) {
 			kind_t kind = S_ISDIR(info.st_mode) ? ENTITY_DIRECTORY : ENTITY_FILE;
-			states_get(monitor->states, path, kind, watchref, monitor->registry);
+			states_get(monitor->states, monitor->registry, path, watchref, kind);
 		}
 
 		/* Add to kqueue */
@@ -448,7 +448,7 @@ bool monitor_path(monitor_t *monitor, const char *path, watchref_t watchref) {
 			log_message(ERROR, "Failed to setup kqueue for new watcher: %s", path);
 			return false;
 		}
-		
+
 		/* New watcher created successfully */
 		return true;
 	}
@@ -624,7 +624,7 @@ bool monitor_setup(monitor_t *monitor) {
 		watchref_t watchref = config_get_watchref(monitor->config, i);
 		if (watchref_valid(watchref)) {
 			if (!monitor_add(monitor, watchref, false)) {
-				watch_t *watch = config_get_watch(monitor->config, i, monitor->registry);
+				watch_t *watch = config_get_watch(monitor->config, monitor->registry, i);
 				log_message(WARNING, "Failed to add watch for %s, skipping", watch ? watch->path : "unknown");
 			}
 		}
@@ -641,12 +641,12 @@ bool monitor_setup(monitor_t *monitor) {
 		watch_t *config_watch = monitor_config(monitor->config_path);
 		if (config_watch) {
 			/* Add to config structure so it gets managed properly */
-			if (config_add_watch(monitor->config, config_watch, monitor->registry)) {
+			if (config_add_watch(monitor->config, monitor->registry, config_watch)) {
 				watchref_t config_watchref = config_get_watchref(monitor->config, monitor->config->num_watches - 1);
 				if (!monitor_add(monitor, config_watchref, false)) {
 					log_message(WARNING, "Failed to add config file watch for %s", monitor->config_path);
 					/* Remove from config since it wasn't added to monitor */
-					config_remove_watch(monitor->config, config_watchref, monitor->registry);
+					config_remove_watch(monitor->config, monitor->registry, config_watchref);
 				} else {
 					log_message(DEBUG, "Added config file watch for %s", monitor->config_path);
 				}
@@ -813,7 +813,7 @@ bool monitor_reload(monitor_t *monitor) {
 	new_config->syslog_level = old_config->syslog_level;
 
 	/* Parse configuration file */
-	if (!config_parse(new_config, monitor->config_path, new_registry)) {
+	if (!config_parse(new_config, new_registry, monitor->config_path)) {
 		log_message(ERROR, "Failed to parse new config, keeping old one: %s", monitor->config_path);
 		config_destroy(new_config);
 		registry_destroy(new_registry);
@@ -825,12 +825,12 @@ bool monitor_reload(monitor_t *monitor) {
 	/* Preserve dynamic watches whose source patterns still exist in the new configuration */
 	registry_t *old_registry = monitor->registry;
 	for (int i = 0; i < old_config->num_watches; i++) {
-		watch_t *old_watch = config_get_watch(old_config, i, old_registry);
+		watch_t *old_watch = config_get_watch(old_config, old_registry, i);
 		if (old_watch && old_watch->is_dynamic && old_watch->source_pattern) {
 			/* Check if the source pattern exists in the new configuration */
 			bool pattern_exists = false;
 			for (int j = 0; j < new_config->num_watches; j++) {
-				watch_t *new_watch = config_get_watch(new_config, j, new_registry);
+				watch_t *new_watch = config_get_watch(new_config, new_registry, j);
 				if (new_watch && !new_watch->is_dynamic && strcmp(new_watch->path, old_watch->source_pattern) == 0) {
 					pattern_exists = true;
 					break;
@@ -840,7 +840,7 @@ bool monitor_reload(monitor_t *monitor) {
 			if (pattern_exists) {
 				/* Create a copy of the dynamic watch for the new config */
 				watch_t *preserved_watch = config_clone_watch(old_watch);
-				if (preserved_watch && config_add_watch(new_config, preserved_watch, new_registry)) {
+				if (preserved_watch && config_add_watch(new_config, new_registry, preserved_watch)) {
 					log_message(DEBUG, "Preserved dynamic watch: %s (from pattern: %s)",
 					            preserved_watch->path, preserved_watch->source_pattern);
 				} else {
@@ -883,7 +883,7 @@ bool monitor_reload(monitor_t *monitor) {
 	if (monitor->config_path != NULL) {
 		watch_t *config_watch = monitor_config(monitor->config_path);
 		if (config_watch) {
-			if (!config_add_watch(new_config, config_watch, monitor->registry)) {
+			if (!config_add_watch(new_config, monitor->registry, config_watch)) {
 				log_message(WARNING, "Failed to add config watch to new config structure");
 				config_destroy_watch(config_watch);
 			}
@@ -929,7 +929,7 @@ bool monitor_reload(monitor_t *monitor) {
 	for (int i = 0; i < monitor->config->num_watches; i++) {
 		watchref_t watchref = config_get_watchref(monitor->config, i);
 		if (watchref_valid(watchref)) {
-			watch_t *watch = config_get_watch(monitor->config, i, monitor->registry);
+			watch_t *watch = config_get_watch(monitor->config, monitor->registry, i);
 			log_message(DEBUG, "Reloading watch: %s (%s)", watch->name, watch->path);
 			if (!monitor_add(monitor, watchref, false)) {
 				log_message(WARNING, "Failed to add watch for %s", watch ? watch->path : "unknown");
@@ -1059,7 +1059,7 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 
 				/*  Remove dynamic watch from config to prevent resurrection during reload */
 				if (target_watch && target_watch->is_dynamic) {
-					config_remove_watch(monitor->config, watcher->watchref, monitor->registry);
+					config_remove_watch(monitor->config, monitor->registry, watcher->watchref);
 				}
 
 				/* Finally, remove the watcher for the parent path itself */
@@ -1134,34 +1134,4 @@ void monitor_stop(monitor_t *monitor) {
 	}
 
 	monitor->running = false;
-}
-
-/* Observer callback for watch deactivation */
-void cleanup_pending(watchref_t watchref, void *context) {
-	monitor_t *monitor = (monitor_t *) context;
-	if (!monitor || !monitor->pending) {
-		return;
-	}
-
-	log_message(DEBUG, "Watch ID %u (gen %u) deactivated, cleaning up pending entries",
-	            watchref.watch_id, watchref.generation);
-
-	int entries_removed = 0;
-
-	/* Scan pending entries for the deactivated watch (iterate backwards for safe removal) */
-	for (int i = monitor->num_pending - 1; i >= 0; i--) {
-		pending_t *pending = monitor->pending[i];
-		if (pending && watchref_equal(pending->watchref, watchref)) {
-			log_message(DEBUG, "Removing orphaned pending entry for path: %s",
-			            pending->target_path ? pending->target_path : "<null>");
-
-			/* Remove using the public pending_remove function for proper cleanup */
-			pending_remove(monitor, i);
-			entries_removed++;
-		}
-	}
-
-	if (entries_removed > 0) {
-		log_message(DEBUG, "Pending cleanup complete: removed %d orphaned entries", entries_removed);
-	}
 }

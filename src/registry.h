@@ -61,8 +61,8 @@ struct watch *registry_get(registry_t *registry, watchref_t watchref);
 bool registry_valid(registry_t *registry, watchref_t watchref);
 
 /* Observer management */
-bool register_observer(registry_t *registry, observer_t *observer);
-void unregister_observer(registry_t *registry, observer_t *observer);
+bool observer_register(registry_t *registry, observer_t *observer);
+void observer_unregister(registry_t *registry, observer_t *observer);
 
 /* Two-phase deletion */
 void registry_deactivate(registry_t *registry, watchref_t watchref);

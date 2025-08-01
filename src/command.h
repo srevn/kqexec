@@ -19,7 +19,7 @@ void command_debounce_time(int milliseconds);
 
 /* Command execution */
 bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *event, bool async);
-char *command_placeholders(monitor_t *monitor, watchref_t watchref, const char *command, const event_t *event);
+char *command_placeholders(monitor_t *monitor, const char *command, watchref_t watchref, const event_t *event);
 void command_environment(monitor_t *monitor, watchref_t watchref, const event_t *event);
 
 #endif /* COMMAND_H */

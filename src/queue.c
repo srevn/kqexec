@@ -73,14 +73,14 @@ queue_t *queue_create(registry_t *registry, int initial_capacity) {
 	queue->observer.next = NULL;
 
 	/* Register as observer with the registry */
-	if (registry && !register_observer(registry, &queue->observer)) {
+	if (registry && !observer_register(registry, &queue->observer)) {
 		log_message(ERROR, "Failed to register queue as observer with registry");
 		queue_destroy(queue);
 		return NULL;
 	}
 
 	log_message(DEBUG, "Initialized deferred check queue with capacity %d (registry observer registered)",
-				initial_capacity);
+	            initial_capacity);
 	return queue;
 }
 
@@ -90,7 +90,7 @@ void queue_destroy(queue_t *queue) {
 
 	/* Unregister from registry observer notifications */
 	if (queue->registry) {
-		unregister_observer(queue->registry, &queue->observer);
+		observer_unregister(queue->registry, &queue->observer);
 	}
 
 	/* Free path strings and watch arrays */

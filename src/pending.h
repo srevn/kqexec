@@ -19,8 +19,8 @@ typedef struct pending {
 	char *unresolved_path;                 /* The unresolved glob path up to the current parent */
 	char *glob_pattern;                    /* Original glob pattern for matching */
 	bool is_glob;                          /* Whether this is a glob pattern */
-	watchref_t watchref;                   /* Reference to the original watch configuration */
 	watcher_t *parent_watcher;             /* The watcher on the current parent directory */
+	watchref_t watchref;                   /* Reference to the original watch configuration */
 } pending_t;
 
 /* Pending watch management functions */
@@ -34,5 +34,8 @@ void pending_remove(monitor_t *monitor, int index);
 /* Glob scanning functions */
 char **glob_scan_paths(const char *pattern, int *count);
 void glob_free_paths(char **matches, int count);
+
+/* Observer callback for watch deactivation */
+void pending_handle_deactivation(watchref_t watchref, void *context);
 
 #endif /* PENDING_H */

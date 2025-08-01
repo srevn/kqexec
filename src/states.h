@@ -67,7 +67,7 @@ typedef struct entity {
 states_t *states_create(size_t bucket_count, registry_t *registry);
 void states_destroy(states_t *states);
 bool state_corrupted(const entity_t *state);
-entity_t *states_get(states_t *states, const char *path, kind_t kind, watchref_t watchref, registry_t *registry);
+entity_t *states_get(states_t *states, registry_t *registry, const char *path, watchref_t watchref, kind_t kind);
 unsigned int states_hash(const char *path, size_t bucket_count);
 
 #endif /* STATES_H */

@@ -64,7 +64,7 @@ entity_t *stability_root(monitor_t *monitor, entity_t *state) {
 	}
 
 	/* Otherwise, get the state for the watch path */
-	return states_get(monitor->states, watch->path, ENTITY_DIRECTORY, state->watchref, monitor->registry);
+	return states_get(monitor->states, monitor->registry, watch->path, state->watchref, ENTITY_DIRECTORY);
 }
 
 /* Determine if a command should be executed based on operation type and debouncing */
@@ -280,7 +280,7 @@ entity_t *stability_entry(monitor_t *monitor, check_t *check) {
 	/* Use the first watch reference to find the state. All watches for a check share the same path */
 	watchref_t primary_watchref = check->watchrefs[0];
 
-	entity_t *root = states_get(monitor->states, check->path, ENTITY_DIRECTORY, primary_watchref, monitor->registry);
+	entity_t *root = states_get(monitor->states, monitor->registry, check->path, primary_watchref, ENTITY_DIRECTORY);
 	if (!root) {
 		log_message(WARNING, "Cannot find state for %s", check->path);
 		return NULL;
@@ -594,7 +594,7 @@ bool stability_execute(monitor_t *monitor, check_t *check, entity_t *root, struc
 		}
 
 		/* Get or create state for this specific watch to update its command time */
-		entity_t *state = states_get(monitor->states, check->path, ENTITY_DIRECTORY, check->watchrefs[i], monitor->registry);
+		entity_t *state = states_get(monitor->states, monitor->registry, check->path, check->watchrefs[i], ENTITY_DIRECTORY);
 		if (!state) {
 			log_message(WARNING, "Unable to get state for %s with watch %s", check->path, watch->name);
 			continue;

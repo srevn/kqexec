@@ -94,7 +94,7 @@ static void command_substitute(char *result, const char *placeholder, const char
  * %u: User who triggered the event
  * %e: Event type which occurred
  */
-char *command_placeholders(monitor_t *monitor, watchref_t watchref, const char *command, const event_t *event) {
+char *command_placeholders(monitor_t *monitor, const char *command, watchref_t watchref, const event_t *event) {
 	char *result;
 	char time_str[64];
 	char user_str[64];
@@ -159,7 +159,7 @@ char *command_placeholders(monitor_t *monitor, watchref_t watchref, const char *
 	/* Get entity state for size and trigger file placeholders */
 	entity_t *state = NULL;
 	if (watchref_valid(watchref)) {
-		state = states_get(monitor->states, event->path, ENTITY_UNKNOWN, watchref, monitor->registry);
+		state = states_get(monitor->states, monitor->registry, event->path, watchref, ENTITY_UNKNOWN);
 	}
 
 	/* Substitute %f and %F with trigger file path and name */
@@ -312,7 +312,7 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 	time(&start);
 
 	/* Substitute placeholders in the command */
-	command = command_placeholders(monitor, watchref, watch->command, event);
+	command = command_placeholders(monitor, watch->command, watchref, event);
 	if (command == NULL) {
 		return false;
 	}
@@ -375,7 +375,7 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 	/* Parent process - get a reference to the state for post-execution cleanup */
 	entity_t *state = NULL;
 	if (watchref_valid(watchref)) {
-		state = states_get(monitor->states, event->path, ENTITY_UNKNOWN, watchref, monitor->registry);
+		state = states_get(monitor->states, monitor->registry, event->path, watchref, ENTITY_UNKNOWN);
 	}
 
 	/* Read and log output if configured - robust version */
@@ -569,7 +569,7 @@ void command_environment(monitor_t *monitor, watchref_t watchref, const event_t 
 	const char *trigger_file = event->path; /* Default to event path */
 	entity_t *state = NULL;
 	if (watchref_valid(watchref)) {
-		state = states_get(monitor->states, event->path, ENTITY_UNKNOWN, watchref, monitor->registry);
+		state = states_get(monitor->states, monitor->registry, event->path, watchref, ENTITY_UNKNOWN);
 	}
 	if (state) {
 		entity_t *root = stability_root(monitor, state);
