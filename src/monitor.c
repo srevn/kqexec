@@ -779,24 +779,24 @@ bool monitor_reload(monitor_t *monitor) {
 
 	/* Wait for any pending commands to finish before destroying state */
 	command_cleanup(NULL);
-
-	/* Close and recreate kqueue to invalidate all existing watchers and their udata pointers */
-	if (monitor->kq >= 0) {
-		close(monitor->kq);
-	}
-	monitor->kq = kqueue();
-	if (monitor->kq == -1) {
+	
+	/* Create new kqueue first (don't close old one yet) */
+	int new_kq = kqueue();
+	if (new_kq == -1) {
 		log_message(ERROR, "Failed to create new kqueue during reload: %s", strerror(errno));
 		return false;
 	}
 
-	/* Save existing config to compare later */
+	/* Save references to existing resources for potential rollback */
 	config_t *old_config = monitor->config;
+	registry_t *old_registry = monitor->registry;
+	int old_kq = monitor->kq;
 
 	/* Create new configuration */
 	config_t *new_config = config_create();
 	if (!new_config) {
 		log_message(ERROR, "Failed to create new configuration during reload");
+		close(new_kq);
 		return false;
 	}
 
@@ -804,6 +804,7 @@ bool monitor_reload(monitor_t *monitor) {
 	registry_t *new_registry = registry_create(0);
 	if (!new_registry) {
 		log_message(ERROR, "Failed to create new registry during reload");
+		close(new_kq);
 		config_destroy(new_config);
 		return false;
 	}
@@ -815,6 +816,7 @@ bool monitor_reload(monitor_t *monitor) {
 	/* Parse configuration file */
 	if (!config_parse(new_config, new_registry, monitor->config_path)) {
 		log_message(ERROR, "Failed to parse new config, keeping old one: %s", monitor->config_path);
+		close(new_kq);
 		config_destroy(new_config);
 		registry_destroy(new_registry);
 		/* Re-validate the watch on the config file to detect subsequent changes */
@@ -823,7 +825,6 @@ bool monitor_reload(monitor_t *monitor) {
 	}
 
 	/* Preserve dynamic watches whose source patterns still exist in the new configuration */
-	registry_t *old_registry = monitor->registry;
 	for (int i = 0; i < old_config->num_watches; i++) {
 		watch_t *old_watch = config_get_watch(old_config, old_registry, i);
 		if (old_watch && old_watch->is_dynamic && old_watch->source_pattern) {
@@ -852,16 +853,14 @@ bool monitor_reload(monitor_t *monitor) {
 			}
 		}
 	}
-
-	/* Replace old config and registry with new ones */
-	monitor->config = new_config;
-	monitor->registry = new_registry;
-
-	/* Re-initialize the special watch for intermediate glob directories in the new registry */
+	
+	/* Create the special watch for intermediate glob directories in the new registry */
 	watch_t *glob_watch = calloc(1, sizeof(watch_t));
 	if (!glob_watch) {
 		log_message(ERROR, "Failed to allocate memory for glob watch during reload");
+		close(new_kq);
 		config_destroy(new_config);
+		registry_destroy(new_registry);
 		return false;
 	}
 	glob_watch->name = strdup("__glob_intermediate__");
@@ -871,40 +870,68 @@ bool monitor_reload(monitor_t *monitor) {
 	glob_watch->is_dynamic = false;
 	glob_watch->source_pattern = NULL;
 
-	monitor->glob_watchref = registry_add(monitor->registry, glob_watch);
-	if (!watchref_valid(monitor->glob_watchref)) {
-		log_message(ERROR, "Failed to add glob watch to registry during reload");
+	watchref_t new_glob_watchref = registry_add(new_registry, glob_watch);
+	if (!watchref_valid(new_glob_watchref)) {
+		log_message(ERROR, "Failed to add glob watch to new registry during reload");
 		config_destroy_watch(glob_watch);
+		close(new_kq);
 		config_destroy(new_config);
+		registry_destroy(new_registry);
 		return false;
 	}
 
-	/* Add config file watch to the new config so it gets re-added */
+	/* Add config file watch to the new config */
 	if (monitor->config_path != NULL) {
 		watch_t *config_watch = monitor_config(monitor->config_path);
 		if (config_watch) {
-			if (!config_add_watch(new_config, monitor->registry, config_watch)) {
+			if (!config_add_watch(new_config, new_registry, config_watch)) {
 				log_message(WARNING, "Failed to add config watch to new config structure");
 				config_destroy_watch(config_watch);
 			}
 		}
 	}
 
-	/* Reset the state management system */
-	states_destroy(monitor->states);
-	monitor->states = states_create(PATH_HASH_SIZE, monitor->registry);
-	if (!monitor->states) {
-		log_message(ERROR, "Failed to recreate state table during reload");
+	/* Create new state management system */
+	states_t *new_states = states_create(PATH_HASH_SIZE, new_registry);
+	if (!new_states) {
+		log_message(ERROR, "Failed to create new state table during reload");
+		close(new_kq);
+		config_destroy(new_config);
+		registry_destroy(new_registry);
 		return false;
 	}
 
-	/* Clear deferred and delayed queues to prevent access to old states */
-	queue_destroy(monitor->check_queue);
-	monitor->check_queue = queue_create(monitor->registry, 16);
+	/* Create new queues */
+	queue_t *new_check_queue = queue_create(new_registry, 16);
+	if (!new_check_queue) {
+		log_message(ERROR, "Failed to create new check queue during reload");
+		states_destroy(new_states);
+		close(new_kq);
+		config_destroy(new_config);
+		registry_destroy(new_registry);
+		return false;
+	}
+	
+	/* Switch to new kqueue first */
+	monitor->kq = new_kq;
+	
+	/* Switch configuration and registry */
+	monitor->config = new_config;
+	monitor->registry = new_registry;
+	monitor->glob_watchref = new_glob_watchref;
+	
+	/* Switch state management */
+	states_t *old_states = monitor->states;
+	monitor->states = new_states;
+	
+	/* Switch check queue */
+	queue_t *old_check_queue = monitor->check_queue;
+	monitor->check_queue = new_check_queue;
 
-	/* Also clear delayed events queue that may reference old watches */
+	/* Clear delayed events queue that may reference old watches */
+	int cleared_count = 0;
 	if (monitor->delayed_events) {
-		int cleared_count = monitor->delayed_count;
+		cleared_count = monitor->delayed_count;
 		for (int i = 0; i < monitor->delayed_count; i++) {
 			free(monitor->delayed_events[i].event.path);
 		}
@@ -912,7 +939,6 @@ bool monitor_reload(monitor_t *monitor) {
 		monitor->delayed_events = NULL;
 		monitor->delayed_count = 0;
 		monitor->delayed_capacity = 0;
-		log_message(DEBUG, "Cleared %d delayed events during config reload", cleared_count);
 	}
 
 	/* Clear pending watches that may reference old watches */
@@ -937,7 +963,16 @@ bool monitor_reload(monitor_t *monitor) {
 			}
 		}
 	}
-
+	
+	/* Close old kqueue (now that new one is active) */
+	if (old_kq >= 0) {
+		close(old_kq);
+	}
+	
+	/* Cleanup old resources */
+	states_destroy(old_states);
+	queue_destroy(old_check_queue);
+	
 	/* Retire the old watchers and config to the graveyard */
 	if (stale_count > 0 || old_config) {
 		if (monitor->graveyard.stale_watches || monitor->graveyard.old_config) {
@@ -949,7 +984,7 @@ bool monitor_reload(monitor_t *monitor) {
 		monitor->graveyard.num_stale = stale_count;
 		monitor->graveyard.old_config = old_config;
 		monitor->graveyard.retirement_time = time(NULL) + GRAVEYARD_SECONDS;
-		log_message(DEBUG, "Retired %d watchers and old config to graveyard", stale_count, GRAVEYARD_SECONDS);
+		log_message(DEBUG, "Retired %d watchers and old config to graveyard", stale_count);
 	}
 
 	/* Perform garbage collection and destroy old registry */
@@ -957,6 +992,11 @@ bool monitor_reload(monitor_t *monitor) {
 		registry_garbage(old_registry);
 		registry_destroy(old_registry);
 		log_message(DEBUG, "Performed garbage collection and destroyed old registry during reload");
+	}
+	
+	/* Log successful atomic reload */
+	if (cleared_count > 0) {
+		log_message(DEBUG, "Cleared %d delayed events during config reload", cleared_count);
 	}
 
 	/* After reloading, explicitly validate the config file watch to handle editor atomic saves */
