@@ -131,7 +131,7 @@ monitor_t *monitor_create(config_t *config, registry_t *registry) {
 	}
 
 	monitor->config = config;
-	monitor->registry = registry; /* Take ownership of registry */
+	monitor->registry = registry;
 	monitor->kq = -1;
 	monitor->watches = NULL;
 	monitor->num_watches = 0;
@@ -823,36 +823,6 @@ bool monitor_reload(monitor_t *monitor) {
 		monitor_sync(monitor, monitor->config_path);
 		return false;
 	}
-
-	/* Preserve dynamic watches whose source patterns still exist in the new configuration */
-	for (int i = 0; i < old_config->num_watches; i++) {
-		watch_t *old_watch = config_get_watch(old_config, old_registry, i);
-		if (old_watch && old_watch->is_dynamic && old_watch->source_pattern) {
-			/* Check if the source pattern exists in the new configuration */
-			bool pattern_exists = false;
-			for (int j = 0; j < new_config->num_watches; j++) {
-				watch_t *new_watch = config_get_watch(new_config, new_registry, j);
-				if (new_watch && !new_watch->is_dynamic && strcmp(new_watch->path, old_watch->source_pattern) == 0) {
-					pattern_exists = true;
-					break;
-				}
-			}
-
-			if (pattern_exists) {
-				/* Create a copy of the dynamic watch for the new config */
-				watch_t *preserved_watch = config_clone_watch(old_watch);
-				if (preserved_watch && config_add_watch(new_config, new_registry, preserved_watch)) {
-					log_message(DEBUG, "Preserved dynamic watch: %s (from pattern: %s)",
-					            preserved_watch->path, preserved_watch->source_pattern);
-				} else {
-					log_message(WARNING, "Failed to preserve dynamic watch: %s", old_watch->path);
-					if (preserved_watch) {
-						config_destroy_watch(preserved_watch);
-					}
-				}
-			}
-		}
-	}
 	
 	/* Create the special watch for intermediate glob directories in the new registry */
 	watch_t *glob_watch = calloc(1, sizeof(watch_t));
@@ -1076,7 +1046,7 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 	bool path_exists = (stat(path, &info) == 0);
 	bool list_modified = false;
 
-	/* Process all watchers monitoring this exact path (iterate backwards to avoid index issues) */
+	/* Process all watchers monitoring this exact path */
 	for (int i = monitor->num_watches - 1; i >= 0; i--) {
 		watcher_t *watcher = monitor->watches[i];
 		if (!watcher || !watcher->path || strcmp(watcher->path, path) != 0) {
