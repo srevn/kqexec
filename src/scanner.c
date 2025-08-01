@@ -300,12 +300,6 @@ bool scanner_stable(monitor_t *monitor, entity_t *context, const char *dir_path,
 		} else if (S_ISDIR(info.st_mode)) {
 			stats->local_dirs++;
 
-			/* Skip hidden directories if configured */
-			watch_t *context_watch = registry_get(monitor->registry, context->watchref);
-			if (context_watch && !context_watch->hidden && dirent->d_name[0] == '.') {
-				continue;
-			}
-
 			stats_t sub_stats;
 			if (!scanner_stable(monitor, context, path, &sub_stats)) {
 				is_stable = false; /* Propagate instability from subdirectories */
