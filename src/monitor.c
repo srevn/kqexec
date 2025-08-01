@@ -342,8 +342,6 @@ bool monitor_path(monitor_t *monitor, const char *path, watchref_t watchref) {
 	/* Check if this exact combination already exists to avoid true duplicates */
 	for (int i = 0; i < monitor->num_watches; i++) {
 		if (strcmp(monitor->watches[i]->path, path) == 0 && watchref_equal(monitor->watches[i]->watchref, watchref)) {
-			log_message(DEBUG, "Exact watcher already exists for path %s (watchref %u:%u)",
-			            path, watchref.watch_id, watchref.generation);
 			return true;
 		}
 	}
@@ -395,9 +393,6 @@ bool monitor_path(monitor_t *monitor, const char *path, watchref_t watchref) {
 		return true;
 	} else {
 		/* New path, create a new watcher and get a new fd */
-		log_message(DEBUG, "Creating new file descriptor for path %s (watchref %u:%u)",
-		            path, watchref.watch_id, watchref.generation);
-
 		int fd = open(path, O_RDONLY);
 		if (fd == -1) {
 			/* It's possible the file was deleted since the initial scan */

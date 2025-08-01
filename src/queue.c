@@ -77,7 +77,7 @@ queue_t *queue_create(registry_t *registry, int initial_capacity) {
 		return NULL;
 	}
 
-	log_message(DEBUG, "Initialized deferred check queue with capacity %d (registry observer registered)",
+	log_message(DEBUG, "Initialized deferred check queue with capacity %d",
 	            initial_capacity);
 	return queue;
 }

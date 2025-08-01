@@ -148,7 +148,7 @@ states_t *states_create(size_t bucket_count, registry_t *registry) {
 		return NULL;
 	}
 
-	log_message(DEBUG, "State table created with %zu buckets and registry observer registered", bucket_count);
+	log_message(DEBUG, "State table created with %zu buckets", bucket_count);
 	return states;
 }
 
@@ -423,8 +423,6 @@ entity_t *states_get(states_t *states, registry_t *registry, const char *path, w
 	/* Add to the node's list */
 	state->next = node->entities;
 	node->entities = state;
-
-	log_message(DEBUG, "Created new state for path=%s, watch=%s", path, watch->name);
 
 	/* Unlock mutex */
 	pthread_mutex_unlock(&states->mutexes[hash]);
