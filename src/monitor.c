@@ -139,7 +139,7 @@ monitor_t *monitor_create(config_t *config, registry_t *registry) {
 	monitor->num_pending = 0;
 	monitor->running = false;
 	monitor->reload = false;
-	
+
 	monitor->graveyard.stale_watches = NULL;
 	monitor->graveyard.num_stale = 0;
 	monitor->graveyard.old_config = NULL;
@@ -233,7 +233,7 @@ void monitor_destroy(monitor_t *monitor) {
 		monitor->watches[i] = NULL; /* Prevent use-after-free in subsequent calls */
 	}
 	if (monitor->graveyard.stale_watches) {
-		log_message(DEBUG, "Cleaning up %d stale watchers from graveyard during monitor destruction.", monitor->graveyard.num_stale);
+		log_message(DEBUG, "Cleaning up %d stale watchers from graveyard", monitor->graveyard.num_stale);
 		for (int i = 0; i < monitor->graveyard.num_stale; i++) {
 			watcher_destroy(monitor, monitor->graveyard.stale_watches[i], true);
 		}
@@ -786,7 +786,7 @@ bool monitor_reload(monitor_t *monitor) {
 
 	/* Wait for any pending commands to finish before destroying state */
 	command_cleanup(NULL);
-	
+
 	/* Create new kqueue first (don't close old one yet) */
 	int new_kq = kqueue();
 	if (new_kq == -1) {
@@ -830,7 +830,7 @@ bool monitor_reload(monitor_t *monitor) {
 		monitor_sync(monitor, monitor->config_path);
 		return false;
 	}
-	
+
 	/* Create the special watch for intermediate glob directories in the new registry */
 	watch_t *glob_watch = calloc(1, sizeof(watch_t));
 	if (!glob_watch) {
@@ -888,19 +888,19 @@ bool monitor_reload(monitor_t *monitor) {
 		registry_destroy(new_registry);
 		return false;
 	}
-	
+
 	/* Switch to new kqueue first */
 	monitor->kq = new_kq;
-	
+
 	/* Switch configuration and registry */
 	monitor->config = new_config;
 	monitor->registry = new_registry;
 	monitor->glob_watchref = new_glob_watchref;
-	
+
 	/* Switch state management */
 	states_t *old_states = monitor->states;
 	monitor->states = new_states;
-	
+
 	/* Switch check queue */
 	queue_t *old_check_queue = monitor->check_queue;
 	monitor->check_queue = new_check_queue;
@@ -940,16 +940,16 @@ bool monitor_reload(monitor_t *monitor) {
 			}
 		}
 	}
-	
+
 	/* Close old kqueue (now that new one is active) */
 	if (old_kq >= 0) {
 		close(old_kq);
 	}
-	
+
 	/* Cleanup old resources */
 	states_destroy(old_states);
 	queue_destroy(old_check_queue);
-	
+
 	/* Retire the old watchers and config to the graveyard */
 	if (stale_count > 0 || old_config) {
 		if (monitor->graveyard.stale_watches || monitor->graveyard.old_config) {
@@ -970,7 +970,7 @@ bool monitor_reload(monitor_t *monitor) {
 		registry_destroy(old_registry);
 		log_message(DEBUG, "Performed garbage collection and destroyed old registry during reload");
 	}
-	
+
 	/* Log successful atomic reload */
 	if (cleared_count > 0) {
 		log_message(DEBUG, "Cleared %d delayed events during config reload", cleared_count);

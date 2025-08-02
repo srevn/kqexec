@@ -346,7 +346,8 @@ static void pending_promote_match(monitor_t *monitor, pending_t *pending, const 
 		return;
 	}
 
-	log_message(DEBUG, "Promoting glob match: %s from pattern %s", path, pending->glob_pattern ? pending->glob_pattern : "unknown");
+	log_message(DEBUG, "Promoting glob match: %s from pattern %s",
+	            path, pending->glob_pattern ? pending->glob_pattern : "unknown");
 
 	/* Check if a watch for this path with the same name already exists */
 	if (monitor->config && path) {
@@ -499,7 +500,7 @@ static void pending_intermediate(monitor_t *monitor, pending_t *pending, const c
 static void pending_process_glob(monitor_t *monitor, pending_t *pending) {
 	char **matches = NULL;
 	int match_count = 0;
-	
+
 	/* Get the original watch to check exclude patterns */
 	watch_t *watch = registry_get(monitor->registry, pending->watchref);
 

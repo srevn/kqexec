@@ -89,9 +89,9 @@ bool scanner_scan(const char *dir_path, const watch_t *watch, stats_t *stats) {
 		return false;
 	}
 
-	/* Extract flags from watch with sensible defaults */
-	bool recursive = watch ? watch->recursive : true;  /* Default: inclusive scanning */
-	bool hidden = watch ? watch->hidden : true;        /* Default: inclusive scanning */
+	/* Extract flags from watch with correct defaults */
+	bool recursive = watch ? watch->recursive : true;  /* Default: recursive for directories */
+	bool hidden = watch ? watch->hidden : false;       /* Default: exclude hidden files */
 
 	/* Initialize stats with recursive fields */
 	memset(stats, 0, sizeof(stats_t));
@@ -279,8 +279,8 @@ bool scanner_stable(monitor_t *monitor, entity_t *context, const char *dir_path,
 	if (monitor && context) {
 		watch = registry_get(monitor->registry, context->watchref);
 	}
-	bool recursive = watch ? watch->recursive : true;  /* Default: inclusive scanning */
-	bool hidden = watch ? watch->hidden : true;        /* Default: inclusive scanning */
+	bool recursive = watch ? watch->recursive : true;  /* Default: recursive for directories */
+	bool hidden = watch ? watch->hidden : false;       /* Default: exclude hidden files */
 
 	/* Initialize stats including the new recursive fields */
 	memset(stats, 0, sizeof(stats_t));
@@ -490,7 +490,8 @@ void scanner_sync(monitor_t *monitor, node_t *node, entity_t *source) {
 						/* Perform a full copy of the entire stability struct */
 						*state->stability = *source->stability;
 					}
-					log_message(DEBUG, "Shared directory statistics with compatible watch %s", state_watch ? state_watch->name : "unknown");
+					log_message(DEBUG, "Shared directory statistics with compatible watch %s",
+					            state_watch ? state_watch->name : "unknown");
 				}
 			} else {
 				/* Incompatible watches: each needs its own rescan */
@@ -510,7 +511,8 @@ void scanner_sync(monitor_t *monitor, node_t *node, entity_t *source) {
 					            state_watch && state_watch->recursive ? "true" : "false",
 					            state_watch && state_watch->hidden ? "true" : "false");
 				} else {
-					log_message(WARNING, "Failed to rescan directory for watch %s during sync", state_watch ? state_watch->name : "unknown");
+					log_message(WARNING, "Failed to rescan directory for watch %s during sync",
+					            state_watch ? state_watch->name : "unknown");
 				}
 			}
 		}
@@ -1129,7 +1131,7 @@ char *scanner_newest(const char *dir_path, const watch_t *watch) {
 		int path_len = snprintf(path, sizeof(path), "%s/%s", dir_path, dirent->d_name);
 
 		/* Check for path truncation */
-		if (path_len >= (int)sizeof(path)) {
+		if (path_len >= (int) sizeof(path)) {
 			log_message(WARNING, "Path too long, skipping: %s/%s", dir_path, dirent->d_name);
 			continue;
 		}
@@ -1195,7 +1197,7 @@ char *scanner_modified(const char *base_path, const watch_t *watch, time_t since
 		int path_len = snprintf(path, sizeof(path), "%s/%s", base_path, dirent->d_name);
 
 		/* Check for path truncation */
-		if (path_len >= (int)sizeof(path)) {
+		if (path_len >= (int) sizeof(path)) {
 			log_message(WARNING, "Path too long, skipping: %s/%s", base_path, dirent->d_name);
 			continue;
 		}

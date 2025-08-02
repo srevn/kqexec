@@ -143,8 +143,7 @@ bool config_add_watch(config_t *config, registry_t *registry, watch_t *watch) {
 	if (!watch->is_dynamic) {
 		for (int i = 0; i < config->num_watches; i++) {
 			watch_t *existing = registry_get(registry, config->watchrefs[i]);
-			if (existing && existing->name && watch->name &&
-			    strcmp(existing->name, watch->name) == 0) {
+			if (existing && existing->name && watch->name && strcmp(existing->name, watch->name) == 0) {
 				log_message(ERROR, "Duplicate watch name '%s' found in configuration", watch->name);
 				return false;
 			}
@@ -217,7 +216,7 @@ void config_destroy_watch(watch_t *watch) {
 	free(watch->path);
 	free(watch->command);
 	free(watch->source_pattern);
-	
+
 	/* Free exclude patterns array */
 	if (watch->exclude) {
 		for (int i = 0; i < watch->num_exclude; i++) {
@@ -225,7 +224,7 @@ void config_destroy_watch(watch_t *watch) {
 		}
 		free(watch->exclude);
 	}
-	
+
 	free(watch);
 }
 
@@ -256,7 +255,7 @@ watch_t *config_clone_watch(const watch_t *source) {
 	clone->complexity = source->complexity;
 	clone->processing_delay = source->processing_delay;
 	clone->is_dynamic = source->is_dynamic;
-	
+
 	/* Copy exclude patterns array */
 	clone->num_exclude = source->num_exclude;
 	if (source->num_exclude > 0 && source->exclude) {
@@ -282,7 +281,7 @@ watch_t *config_clone_watch(const watch_t *source) {
 			}
 		}
 	}
-	
+
 	if ((source->name && !clone->name) || (source->path && !clone->path) || (source->command && !clone->command) ||
 	    (source->source_pattern && !clone->source_pattern) || exclude_failure) {
 		log_message(ERROR, "Failed to allocate strings for watch clone");
@@ -336,8 +335,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 
 	fp = fopen(filename, "r");
 	if (fp == NULL) {
-		log_message(ERROR, "Failed to open config file %s: %s",
-		            filename, strerror(errno));
+		log_message(ERROR, "Failed to open config file %s: %s", filename, strerror(errno));
 		return false;
 	}
 
@@ -468,7 +466,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 			current_watch->environment = false; /* Default to not injecting environment variables */
 			current_watch->processing_delay = 0; /* Default to no delay */
 			current_watch->complexity = 1.0; /* Default complexity multiplier */
-			
+
 			/* Initialize exclude patterns */
 			current_watch->exclude = NULL;
 			current_watch->num_exclude = 0;
@@ -616,7 +614,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 				char *patterns = strdup(value);
 				if (patterns == NULL) {
 					log_message(ERROR, "Failed to allocate memory for exclude patterns at line %d",
-								line_number);
+					            line_number);
 					config_destroy_watch(current_watch);
 					fclose(fp);
 					return false;
@@ -628,7 +626,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 					if (strlen(trimmed_pattern) > 0) {
 						if (!config_exclude_add(current_watch, trimmed_pattern)) {
 							log_message(ERROR, "Failed to add exclude pattern '%s' at line %d",
-										trimmed_pattern, line_number);
+							            trimmed_pattern, line_number);
 							free(patterns);
 							config_destroy_watch(current_watch);
 							fclose(fp);

@@ -220,7 +220,7 @@ void stability_defer(monitor_t *monitor, entity_t *state) {
 
 		/* Allow responsive drops if new period is significantly lower */
 		long effective_quiet;
-		if (current_complexity < locked_quiet && current_complexity < (locked_quiet * 0.6)) {
+		if (current_complexity < locked_quiet && current_complexity < (locked_quiet * 0.7)) {
 			/* Significant drop - use calculated period for responsiveness */
 			effective_quiet = current_complexity;
 		} else {
@@ -235,7 +235,7 @@ void stability_defer(monitor_t *monitor, entity_t *state) {
 		/* Use existing scheduling logic with effective period */
 		stability_delay(monitor, check, root, &root->scanner->latest_time, effective_quiet);
 
-		log_message(DEBUG, "Event received during quiet period, using period of %ld ms for %s (locked: %ld ms, calculated: %ld ms)",
+		log_message(DEBUG, "Event received, using quiet period of %ld ms for %s (locked: %ld ms, calculated: %ld ms)",
 		            effective_quiet, root->node->path, locked_quiet, current_complexity);
 		return;
 	}
@@ -400,7 +400,8 @@ failure_t stability_fail(monitor_t *monitor, check_t *check, entity_t *root, str
 	struct stat info;
 	if (stat(check->path, &info) != 0 || !S_ISDIR(info.st_mode)) {
 		root->stability->checks_failed++;
-		log_message(DEBUG, "Directory %s not found (attempt %d/%d)", check->path, root->stability->checks_failed, MAX_CHECKS_FAILED);
+		log_message(DEBUG, "Directory %s not found (attempt %d/%d)", check->path,
+		            root->stability->checks_failed, MAX_CHECKS_FAILED);
 
 		/* After multiple consecutive failures, consider it permanently deleted */
 		if (root->stability->checks_failed >= MAX_CHECKS_FAILED) {

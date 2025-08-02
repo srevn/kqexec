@@ -537,15 +537,15 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 		/* For directory events, check if recent changes were all to excluded files */
 		time_t recent_threshold = time(NULL) - 2; /* Check last 2 seconds */
 		char *modified_files = scanner_modified(event->path, watch, recent_threshold, false, false);
-		
+
 		if (!modified_files || strlen(modified_files) == 0) {
 			/* No non-excluded files were modified recently, ignore this event */
 			log_message(INFO, "Ignoring directory event for %s, all recent changes were to excluded files", event->path);
 			free(modified_files);
 			return false;
 		}
-		
-		log_message(DEBUG, "Directory event for %s triggered by non-excluded files: %s", 
+
+		log_message(DEBUG, "Directory event for %s triggered by non-excluded files: %s",
 		            event->path, modified_files);
 		free(modified_files);
 	}
