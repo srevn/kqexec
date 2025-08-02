@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <dirent.h>
 #include <pthread.h>
+#include <errno.h>
 
 #include "scanner.h"
 #include "states.h"
@@ -1130,100 +1131,119 @@ char *scanner_newest(const char *dir_path, const watch_t *watch) {
 	return newest_file;
 }
 
-/* Find all files modified since a specific time */
+/* Find all files modified since a specific time, respecting exclude patterns */
 char *scanner_modified(const char *base_path, const watch_t *watch, time_t since_time, bool recursive, bool basename) {
-	DIR *dir;
-	struct dirent *dirent;
-	struct stat info;
-	char path[PATH_MAX];
-	char *result = NULL;
-	size_t result_size = 0;
-	size_t result_capacity = 1024;
-
 	if (!base_path) {
 		return NULL;
 	}
 
-	/* Allocate initial buffer */
-	result = malloc(result_capacity);
+	DIR *dir = opendir(base_path);
+	if (!dir) {
+		/* Log the error for better diagnostics, but don't spam for deleted dirs */
+		if (errno != ENOENT) {
+			log_message(WARNING, "Cannot open directory %s: %s", base_path, strerror(errno));
+		}
+		return NULL;
+	}
+
+	/* Start with a reasonable initial capacity to avoid frequent reallocations */
+	size_t result_capacity = 2048;
+	char *result = malloc(result_capacity);
 	if (!result) {
+		log_message(ERROR, "Failed to allocate initial buffer for modified file list");
+		closedir(dir);
 		return NULL;
 	}
 	result[0] = '\0';
+	size_t result_size = 0;
 
-	dir = opendir(base_path);
-	if (!dir) {
-		free(result);
-		return NULL;
-	}
-
+	struct dirent *dirent;
 	while ((dirent = readdir(dir))) {
+		/* Always skip current and parent directory entries */
 		if (strcmp(dirent->d_name, ".") == 0 || strcmp(dirent->d_name, "..") == 0) {
 			continue;
 		}
 
-		snprintf(path, sizeof(path), "%s/%s", base_path, dirent->d_name);
-		
-		/* Skip excluded paths */
+		char path[PATH_MAX];
+		int path_len = snprintf(path, sizeof(path), "%s/%s", base_path, dirent->d_name);
+
+		/* Check for path truncation */
+		if (path_len >= (int)sizeof(path)) {
+			log_message(WARNING, "Path too long, skipping: %s/%s", base_path, dirent->d_name);
+			continue;
+		}
+
+		/* Perform exclusion check early */
 		if (watch && config_exclude_match(watch, path)) {
 			continue;
 		}
-		
+
+		struct stat info;
 		if (stat(path, &info) != 0) {
+			/* This is not an error; file could have been deleted between readdir() and stat() */
 			continue;
 		}
 
+		/* Handle files. */
 		if (S_ISREG(info.st_mode)) {
-			/* Consider both modification time and change time */
+			/* Use the most recent of modification or status change time */
 			time_t latest_time = (info.st_mtime > info.st_ctime) ? info.st_mtime : info.st_ctime;
+
 			if (latest_time > since_time) {
-				/* Add this file to the result */
 				const char *output_name = basename ? dirent->d_name : path;
 				size_t name_len = strlen(output_name);
-				size_t required_size = result_size + name_len + 2; /* +2 for newline and null terminator */
 
-				if (required_size > result_capacity) {
-					result_capacity = required_size * 2;
-					char *new_result = realloc(result, result_capacity);
+				/* Ensure buffer has space for the new path, a newline, and a null terminator */
+				size_t required_capacity = result_size + name_len + 2; /* +1 for newline, +1 for null */
+				if (required_capacity > result_capacity) {
+					/* Grow buffer by doubling, or to the required size if that's larger */
+					size_t new_capacity = result_capacity * 2 > required_capacity ? result_capacity * 2 : required_capacity;
+					char *new_result = realloc(result, new_capacity);
 					if (!new_result) {
+						log_message(ERROR, "Failed to reallocate buffer for modified file list");
 						free(result);
 						closedir(dir);
 						return NULL;
 					}
 					result = new_result;
+					result_capacity = new_capacity;
 				}
 
+				/* Append the new path, prefixed with a newline if the buffer is not empty */
 				if (result_size > 0) {
-					result[result_size] = '\n';
-					result_size++;
+					result[result_size++] = '\n';
 				}
-				strcpy(result + result_size, output_name);
+				memcpy(result + result_size, output_name, name_len + 1); /* +1 to copy null terminator */
 				result_size += name_len;
 			}
-		} else if (S_ISDIR(info.st_mode) && recursive) {
-			/* Recursively scan subdirectory */
+		}
+		/* Handle directories for recursion. */
+		else if (S_ISDIR(info.st_mode) && recursive) {
 			char *subdir_result = scanner_modified(path, watch, since_time, recursive, basename);
-			if (subdir_result && strlen(subdir_result) > 0) {
-				size_t subdir_len = strlen(subdir_result);
-				size_t required_size = result_size + subdir_len + 2; /* +2 for newline and null terminator */
 
-				if (required_size > result_capacity) {
-					result_capacity = required_size * 2;
-					char *new_result = realloc(result, result_capacity);
+			/* If the recursive call found modified files, append them */
+			if (subdir_result && subdir_result[0] != '\0') {
+				size_t subdir_len = strlen(subdir_result);
+				size_t required_capacity = result_size + subdir_len + 2; /* +2 for newline and null terminator */
+
+				if (required_capacity > result_capacity) {
+					size_t new_capacity = result_capacity * 2 > required_capacity ? result_capacity * 2 : required_capacity;
+					char *new_result = realloc(result, new_capacity);
 					if (!new_result) {
+						log_message(ERROR, "Failed to reallocate buffer for recursive modified file list");
 						free(result);
 						free(subdir_result);
 						closedir(dir);
 						return NULL;
 					}
 					result = new_result;
+					result_capacity = new_capacity;
 				}
 
 				if (result_size > 0) {
-					result[result_size] = '\n';
-					result_size++;
+					result[result_size++] = '\n';
 				}
-				strcpy(result + result_size, subdir_result);
+				memcpy(result + result_size, subdir_result, subdir_len + 1);
 				result_size += subdir_len;
 			}
 			free(subdir_result);
