@@ -371,7 +371,12 @@ bool stability_scan(monitor_t *monitor, entity_t *root, const char *path, stats_
 
 	/* Perform recursive stability verification */
 	watch_t *watch = registry_get(monitor->registry, root->watchref);
-	bool is_stable = scanner_stable(monitor, root, path, stats_out, watch->recursive, watch->hidden);
+	bool recursive = true, hidden = true; /* Default to inclusive scanning */
+	if (watch) {
+		recursive = watch->recursive;
+		hidden = watch->hidden;
+	}
+	bool is_stable = scanner_stable(monitor, root, path, stats_out, recursive, hidden);
 
 	/* Always update stats and cumulative changes, even if unstable, to track progress */
 	root->stability->checks_failed = is_stable ? 0 : root->stability->checks_failed;
