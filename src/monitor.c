@@ -19,6 +19,19 @@
 #include "events.h"
 #include "pending.h"
 
+/* Check if a path is a hidden file or directory (starts with dot) */
+static bool path_hidden(const char *path) {
+	const char *basename = strrchr(path, '/');
+	if (basename) {
+		basename++; /* Skip the slash */
+	} else {
+		basename = path; /* No slash, use the whole path */
+	}
+
+	/* Check if the basename starts with a dot (hidden) */
+	return basename[0] == '.';
+}
+
 /* Free resources used by a watcher structure */
 static void watcher_destroy(monitor_t *monitor, watcher_t *watcher, bool is_stale) {
 	if (watcher == NULL) {
@@ -102,17 +115,32 @@ static watcher_t *watcher_find(monitor_t *monitor, const char *path) {
 	return NULL;
 }
 
-/* Check if a path is a hidden file or directory (starts with dot) */
-static bool path_hidden(const char *path) {
-	const char *basename = strrchr(path, '/');
-	if (basename) {
-		basename++; /* Skip the slash */
-	} else {
-		basename = path; /* No slash, use the whole path */
+/* Observer callback for direct watcher cleanup when watches are deactivated */
+static void monitor_handle_deactivation(watchref_t watchref, void *context) {
+	monitor_t *monitor = (monitor_t *) context;
+	if (!monitor || !monitor->watches) {
+		return;
 	}
 
-	/* Check if the basename starts with a dot (hidden) */
-	return basename[0] == '.';
+	log_message(DEBUG, "Monitor observer: Watch ID %u (gen %u) deactivated, cleaning up watcher resources",
+	            watchref.watch_id, watchref.generation);
+
+	/* Scan monitor watchers for the deactivated watch (iterate backwards for safe removal) */
+	for (int i = monitor->num_watches - 1; i >= 0; i--) {
+		watcher_t *watcher = monitor->watches[i];
+		if (watcher && watchref_equal(watcher->watchref, watchref)) {
+			log_message(DEBUG, "Removing watcher for deactivated watch: %s (fd %d)", watcher->path, watcher->wd);
+
+			/* Remove the watcher from the array and destroy it */
+			watcher_destroy(monitor, watcher, false);
+
+			/* Shift remaining watchers down */
+			for (int j = i; j < monitor->num_watches - 1; j++) {
+				monitor->watches[j] = monitor->watches[j + 1];
+			}
+			monitor->num_watches--;
+		}
+	}
 }
 
 /* Create a new file/directory monitor */
@@ -162,12 +190,27 @@ monitor_t *monitor_create(config_t *config, registry_t *registry) {
 		return NULL;
 	}
 
+	/* Initialize monitor watcher observer */
+	monitor->monitor_observer.handle_deactivation = monitor_handle_deactivation;
+	monitor->monitor_observer.context = monitor;
+	monitor->monitor_observer.next = NULL;
+
 	/* Initialize pending watch observer */
 	monitor->pending_observer.handle_deactivation = pending_handle_deactivation;
 	monitor->pending_observer.context = monitor;
 	monitor->pending_observer.next = NULL;
 
-	/* Register pending observer with the registry */
+	/* Register observers with the registry */
+	if (monitor->registry && !observer_register(monitor->registry, &monitor->monitor_observer)) {
+		log_message(ERROR, "Failed to register monitor observer with registry");
+		observer_unregister(monitor->registry, &monitor->pending_observer);
+		states_destroy(monitor->states);
+		queue_destroy(monitor->check_queue);
+		free(monitor->config_path);
+		free(monitor);
+		return NULL;
+	}
+
 	if (monitor->registry && !observer_register(monitor->registry, &monitor->pending_observer)) {
 		log_message(ERROR, "Failed to register pending observer with registry");
 		states_destroy(monitor->states);
@@ -246,8 +289,9 @@ void monitor_destroy(monitor_t *monitor) {
 
 	free(monitor->watches);
 
-	/* Unregister pending observer from registry */
+	/* Unregister observers from registry */
 	if (monitor->registry) {
+		observer_unregister(monitor->registry, &monitor->monitor_observer);
 		observer_unregister(monitor->registry, &monitor->pending_observer);
 	}
 

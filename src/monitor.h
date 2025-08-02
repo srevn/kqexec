@@ -64,8 +64,9 @@ typedef struct monitor {
 	bool reload;                           /* Flag to indicate reload requested */
 	char *config_path;                     /* Copy of config file path for reloading */
 	
-	/* Observer for pending watch cleanup */
-	observer_t pending_observer;           /* Observer registration for pending cleanup */
+	/* Observers for watcher cleanups */
+	observer_t monitor_observer;           /* Observer registration for direct watcher cleanup */
+	observer_t pending_observer;           /* Observer registration for pending cleanup */	
 } monitor_t;
 
 /* Monitor lifecycle management */
