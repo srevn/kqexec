@@ -89,6 +89,7 @@ log_output = false            # Whether to capture and log command output (defau
 buffer_output = false         # Whether to buffer log output until command completes (default: false)
 recursive = true              # For recursive directory monitoring (default: true)
 hidden = false                # Whether to monitor hidden files/dirs (default: false)
+exclude = *.tmp,build/*,.git  # Comma-separated patterns to exclude from monitoring
 ```
 
 ### Event Types
@@ -299,6 +300,29 @@ The `processing_delay`/`delay` option introduces an initial delay before process
 #### Buffered Command Output
 
 When running commands, you have two options for handling their output: streaming it directly to logs as it is generated or buffering and flushing it once the command completes. Using `buffer_output` can be particularly helpful with verbose commands that produce extensive output.
+
+#### File and Directory Exclusion
+
+kqexec supports flexible file and directory exclusion patterns using the `exclude`/`ignore` configuration option. This feature allows you to prevent specific files or directories from triggering events, which is particularly useful for ignoring temporary files, build artifacts, or version control directories.
+
+Exclusion patterns support glob syntax including:
+- `*` : Matches any sequence of characters (except path separators)
+- `?` : Matches any single character 
+- `[abc]` : Matches any character in the set
+- `**` : Matches any sequence including path separators (for recursive patterns)
+
+Common exclusion examples:
+```ini
+exclude = *.tmp,*.log          # Exclude temporary and log files
+exclude = node_modules/*       # Exclude Node.js dependencies
+exclude = .git,.DS_Store       # Exclude version control and system files
+exclude = build/**,dist/**     # Exclude build directories recursively
+```
+
+Exclusion filtering operates at multiple levels:
+- **Discovery-time filtering**: Excluded directories are not monitored at all, reducing resource usage
+- **Event-time filtering**: Excluded files within monitored directories don't trigger commands
+- **Glob expansion filtering**: Excluded patterns are respected during dynamic watch creation
 
 ## Viewing Logs
 
