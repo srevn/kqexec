@@ -527,9 +527,27 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 	            event->path, watch->name, filter_to_string(event->type));
 
 	/* Check if path is excluded by patterns */
-	if (config_exclude_match(watch, event->path)) {
-		log_message(DEBUG, "Skipping excluded path: %s", event->path);
-		return false;
+	if (kind == ENTITY_FILE) {
+		/* For file events, check if the file itself is excluded */
+		if (config_exclude_match(watch, event->path)) {
+			log_message(DEBUG, "Skipping excluded file: %s", event->path);
+			return false;
+		}
+	} else if (kind == ENTITY_DIRECTORY && watch->num_exclude > 0) {
+		/* For directory events, check if recent changes were all to excluded files */
+		time_t recent_threshold = time(NULL) - 2; /* Check last 2 seconds */
+		char *modified_files = scanner_modified(event->path, watch, recent_threshold, false, false);
+		
+		if (!modified_files || strlen(modified_files) == 0) {
+			/* No non-excluded files were modified recently, ignore this event */
+			log_message(INFO, "Ignoring directory event for %s, all recent changes were to excluded files", event->path);
+			free(modified_files);
+			return false;
+		}
+		
+		log_message(DEBUG, "Directory event for %s triggered by non-excluded files: %s", 
+		            event->path, modified_files);
+		free(modified_files);
 	}
 
 	/* Handle config file events specially for hot reload */

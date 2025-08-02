@@ -742,14 +742,12 @@ bool config_exclude_match(const watch_t *watch, const char *path) {
 
 		/* Use fnmatch for glob pattern matching */
 		if (fnmatch(pattern, path, FNM_PATHNAME) == 0) {
-			log_message(DEBUG, "Path '%s' matches exclude pattern '%s'", path, pattern);
 			return true;
 		}
 
 		/* Also try relative path matching - extract basename and match against pattern */
 		const char *basename = strrchr(path, '/');
 		if (basename && fnmatch(pattern, basename + 1, 0) == 0) {
-			log_message(DEBUG, "Path '%s' basename matches exclude pattern '%s'", path, pattern);
 			return true;
 		}
 	}
