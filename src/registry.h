@@ -59,6 +59,7 @@ void registry_destroy(registry_t *registry);
 watchref_t registry_add(registry_t *registry, struct watch *watch);
 struct watch *registry_get(registry_t *registry, watchref_t watchref);
 bool registry_valid(registry_t *registry, watchref_t watchref);
+watchref_t *registry_active(registry_t *registry, uint32_t *count);
 
 /* Observer management */
 bool observer_register(registry_t *registry, observer_t *observer);

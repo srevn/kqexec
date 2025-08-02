@@ -342,3 +342,52 @@ void registry_garbage(registry_t *registry) {
 		log_message(DEBUG, "Garbage collected %u inactive watches", freed_count);
 	}
 }
+
+/* Get all active watch references from the registry */
+watchref_t *registry_active(registry_t *registry, uint32_t *count) {
+	if (!registry || !count) {
+		if (count) *count = 0;
+		return NULL;
+	}
+
+	pthread_rwlock_rdlock(&registry->lock);
+
+	/* First pass: count active watches */
+	uint32_t active_count = 0;
+	for (uint32_t i = 1; i < registry->next_id && i < registry->capacity; i++) {
+		if (registry->states[i] == WATCH_STATE_ACTIVE && registry->watches[i]) {
+			active_count++;
+		}
+	}
+
+	if (active_count == 0) {
+		*count = 0;
+		pthread_rwlock_unlock(&registry->lock);
+		return NULL;
+	}
+
+	/* Allocate array for watch references */
+	watchref_t *watchrefs = malloc(active_count * sizeof(watchref_t));
+	if (!watchrefs) {
+		log_message(ERROR, "Failed to allocate memory for active watch references");
+		*count = 0;
+		pthread_rwlock_unlock(&registry->lock);
+		return NULL;
+	}
+
+	/* Second pass: collect active watch references */
+	uint32_t index = 0;
+	for (uint32_t i = 1; i < registry->next_id && i < registry->capacity; i++) {
+		if (registry->states[i] == WATCH_STATE_ACTIVE && registry->watches[i]) {
+			watchrefs[index].watch_id = i;
+			watchrefs[index].generation = registry->generations[i];
+			index++;
+		}
+	}
+
+	*count = active_count;
+	pthread_rwlock_unlock(&registry->lock);
+
+	log_message(DEBUG, "Retrieved %u active watch references from registry", active_count);
+	return watchrefs;
+}

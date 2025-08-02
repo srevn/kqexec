@@ -139,14 +139,20 @@ bool config_add_watch(config_t *config, registry_t *registry, watch_t *watch) {
 		return false;
 	}
 
-	/* For non-dynamic watches, check for duplicate names */
+	/* For non-dynamic watches, check for duplicate names against all active watches */
 	if (!watch->is_dynamic) {
-		for (int i = 0; i < config->num_watches; i++) {
-			watch_t *existing = registry_get(registry, config->watchrefs[i]);
-			if (existing && existing->name && watch->name && strcmp(existing->name, watch->name) == 0) {
-				log_message(ERROR, "Duplicate watch name '%s' found in configuration", watch->name);
-				return false;
+		uint32_t num_active = 0;
+		watchref_t *watchrefs = registry_active(registry, &num_active);
+		if (watchrefs) {
+			for (uint32_t i = 0; i < num_active; i++) {
+				watch_t *existing = registry_get(registry, watchrefs[i]);
+				if (existing && existing->name && watch->name && strcmp(existing->name, watch->name) == 0) {
+					log_message(ERROR, "Duplicate watch name '%s' found in configuration", watch->name);
+					free(watchrefs);
+					return false;
+				}
 			}
+			free(watchrefs);
 		}
 	}
 
@@ -156,19 +162,6 @@ bool config_add_watch(config_t *config, registry_t *registry, watch_t *watch) {
 		log_message(ERROR, "Failed to add watch to registry");
 		return false;
 	}
-
-	/* Expand watchrefs array */
-	watchref_t *new_watchrefs = realloc(config->watchrefs, (config->num_watches + 1) * sizeof(watchref_t));
-	if (new_watchrefs == NULL) {
-		log_message(ERROR, "Failed to allocate memory for watch reference");
-		/* Clean up registry entry */
-		registry_deactivate(registry, watchref);
-		return false;
-	}
-
-	config->watchrefs = new_watchrefs;
-	config->watchrefs[config->num_watches] = watchref;
-	config->num_watches++;
 
 	if (watch->is_dynamic) {
 		log_message(DEBUG, "Added dynamic watch: %s", watch->path);
@@ -183,27 +176,15 @@ bool config_remove_watch(config_t *config, registry_t *registry, watchref_t watc
 		return false;
 	}
 
-	for (int i = 0; i < config->num_watches; i++) {
-		if (watchref_equal(config->watchrefs[i], watchref)) {
-			watch_t *watch = registry_get(registry, watchref);
-			if (watch) {
-				log_message(DEBUG, "Removing watch '%s' for path '%s' from config", watch->name, watch->path);
-			}
-
-			/* Deactivate in registry (triggers observer notifications) */
-			registry_deactivate(registry, watchref);
-
-			/* Remove from config array */
-			for (int j = i; j < config->num_watches - 1; j++) {
-				config->watchrefs[j] = config->watchrefs[j + 1];
-			}
-			config->num_watches--;
-			return true;
-		}
+	watch_t *watch = registry_get(registry, watchref);
+	if (watch) {
+		log_message(DEBUG, "Removing watch '%s' for path '%s' from config", watch->name, watch->path);
 	}
 
-	log_message(WARNING, "Could not find watch reference in config to remove");
-	return false;
+	/* Deactivate in registry (triggers observer notifications) */
+	registry_deactivate(registry, watchref);
+
+	return true;
 }
 
 /* Free a watch entry */
@@ -303,8 +284,6 @@ config_t *config_create(void) {
 	/* Set default values */
 	config->daemon_mode = false;
 	config->syslog_level = NOTICE;
-	config->watchrefs = NULL;
-	config->num_watches = 0;
 
 	return config;
 }
@@ -316,7 +295,6 @@ void config_destroy(config_t *config) {
 	}
 
 	free(config->config_path);
-	free(config->watchrefs);
 	free(config);
 }
 
@@ -677,30 +655,17 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 	fclose(fp);
 
 	/* Check if we have at least one watch entry */
-	if (config->num_watches == 0) {
+	uint32_t num_active = 0;
+	watchref_t *watchrefs = registry_active(registry, &num_active);
+	if (watchrefs) {
+		free(watchrefs);
+	}
+	if (num_active == 0) {
 		log_message(ERROR, "No valid watch entries found in config file");
 		return false;
 	}
 
 	return true;
-}
-
-/* Get watch by index using registry lookup */
-watch_t *config_get_watch(config_t *config, registry_t *registry, int index) {
-	if (!config || !registry || index < 0 || index >= config->num_watches) {
-		return NULL;
-	}
-
-	return registry_get(registry, config->watchrefs[index]);
-}
-
-/* Get watch reference by index */
-watchref_t config_get_watchref(config_t *config, int index) {
-	if (!config || index < 0 || index >= config->num_watches) {
-		return WATCH_REF_INVALID;
-	}
-
-	return config->watchrefs[index];
 }
 
 /* Add an exclude pattern to a watch */

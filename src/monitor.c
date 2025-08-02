@@ -626,15 +626,19 @@ bool monitor_setup(monitor_t *monitor) {
 		return false;
 	}
 
-	/* Add watches for each entry in the configuration */
-	for (int i = 0; i < monitor->config->num_watches; i++) {
-		watchref_t watchref = config_get_watchref(monitor->config, i);
-		if (watchref_valid(watchref)) {
-			if (!monitor_add(monitor, watchref, false)) {
-				watch_t *watch = config_get_watch(monitor->config, monitor->registry, i);
-				log_message(WARNING, "Failed to add watch for %s, skipping", watch ? watch->path : "unknown");
+	/* Add watches for each entry in the registry */
+	uint32_t num_watches = 0;
+	watchref_t *watchrefs = registry_active(monitor->registry, &num_watches);
+	if (watchrefs) {
+		for (uint32_t i = 0; i < num_watches; i++) {
+			if (watchref_valid(watchrefs[i])) {
+				if (!monitor_add(monitor, watchrefs[i], false)) {
+					watch_t *watch = registry_get(monitor->registry, watchrefs[i]);
+					log_message(WARNING, "Failed to add watch for %s, skipping", watch ? watch->path : "unknown");
+				}
 			}
 		}
+		free(watchrefs);
 	}
 
 	/* Check if we have at least one active watch */
@@ -649,13 +653,31 @@ bool monitor_setup(monitor_t *monitor) {
 		if (config_watch) {
 			/* Add to config structure so it gets managed properly */
 			if (config_add_watch(monitor->config, monitor->registry, config_watch)) {
-				watchref_t config_watchref = config_get_watchref(monitor->config, monitor->config->num_watches - 1);
-				if (!monitor_add(monitor, config_watchref, false)) {
-					log_message(WARNING, "Failed to add config file watch for %s", monitor->config_path);
-					/* Remove from config since it wasn't added to monitor */
-					config_remove_watch(monitor->config, monitor->registry, config_watchref);
-				} else {
-					log_message(DEBUG, "Added config file watch for %s", monitor->config_path);
+				/* Find the watchref that was just added */
+				uint32_t num_active = 0;
+				watchref_t *watchrefs = registry_active(monitor->registry, &num_active);
+				watchref_t config_watchref = WATCH_REF_INVALID;
+
+				if (watchrefs && num_active > 0) {
+					/* Find the config watch by looking for the special command */
+					for (uint32_t i = 0; i < num_active; i++) {
+						watch_t *watch = registry_get(monitor->registry, watchrefs[i]);
+						if (watch && watch->command && strcmp(watch->command, "__config_reload__") == 0) {
+							config_watchref = watchrefs[i];
+							break;
+						}
+					}
+					free(watchrefs);
+				}
+
+				if (watchref_valid(config_watchref)) {
+					if (!monitor_add(monitor, config_watchref, false)) {
+						log_message(WARNING, "Failed to add config file watch for %s", monitor->config_path);
+						/* Remove from config since it wasn't added to monitor */
+						config_remove_watch(monitor->config, monitor->registry, config_watchref);
+					} else {
+						log_message(DEBUG, "Added config file watch for %s", monitor->config_path);
+					}
 				}
 			} else {
 				log_message(WARNING, "Failed to add config watch to config structure");
@@ -930,15 +952,20 @@ bool monitor_reload(monitor_t *monitor) {
 	monitor->num_watches = 0;
 
 	/* Add watches from the new configuration (including the config file watch) */
-	for (int i = 0; i < monitor->config->num_watches; i++) {
-		watchref_t watchref = config_get_watchref(monitor->config, i);
-		if (watchref_valid(watchref)) {
-			watch_t *watch = config_get_watch(monitor->config, monitor->registry, i);
-			log_message(DEBUG, "Reloading watch: %s (%s)", watch->name, watch->path);
-			if (!monitor_add(monitor, watchref, false)) {
-				log_message(WARNING, "Failed to add watch for %s", watch ? watch->path : "unknown");
+	uint32_t new_num_watches = 0;
+	watchref_t *new_watchrefs = registry_active(monitor->registry, &new_num_watches);
+	if (new_watchrefs) {
+		for (uint32_t i = 0; i < new_num_watches; i++) {
+			if (watchref_valid(new_watchrefs[i])) {
+				watch_t *watch = registry_get(monitor->registry, new_watchrefs[i]);
+				log_message(DEBUG, "Reloading watch: %s (%s)",
+				            watch ? watch->name : "unknown", watch ? watch->path : "unknown");
+				if (!monitor_add(monitor, new_watchrefs[i], false)) {
+					log_message(WARNING, "Failed to add watch for %s", watch ? watch->path : "unknown");
+				}
 			}
 		}
+		free(new_watchrefs);
 	}
 
 	/* Close old kqueue (now that new one is active) */

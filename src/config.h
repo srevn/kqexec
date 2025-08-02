@@ -63,8 +63,6 @@ typedef struct config {
 	char *config_path;                     /* Path to config file */
 	bool daemon_mode;                      /* Run as daemon */
 	int syslog_level;                      /* Syslog verbosity */
-	watchref_t *watchrefs;                 /* Array of watch references */
-	int num_watches;                       /* Number of watch entries */
 } config_t;
 
 /* Function prototypes */
@@ -83,9 +81,5 @@ bool config_remove_watch(config_t *config, registry_t *registry, watchref_t watc
 /* Exclude pattern functions */
 bool config_exclude_add(watch_t *watch, const char *pattern);
 bool config_exclude_match(const watch_t *watch, const char *path);
-
-/* Registry-aware functions */
-watch_t *config_get_watch(config_t *config, registry_t *registry, int index);
-watchref_t config_get_watchref(config_t *config, int index);
 
 #endif /* CONFIG_H */
