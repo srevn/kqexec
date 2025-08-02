@@ -1092,37 +1092,52 @@ bool scanner_ready(monitor_t *monitor, entity_t *state, struct timespec *current
 
 /* Find the most recently modified file in a directory */
 char *scanner_newest(const char *dir_path, const watch_t *watch) {
-	DIR *dir;
-	struct dirent *dirent;
-	struct stat info;
-	char path[PATH_MAX];
-	char *newest_file = NULL;
-	time_t newest_time = 0;
-
-	dir = opendir(dir_path);
-	if (!dir) {
+	if (!dir_path) {
 		return NULL;
 	}
+
+	DIR *dir = opendir(dir_path);
+	if (!dir) {
+		if (errno != ENOENT) {
+			log_message(WARNING, "Cannot open directory %s: %s", dir_path, strerror(errno));
+		}
+		return NULL;
+	}
+
+	char *newest_file = NULL;
+	time_t newest_time = 0;
+	struct dirent *dirent;
 
 	while ((dirent = readdir(dir))) {
 		if (strcmp(dirent->d_name, ".") == 0 || strcmp(dirent->d_name, "..") == 0) {
 			continue;
 		}
 
-		snprintf(path, sizeof(path), "%s/%s", dir_path, dirent->d_name);
-		
-		/* Skip excluded paths */
+		char path[PATH_MAX];
+		int path_len = snprintf(path, sizeof(path), "%s/%s", dir_path, dirent->d_name);
+
+		/* Check for path truncation */
+		if (path_len >= (int)sizeof(path)) {
+			log_message(WARNING, "Path too long, skipping: %s/%s", dir_path, dirent->d_name);
+			continue;
+		}
+
+		/* Perform exclusion check early for clarity */
 		if (watch && config_exclude_match(watch, path)) {
 			continue;
 		}
-		
+
+		struct stat info;
 		if (stat(path, &info) == 0) {
-			/* Consider both modification time and change time */
+			/* Use the most recent of modification or status change time */
 			time_t latest_time = (info.st_mtime > info.st_ctime) ? info.st_mtime : info.st_ctime;
 			if (latest_time > newest_time) {
 				newest_time = latest_time;
 				free(newest_file);
 				newest_file = strdup(path);
+				if (!newest_file) {
+					log_message(ERROR, "Failed to allocate memory for newest file path");
+				}
 			}
 		}
 	}
@@ -1131,7 +1146,7 @@ char *scanner_newest(const char *dir_path, const watch_t *watch) {
 	return newest_file;
 }
 
-/* Find all files modified since a specific time, respecting exclude patterns */
+/* Find all files modified since a specific time */
 char *scanner_modified(const char *base_path, const watch_t *watch, time_t since_time, bool recursive, bool basename) {
 	if (!base_path) {
 		return NULL;
@@ -1180,7 +1195,7 @@ char *scanner_modified(const char *base_path, const watch_t *watch, time_t since
 
 		struct stat info;
 		if (stat(path, &info) != 0) {
-			/* This is not an error; file could have been deleted between readdir() and stat() */
+			/* File could have been deleted between readdir() and stat() */
 			continue;
 		}
 
