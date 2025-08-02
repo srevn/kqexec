@@ -70,7 +70,7 @@ bool events_sync_add(sync_t *sync, const char *path);
 void events_sync_cleanup(sync_t *sync);
 
 /* Event to operation translation */
-optype_t events_operation(entity_t *state, filter_t filter);
+optype_t events_operation(monitor_t *monitor, entity_t *state, filter_t filter);
 filter_t operation_to_filter(optype_t optype);
 
 #endif /* EVENTS_H */

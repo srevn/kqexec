@@ -78,7 +78,7 @@ void scanner_update(entity_t *state) {
 }
 
 /* Gather basic directory statistics */
-bool scanner_scan(const char *dir_path, stats_t *stats) {
+bool scanner_scan(const char *dir_path, stats_t *stats, bool recursive, bool hidden) {
 	DIR *dir;
 	struct dirent *dirent;
 	struct stat info;
@@ -108,6 +108,14 @@ bool scanner_scan(const char *dir_path, stats_t *stats) {
 
 		snprintf(path, sizeof(path), "%s/%s", dir_path, dirent->d_name);
 
+		/* Skip hidden files if not requested */
+		if (!hidden) {
+			const char *basename = strrchr(path, '/');
+			if ((basename ? basename + 1 : path)[0] == '.') {
+				continue;
+			}
+		}
+
 		if (stat(path, &info) != 0) {
 			/* Skip files that can't be stat'd but continue processing */
 			continue;
@@ -124,25 +132,28 @@ bool scanner_scan(const char *dir_path, stats_t *stats) {
 		} else if (S_ISDIR(info.st_mode)) {
 			stats->local_dirs++;
 
-			stats_t sub_stats;
-			if (scanner_scan(path, &sub_stats)) {
-				/* Update maximum tree depth based on subdirectory scan results */
-				if (sub_stats.depth + 1 > stats->depth) {
-					stats->depth = sub_stats.depth + 1;
-				}
+			/* If recursive, scan subdirectories */
+			if (recursive) {
+				stats_t sub_stats;
+				if (scanner_scan(path, &sub_stats, recursive, hidden)) {
+					/* Update maximum tree depth based on subdirectory scan results */
+					if (sub_stats.depth + 1 > stats->depth) {
+						stats->depth = sub_stats.depth + 1;
+					}
 
-				/* Calculate and update recursive stats by summing up from subdirectories */
-				stats->tree_files += sub_stats.tree_files;
-				stats->tree_dirs += sub_stats.tree_dirs;
-				stats->tree_size += sub_stats.tree_size;
+					/* Calculate and update recursive stats by summing up from subdirectories */
+					stats->tree_files += sub_stats.tree_files;
+					stats->tree_dirs += sub_stats.tree_dirs;
+					stats->tree_size += sub_stats.tree_size;
 
-				/* Update max_depth considering subdirectory's max depth */
-				if (sub_stats.max_depth + 1 > stats->max_depth) {
-					stats->max_depth = sub_stats.max_depth + 1;
-				}
+					/* Update max_depth considering subdirectory's max depth */
+					if (sub_stats.max_depth + 1 > stats->max_depth) {
+						stats->max_depth = sub_stats.max_depth + 1;
+					}
 
-				if (sub_stats.last_mtime > stats->last_mtime) {
-					stats->last_mtime = sub_stats.last_mtime;
+					if (sub_stats.last_mtime > stats->last_mtime) {
+						stats->last_mtime = sub_stats.last_mtime;
+					}
 				}
 			}
 		}
@@ -242,7 +253,7 @@ bool scanner_compare(stats_t *prev_stats, stats_t *current_stats) {
 }
 
 /* Collect statistics about a directory and its contents, and determine stability */
-bool scanner_stable(monitor_t *monitor, entity_t *context, const char *dir_path, stats_t *stats) {
+bool scanner_stable(monitor_t *monitor, entity_t *context, const char *dir_path, stats_t *stats, bool recursive, bool hidden) {
 	DIR *dir;
 	struct dirent *dirent;
 	struct stat info;
@@ -273,6 +284,14 @@ bool scanner_stable(monitor_t *monitor, entity_t *context, const char *dir_path,
 
 		snprintf(path, sizeof(path), "%s/%s", dir_path, dirent->d_name);
 
+		/* Skip hidden files if not requested */
+		if (!hidden) {
+			const char *basename = strrchr(path, '/');
+			if ((basename ? basename + 1 : path)[0] == '.') {
+				continue;
+			}
+		}
+
 		if (stat(path, &info) != 0) {
 			/* If a file disappears during scan, the directory is not stable */
 			log_message(DEBUG, "Directory %s unstable: file disappeared during scan (%s)", dir_path, path);
@@ -300,31 +319,34 @@ bool scanner_stable(monitor_t *monitor, entity_t *context, const char *dir_path,
 		} else if (S_ISDIR(info.st_mode)) {
 			stats->local_dirs++;
 
-			stats_t sub_stats;
-			if (!scanner_stable(monitor, context, path, &sub_stats)) {
-				is_stable = false; /* Propagate instability from subdirectories */
-			}
+			/* If recursive, check subdirectories */
+			if (recursive) {
+				stats_t sub_stats;
+				if (!scanner_stable(monitor, context, path, &sub_stats, recursive, hidden)) {
+					is_stable = false; /* Propagate instability from subdirectories */
+				}
 
-			/* Update maximum tree depth based on subdirectory scan results */
-			if (sub_stats.depth + 1 > stats->depth) {
-				stats->depth = sub_stats.depth + 1;
-			}
+				/* Update maximum tree depth based on subdirectory scan results */
+				if (sub_stats.depth + 1 > stats->depth) {
+					stats->depth = sub_stats.depth + 1;
+				}
 
-			/* Check for temp files */
-			stats->temp_files |= sub_stats.temp_files;
+				/* Check for temp files */
+				stats->temp_files |= sub_stats.temp_files;
 
-			/* Update recursive stats by summing up from subdirectories */
-			stats->tree_files += sub_stats.tree_files;
-			stats->tree_dirs += sub_stats.tree_dirs;
-			stats->tree_size += sub_stats.tree_size;
+				/* Update recursive stats by summing up from subdirectories */
+				stats->tree_files += sub_stats.tree_files;
+				stats->tree_dirs += sub_stats.tree_dirs;
+				stats->tree_size += sub_stats.tree_size;
 
-			/* Update max_depth considering subdirectory's max depth */
-			if (sub_stats.max_depth + 1 > stats->max_depth) {
-				stats->max_depth = sub_stats.max_depth + 1;
-			}
+				/* Update max_depth considering subdirectory's max depth */
+				if (sub_stats.max_depth + 1 > stats->max_depth) {
+					stats->max_depth = sub_stats.max_depth + 1;
+				}
 
-			if (sub_stats.last_mtime > stats->last_mtime) {
-				stats->last_mtime = sub_stats.last_mtime;
+				if (sub_stats.last_mtime > stats->last_mtime) {
+					stats->last_mtime = sub_stats.last_mtime;
+				}
 			}
 		}
 	}
@@ -447,7 +469,7 @@ void scanner_sync(monitor_t *monitor, node_t *node, entity_t *source) {
 			} else {
 				/* Incompatible watches: each needs its own rescan */
 				stats_t new_stats;
-				if (scanner_scan(state->node->path, &new_stats)) {
+				if (scanner_scan(state->node->path, &new_stats, state_watch->recursive, state_watch->hidden)) {
 					/* Save previous stats for comparison and update with fresh scan */
 					if (!state->stability) {
 						state->stability = stability_create();
@@ -502,11 +524,12 @@ static void scanner_record(entity_t *state, optype_t optype) {
 }
 
 /* Update directory stats when content changes */
-static void scanner_stats(entity_t *state, optype_t optype) {
+static void scanner_stats(monitor_t *monitor, entity_t *state, optype_t optype) {
 	if (optype == OP_DIR_CONTENT_CHANGED && state->kind == ENTITY_DIRECTORY) {
 		/* Update directory stats immediately to reflect the change */
 		stats_t new_stats;
-		if (scanner_scan(state->node->path, &new_stats)) {
+		watch_t *watch = registry_get(monitor->registry, state->watchref);
+		if (watch && scanner_scan(state->node->path, &new_stats, watch->recursive, watch->hidden)) {
 			/* Create stability state if needed */
 			if (!state->stability) {
 				state->stability = stability_create();
@@ -610,7 +633,8 @@ static void scanner_propagate(monitor_t *monitor, entity_t *state, entity_t *roo
 					} else {
 						/* Fall back to scanning for non-recursive or cross-scope parents */
 						stats_t parent_new_stats;
-						if (scanner_scan(parent->node->path, &parent_new_stats)) {
+						watch_t *parent_watch = registry_get(monitor->registry, parent->watchref);
+						if (parent_watch && scanner_scan(parent->node->path, &parent_new_stats, parent_watch->recursive, parent_watch->hidden)) {
 							if (!parent->stability) {
 								parent->stability = stability_create();
 							}
@@ -661,7 +685,7 @@ static void scanner_recursive(monitor_t *monitor, entity_t *state, optype_t opty
 		}
 
 		/* For directory operations, update directory stats immediately */
-		scanner_stats(root, optype);
+		scanner_stats(monitor, root, optype);
 
 		/* Synchronize with other watches for the same path */
 		scanner_sync(monitor, root->node, root);
@@ -685,7 +709,7 @@ static void scanner_root(monitor_t *monitor, entity_t *state, optype_t optype) {
 	}
 
 	/* Update directory stats immediately for content changes to root */
-	scanner_stats(state, optype);
+	scanner_stats(monitor, state, optype);
 
 	/* Always sync the current state */
 	scanner_sync(monitor, state->node, state);

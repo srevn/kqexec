@@ -426,7 +426,7 @@ filter_t operation_to_filter(optype_t optype) {
 }
 
 /* Determine operation type based on entity state and event type */
-optype_t events_operation(entity_t *state, filter_t filter) {
+optype_t events_operation(monitor_t *monitor, entity_t *state, filter_t filter) {
 	if (!state) return OP_NONE;
 
 	/* Update state change flags based on the new event type */
@@ -464,8 +464,11 @@ optype_t events_operation(entity_t *state, filter_t filter) {
 				state->stability = stability_create();
 			}
 			if (state->stability) {
-				scanner_scan(state->node->path, &state->stability->stats);
-				state->stability->prev_stats = state->stability->stats;
+				watch_t *watch = registry_get(monitor->registry, state->watchref);
+				if (watch) {
+					scanner_scan(state->node->path, &state->stability->stats, watch->recursive, watch->hidden);
+					state->stability->prev_stats = state->stability->stats;
+				}
 			}
 		}
 	} else if (exists_now) {
@@ -556,7 +559,7 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 	state->wall_time = event->wall_time;
 
 	/* Determine the logical operation */
-	optype_t optype = events_operation(state, event->type);
+	optype_t optype = events_operation(monitor, state, event->type);
 	if (optype == OP_NONE) {
 		return false; /* No relevant change detected */
 	}

@@ -233,7 +233,6 @@ void observer_unregister(registry_t *registry, observer_t *observer) {
 		if (*current == observer) {
 			*current = observer->next;
 			observer->next = NULL; /* Clear the next pointer */
-			log_message(DEBUG, "Unregistered watch observer");
 			break;
 		}
 		current = &(*current)->next;

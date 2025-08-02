@@ -406,14 +406,21 @@ entity_t *states_get(states_t *states, registry_t *registry, const char *path, w
 				return NULL;
 			}
 
-			if (scanner_scan(path, &state->stability->stats)) {
+			watch_t *watch = registry_get(registry, watchref);
+			bool recursive = true, hidden = true; /* Default to inclusive scanning */
+			if (watch) {
+				recursive = watch->recursive;
+				hidden = watch->hidden;
+			}
+			
+			if (scanner_scan(path, &state->stability->stats, recursive, hidden)) {
 				state->stability->prev_stats = state->stability->stats;
+				state->stability->ref_stats = state->stability->stats;
+				state->stability->reference_init = true;
+				
 				log_message(DEBUG, "Initial baseline established for %s: files=%d, dirs=%d, depth=%d, size=%s",
 				            path, state->stability->stats.tree_files, state->stability->stats.tree_dirs,
 				            state->stability->stats.max_depth, format_size((ssize_t) state->stability->stats.tree_size, false));
-
-				state->stability->ref_stats = state->stability->stats;
-				state->stability->reference_init = true;
 			} else {
 				log_message(WARNING, "Failed to gather initial stats for directory: %s", path);
 			}

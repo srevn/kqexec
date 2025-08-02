@@ -370,7 +370,8 @@ bool stability_scan(monitor_t *monitor, entity_t *root, const char *path, stats_
 	}
 
 	/* Perform recursive stability verification */
-	bool is_stable = scanner_stable(monitor, root, path, stats_out);
+	watch_t *watch = registry_get(monitor->registry, root->watchref);
+	bool is_stable = scanner_stable(monitor, root, path, stats_out, watch->recursive, watch->hidden);
 
 	/* Always update stats and cumulative changes, even if unstable, to track progress */
 	root->stability->checks_failed = is_stable ? 0 : root->stability->checks_failed;
@@ -497,7 +498,8 @@ void stability_reset(monitor_t *monitor, entity_t *root) {
 	/* Scan current directory state to establish new baseline */
 	stats_t new_baseline;
 	memset(&new_baseline, 0, sizeof(new_baseline));
-	if (!scanner_scan(root->node->path, &new_baseline)) {
+	watch_t *watch = registry_get(monitor->registry, root->watchref);
+	if (watch && !scanner_scan(root->node->path, &new_baseline, watch->recursive, watch->hidden)) {
 		log_message(WARNING, "Failed to scan directory %s for baseline reset", root->node->path);
 		return;
 	}
@@ -704,7 +706,8 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 
 			/* Update directory stats to reflect new directory structure */
 			stats_t new_stats;
-			if (scanner_scan(root->node->path, &new_stats)) {
+			watch_t *watch = registry_get(monitor->registry, root->watchref);
+			if (watch && scanner_scan(root->node->path, &new_stats, watch->recursive, watch->hidden)) {
 				root->stability->prev_stats = root->stability->stats;
 				root->stability->stats = new_stats;
 				scanner_update(root);
