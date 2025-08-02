@@ -407,13 +407,8 @@ entity_t *states_get(states_t *states, registry_t *registry, const char *path, w
 			}
 
 			watch_t *watch = registry_get(registry, watchref);
-			bool recursive = true, hidden = true; /* Default to inclusive scanning */
-			if (watch) {
-				recursive = watch->recursive;
-				hidden = watch->hidden;
-			}
 			
-			if (scanner_scan(path, watch, &state->stability->stats, recursive, hidden)) {
+			if (scanner_scan(path, watch, &state->stability->stats)) {
 				state->stability->prev_stats = state->stability->stats;
 				state->stability->ref_stats = state->stability->stats;
 				state->stability->reference_init = true;

@@ -79,7 +79,7 @@ void scanner_update(entity_t *state) {
 }
 
 /* Gather basic directory statistics */
-bool scanner_scan(const char *dir_path, const watch_t *watch, stats_t *stats, bool recursive, bool hidden) {
+bool scanner_scan(const char *dir_path, const watch_t *watch, stats_t *stats) {
 	DIR *dir;
 	struct dirent *dirent;
 	struct stat info;
@@ -88,6 +88,10 @@ bool scanner_scan(const char *dir_path, const watch_t *watch, stats_t *stats, bo
 	if (!dir_path || !stats) {
 		return false;
 	}
+
+	/* Extract flags from watch with sensible defaults */
+	bool recursive = watch ? watch->recursive : true;  /* Default: inclusive scanning */
+	bool hidden = watch ? watch->hidden : true;        /* Default: inclusive scanning */
 
 	/* Initialize stats with recursive fields */
 	memset(stats, 0, sizeof(stats_t));
@@ -141,7 +145,7 @@ bool scanner_scan(const char *dir_path, const watch_t *watch, stats_t *stats, bo
 			/* If recursive, scan subdirectories */
 			if (recursive) {
 				stats_t sub_stats;
-				if (scanner_scan(path, watch, &sub_stats, recursive, hidden)) {
+				if (scanner_scan(path, watch, &sub_stats)) {
 					/* Update maximum tree depth based on subdirectory scan results */
 					if (sub_stats.depth + 1 > stats->depth) {
 						stats->depth = sub_stats.depth + 1;
@@ -259,7 +263,7 @@ bool scanner_compare(stats_t *prev_stats, stats_t *current_stats) {
 }
 
 /* Collect statistics about a directory and its contents, and determine stability */
-bool scanner_stable(monitor_t *monitor, entity_t *context, const char *dir_path, stats_t *stats, bool recursive, bool hidden) {
+bool scanner_stable(monitor_t *monitor, entity_t *context, const char *dir_path, stats_t *stats) {
 	DIR *dir;
 	struct dirent *dirent;
 	struct stat info;
@@ -269,6 +273,14 @@ bool scanner_stable(monitor_t *monitor, entity_t *context, const char *dir_path,
 	if (!dir_path || !stats || !context) {
 		return false;
 	}
+
+	/* Extract flags from watch with sensible defaults */
+	watch_t *watch = NULL;
+	if (monitor && context) {
+		watch = registry_get(monitor->registry, context->watchref);
+	}
+	bool recursive = watch ? watch->recursive : true;  /* Default: inclusive scanning */
+	bool hidden = watch ? watch->hidden : true;        /* Default: inclusive scanning */
 
 	/* Initialize stats including the new recursive fields */
 	memset(stats, 0, sizeof(stats_t));
@@ -336,7 +348,7 @@ bool scanner_stable(monitor_t *monitor, entity_t *context, const char *dir_path,
 			/* If recursive, check subdirectories */
 			if (recursive) {
 				stats_t sub_stats;
-				if (!scanner_stable(monitor, context, path, &sub_stats, recursive, hidden)) {
+				if (!scanner_stable(monitor, context, path, &sub_stats)) {
 					is_stable = false; /* Propagate instability from subdirectories */
 				}
 
@@ -483,7 +495,7 @@ void scanner_sync(monitor_t *monitor, node_t *node, entity_t *source) {
 			} else {
 				/* Incompatible watches: each needs its own rescan */
 				stats_t new_stats;
-				if (scanner_scan(state->node->path, state_watch, &new_stats, state_watch->recursive, state_watch->hidden)) {
+				if (scanner_scan(state->node->path, state_watch, &new_stats)) {
 					/* Save previous stats for comparison and update with fresh scan */
 					if (!state->stability) {
 						state->stability = stability_create();
@@ -543,7 +555,7 @@ static void scanner_stats(monitor_t *monitor, entity_t *state, optype_t optype) 
 		/* Update directory stats immediately to reflect the change */
 		stats_t new_stats;
 		watch_t *watch = registry_get(monitor->registry, state->watchref);
-		if (watch && scanner_scan(state->node->path, watch, &new_stats, watch->recursive, watch->hidden)) {
+		if (watch && scanner_scan(state->node->path, watch, &new_stats)) {
 			/* Create stability state if needed */
 			if (!state->stability) {
 				state->stability = stability_create();
@@ -648,7 +660,7 @@ static void scanner_propagate(monitor_t *monitor, entity_t *state, entity_t *roo
 						/* Fall back to scanning for non-recursive or cross-scope parents */
 						stats_t parent_new_stats;
 						watch_t *parent_watch = registry_get(monitor->registry, parent->watchref);
-						if (parent_watch && scanner_scan(parent->node->path, parent_watch, &parent_new_stats, parent_watch->recursive, parent_watch->hidden)) {
+						if (parent_watch && scanner_scan(parent->node->path, parent_watch, &parent_new_stats)) {
 							if (!parent->stability) {
 								parent->stability = stability_create();
 							}

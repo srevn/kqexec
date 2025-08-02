@@ -466,7 +466,7 @@ optype_t events_operation(monitor_t *monitor, entity_t *state, filter_t filter) 
 			if (state->stability) {
 				watch_t *watch = registry_get(monitor->registry, state->watchref);
 				if (watch) {
-					scanner_scan(state->node->path, watch, &state->stability->stats, watch->recursive, watch->hidden);
+					scanner_scan(state->node->path, watch, &state->stability->stats);
 					state->stability->prev_stats = state->stability->stats;
 				}
 			}
