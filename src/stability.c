@@ -499,7 +499,7 @@ void stability_reset(monitor_t *monitor, entity_t *root) {
 	stats_t new_baseline;
 	memset(&new_baseline, 0, sizeof(new_baseline));
 	watch_t *watch = registry_get(monitor->registry, root->watchref);
-	if (watch && !scanner_scan(root->node->path, &new_baseline, watch->recursive, watch->hidden)) {
+	if (watch && !scanner_scan(root->node->path, watch, &new_baseline, watch->recursive, watch->hidden)) {
 		log_message(WARNING, "Failed to scan directory %s for baseline reset", root->node->path);
 		return;
 	}
@@ -562,7 +562,8 @@ bool stability_execute(monitor_t *monitor, check_t *check, entity_t *root, struc
 		struct stat info;
 		if (stat(active_path, &info) == 0 && S_ISDIR(info.st_mode)) {
 			/* It's a directory, scan it for the most recent file */
-			root->trigger = scanner_newest(active_path);
+			watch_t *watch = registry_get(monitor->registry, root->watchref);
+			root->trigger = scanner_newest(active_path, watch);
 		} else {
 			/* It's a file, or doesn't exist; use the path directly */
 			root->trigger = strdup(active_path);
@@ -707,7 +708,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 			/* Update directory stats to reflect new directory structure */
 			stats_t new_stats;
 			watch_t *watch = registry_get(monitor->registry, root->watchref);
-			if (watch && scanner_scan(root->node->path, &new_stats, watch->recursive, watch->hidden)) {
+			if (watch && scanner_scan(root->node->path, watch, &new_stats, watch->recursive, watch->hidden)) {
 				root->stability->prev_stats = root->stability->stats;
 				root->stability->stats = new_stats;
 				scanner_update(root);

@@ -413,7 +413,7 @@ entity_t *states_get(states_t *states, registry_t *registry, const char *path, w
 				hidden = watch->hidden;
 			}
 			
-			if (scanner_scan(path, &state->stability->stats, recursive, hidden)) {
+			if (scanner_scan(path, watch, &state->stability->stats, recursive, hidden)) {
 				state->stability->prev_stats = state->stability->stats;
 				state->stability->ref_stats = state->stability->stats;
 				state->stability->reference_init = true;

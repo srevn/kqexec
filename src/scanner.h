@@ -5,6 +5,7 @@
 #include <sys/types.h>
 
 #include "events.h"
+#include "config.h"
 
 /* Forward declarations */
 typedef struct entity entity_t;
@@ -53,11 +54,11 @@ scanner_t *scanner_create(const char *path);
 void scanner_destroy(scanner_t *scanner);
 
 /* Directory statistics and scanning */
-bool scanner_scan(const char *dir_path, stats_t *stats, bool recursive, bool hidden);
+bool scanner_scan(const char *dir_path, const watch_t *watch, stats_t *stats, bool recursive, bool hidden);
 bool scanner_stable(monitor_t *monitor, entity_t *context, const char *dir_path, stats_t *stats, bool recursive, bool hidden);
 bool scanner_compare(stats_t *prev_stats, stats_t *current_stats);
-char *scanner_newest(const char *dir_path);
-char *scanner_modified(const char *base_path, time_t since_time, bool recursive, bool basename);
+char *scanner_newest(const char *dir_path, const watch_t *watch);
+char *scanner_modified(const char *base_path, const watch_t *watch, time_t since_time, bool recursive, bool basename);
 void scanner_update(entity_t *state);
 
 /* Activity tracking and timing */

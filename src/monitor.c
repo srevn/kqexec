@@ -464,6 +464,12 @@ bool monitor_tree(monitor_t *monitor, const char *dir_path, watchref_t watchref)
 		return true; /* Not an error, just skipping */
 	}
 
+	/* Skip excluded directories */
+	if (config_exclude_match(watch, dir_path)) {
+		log_message(DEBUG, "Skipping excluded directory: %s", dir_path);
+		return true; /* Not an error, just skipping */
+	}
+
 	/* Add a watch for the directory itself */
 	if (!monitor_path(monitor, dir_path, watchref)) {
 		log_message(WARNING, "Failed to add watch for directory %s", dir_path);
@@ -490,6 +496,11 @@ bool monitor_tree(monitor_t *monitor, const char *dir_path, watchref_t watchref)
 
 		char path[MAX_PATH_LEN];
 		snprintf(path, sizeof(path), "%s/%s", dir_path, dirent->d_name);
+
+		/* Skip excluded paths */
+		if (config_exclude_match(watch, path)) {
+			continue;
+		}
 
 		struct stat info;
 		if (stat(path, &info) == -1) {

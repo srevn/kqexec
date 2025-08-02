@@ -134,7 +134,7 @@ static bool glob_matches(const char *created_path, const char *glob_pattern) {
 }
 
 /* Find matching files in a directory for a glob component */
-static bool glob_find_matches(const char *parent_path, const char *glob_component, char ***matches, int *match_count) {
+static bool glob_find_matches(const char *parent_path, const watch_t *watch, const char *glob_component, char ***matches, int *match_count) {
 	if (!parent_path || !glob_component || !matches || !match_count) {
 		return false;
 	}
@@ -158,7 +158,14 @@ static bool glob_find_matches(const char *parent_path, const char *glob_componen
 
 		/* Check if filename matches glob pattern */
 		if (fnmatch(glob_component, entry->d_name, 0) == 0) {
-			count++;
+			/* Check against exclude patterns */
+			char *full_path = pending_join(parent_path, entry->d_name);
+			if (full_path) {
+				if (!watch || !config_exclude_match(watch, full_path)) {
+					count++;
+				}
+				free(full_path);
+			}
 		}
 	}
 
@@ -188,7 +195,12 @@ static bool glob_find_matches(const char *parent_path, const char *glob_componen
 			/* Create full path */
 			char *full_path = pending_join(parent_path, entry->d_name);
 			if (full_path) {
-				(*matches)[index++] = full_path;
+				/* Check against exclude patterns */
+				if (!watch || !config_exclude_match(watch, full_path)) {
+					(*matches)[index++] = full_path;
+				} else {
+					free(full_path); /* Free excluded path */
+				}
 			}
 		}
 	}
@@ -487,8 +499,11 @@ static void pending_intermediate(monitor_t *monitor, pending_t *pending, const c
 static void pending_process_glob(monitor_t *monitor, pending_t *pending) {
 	char **matches = NULL;
 	int match_count = 0;
+	
+	/* Get the original watch to check exclude patterns */
+	watch_t *watch = registry_get(monitor->registry, pending->watchref);
 
-	if (!glob_find_matches(pending->current_parent, pending->next_component, &matches, &match_count)) {
+	if (!glob_find_matches(pending->current_parent, watch, pending->next_component, &matches, &match_count)) {
 		return;
 	}
 

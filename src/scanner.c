@@ -78,7 +78,7 @@ void scanner_update(entity_t *state) {
 }
 
 /* Gather basic directory statistics */
-bool scanner_scan(const char *dir_path, stats_t *stats, bool recursive, bool hidden) {
+bool scanner_scan(const char *dir_path, const watch_t *watch, stats_t *stats, bool recursive, bool hidden) {
 	DIR *dir;
 	struct dirent *dirent;
 	struct stat info;
@@ -116,6 +116,11 @@ bool scanner_scan(const char *dir_path, stats_t *stats, bool recursive, bool hid
 			}
 		}
 
+		/* Skip excluded paths */
+		if (watch && config_exclude_match(watch, path)) {
+			continue;
+		}
+
 		if (stat(path, &info) != 0) {
 			/* Skip files that can't be stat'd but continue processing */
 			continue;
@@ -135,7 +140,7 @@ bool scanner_scan(const char *dir_path, stats_t *stats, bool recursive, bool hid
 			/* If recursive, scan subdirectories */
 			if (recursive) {
 				stats_t sub_stats;
-				if (scanner_scan(path, &sub_stats, recursive, hidden)) {
+				if (scanner_scan(path, watch, &sub_stats, recursive, hidden)) {
 					/* Update maximum tree depth based on subdirectory scan results */
 					if (sub_stats.depth + 1 > stats->depth) {
 						stats->depth = sub_stats.depth + 1;
@@ -288,6 +293,14 @@ bool scanner_stable(monitor_t *monitor, entity_t *context, const char *dir_path,
 		if (!hidden) {
 			const char *basename = strrchr(path, '/');
 			if ((basename ? basename + 1 : path)[0] == '.') {
+				continue;
+			}
+		}
+
+		/* Skip excluded paths */
+		if (monitor && context) {
+			watch_t *watch = registry_get(monitor->registry, context->watchref);
+			if (watch && config_exclude_match(watch, path)) {
 				continue;
 			}
 		}
@@ -469,7 +482,7 @@ void scanner_sync(monitor_t *monitor, node_t *node, entity_t *source) {
 			} else {
 				/* Incompatible watches: each needs its own rescan */
 				stats_t new_stats;
-				if (scanner_scan(state->node->path, &new_stats, state_watch->recursive, state_watch->hidden)) {
+				if (scanner_scan(state->node->path, state_watch, &new_stats, state_watch->recursive, state_watch->hidden)) {
 					/* Save previous stats for comparison and update with fresh scan */
 					if (!state->stability) {
 						state->stability = stability_create();
@@ -529,7 +542,7 @@ static void scanner_stats(monitor_t *monitor, entity_t *state, optype_t optype) 
 		/* Update directory stats immediately to reflect the change */
 		stats_t new_stats;
 		watch_t *watch = registry_get(monitor->registry, state->watchref);
-		if (watch && scanner_scan(state->node->path, &new_stats, watch->recursive, watch->hidden)) {
+		if (watch && scanner_scan(state->node->path, watch, &new_stats, watch->recursive, watch->hidden)) {
 			/* Create stability state if needed */
 			if (!state->stability) {
 				state->stability = stability_create();
@@ -634,7 +647,7 @@ static void scanner_propagate(monitor_t *monitor, entity_t *state, entity_t *roo
 						/* Fall back to scanning for non-recursive or cross-scope parents */
 						stats_t parent_new_stats;
 						watch_t *parent_watch = registry_get(monitor->registry, parent->watchref);
-						if (parent_watch && scanner_scan(parent->node->path, &parent_new_stats, parent_watch->recursive, parent_watch->hidden)) {
+						if (parent_watch && scanner_scan(parent->node->path, parent_watch, &parent_new_stats, parent_watch->recursive, parent_watch->hidden)) {
 							if (!parent->stability) {
 								parent->stability = stability_create();
 							}
@@ -1077,7 +1090,7 @@ bool scanner_ready(monitor_t *monitor, entity_t *state, struct timespec *current
 }
 
 /* Find the most recently modified file in a directory */
-char *scanner_newest(const char *dir_path) {
+char *scanner_newest(const char *dir_path, const watch_t *watch) {
 	DIR *dir;
 	struct dirent *dirent;
 	struct stat info;
@@ -1095,12 +1108,13 @@ char *scanner_newest(const char *dir_path) {
 			continue;
 		}
 
-		/* Skip .DS_Store files created by macOS */
-		if (strcmp(dirent->d_name, ".DS_Store") == 0) {
+		snprintf(path, sizeof(path), "%s/%s", dir_path, dirent->d_name);
+		
+		/* Skip excluded paths */
+		if (watch && config_exclude_match(watch, path)) {
 			continue;
 		}
-
-		snprintf(path, sizeof(path), "%s/%s", dir_path, dirent->d_name);
+		
 		if (stat(path, &info) == 0) {
 			/* Consider both modification time and change time */
 			time_t latest_time = (info.st_mtime > info.st_ctime) ? info.st_mtime : info.st_ctime;
@@ -1117,7 +1131,7 @@ char *scanner_newest(const char *dir_path) {
 }
 
 /* Find all files modified since a specific time */
-char *scanner_modified(const char *base_path, time_t since_time, bool recursive, bool basename) {
+char *scanner_modified(const char *base_path, const watch_t *watch, time_t since_time, bool recursive, bool basename) {
 	DIR *dir;
 	struct dirent *dirent;
 	struct stat info;
@@ -1148,12 +1162,13 @@ char *scanner_modified(const char *base_path, time_t since_time, bool recursive,
 			continue;
 		}
 
-		/* Skip .DS_Store files created by macOS */
-		if (strcmp(dirent->d_name, ".DS_Store") == 0) {
+		snprintf(path, sizeof(path), "%s/%s", base_path, dirent->d_name);
+		
+		/* Skip excluded paths */
+		if (watch && config_exclude_match(watch, path)) {
 			continue;
 		}
-
-		snprintf(path, sizeof(path), "%s/%s", base_path, dirent->d_name);
+		
 		if (stat(path, &info) != 0) {
 			continue;
 		}
@@ -1187,7 +1202,7 @@ char *scanner_modified(const char *base_path, time_t since_time, bool recursive,
 			}
 		} else if (S_ISDIR(info.st_mode) && recursive) {
 			/* Recursively scan subdirectory */
-			char *subdir_result = scanner_modified(path, since_time, recursive, basename);
+			char *subdir_result = scanner_modified(path, watch, since_time, recursive, basename);
 			if (subdir_result && strlen(subdir_result) > 0) {
 				size_t subdir_len = strlen(subdir_result);
 				size_t required_size = result_size + subdir_len + 2; /* +2 for newline and null terminator */

@@ -4,6 +4,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <limits.h>
+#include <fnmatch.h>
 
 #include "config.h"
 #include "registry.h"
@@ -216,6 +217,15 @@ void config_destroy_watch(watch_t *watch) {
 	free(watch->path);
 	free(watch->command);
 	free(watch->source_pattern);
+	
+	/* Free exclude patterns array */
+	if (watch->exclude) {
+		for (int i = 0; i < watch->num_exclude; i++) {
+			free(watch->exclude[i]);
+		}
+		free(watch->exclude);
+	}
+	
 	free(watch);
 }
 
@@ -246,12 +256,35 @@ watch_t *config_clone_watch(const watch_t *source) {
 	clone->complexity = source->complexity;
 	clone->processing_delay = source->processing_delay;
 	clone->is_dynamic = source->is_dynamic;
+	
+	/* Copy exclude patterns array */
+	clone->num_exclude = source->num_exclude;
+	if (source->num_exclude > 0 && source->exclude) {
+		clone->exclude = malloc(source->num_exclude * sizeof(char *));
+		if (clone->exclude) {
+			for (int i = 0; i < source->num_exclude; i++) {
+				clone->exclude[i] = source->exclude[i] ? strdup(source->exclude[i]) : NULL;
+			}
+		} else {
+			clone->num_exclude = 0;
+		}
+	} else {
+		clone->exclude = NULL;
+	}
 
 	/* Check for strdup failures */
-	if ((source->name && !clone->name) ||
-	    (source->path && !clone->path) ||
-	    (source->command && !clone->command) ||
-	    (source->source_pattern && !clone->source_pattern)) {
+	bool exclude_failure = false;
+	if (source->num_exclude > 0 && source->exclude) {
+		for (int i = 0; i < source->num_exclude; i++) {
+			if (source->exclude[i] && !clone->exclude[i]) {
+				exclude_failure = true;
+				break;
+			}
+		}
+	}
+	
+	if ((source->name && !clone->name) || (source->path && !clone->path) || (source->command && !clone->command) ||
+	    (source->source_pattern && !clone->source_pattern) || exclude_failure) {
 		log_message(ERROR, "Failed to allocate strings for watch clone");
 		config_destroy_watch(clone);
 		return NULL;
@@ -435,6 +468,10 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 			current_watch->environment = false; /* Default to not injecting environment variables */
 			current_watch->processing_delay = 0; /* Default to no delay */
 			current_watch->complexity = 1.0; /* Default complexity multiplier */
+			
+			/* Initialize exclude patterns */
+			current_watch->exclude = NULL;
+			current_watch->num_exclude = 0;
 
 			/* Initialize dynamic tracking fields */
 			current_watch->is_dynamic = false;
@@ -575,6 +612,32 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 				} else {
 					current_watch->processing_delay = processing_delay_value;
 				}
+			} else if (strcasecmp(key, "exclude") == 0 || strcasecmp(key, "ignore") == 0) {
+				char *patterns = strdup(value);
+				if (patterns == NULL) {
+					log_message(ERROR, "Failed to allocate memory for exclude patterns at line %d",
+								line_number);
+					config_destroy_watch(current_watch);
+					fclose(fp);
+					return false;
+				}
+				char *token, *saveptr;
+				token = strtok_r(patterns, ",", &saveptr);
+				while (token != NULL) {
+					char *trimmed_pattern = trim(token);
+					if (strlen(trimmed_pattern) > 0) {
+						if (!config_exclude_add(current_watch, trimmed_pattern)) {
+							log_message(ERROR, "Failed to add exclude pattern '%s' at line %d",
+										trimmed_pattern, line_number);
+							free(patterns);
+							config_destroy_watch(current_watch);
+							fclose(fp);
+							return false;
+						}
+					}
+					token = strtok_r(NULL, ",", &saveptr);
+				}
+				free(patterns);
 			} else {
 				log_message(WARNING, "Unknown key at line %d: %s", line_number, key);
 			}
@@ -640,4 +703,56 @@ watchref_t config_get_watchref(config_t *config, int index) {
 	}
 
 	return config->watchrefs[index];
+}
+
+/* Add an exclude pattern to a watch */
+bool config_exclude_add(watch_t *watch, const char *pattern) {
+	if (!watch || !pattern || strlen(pattern) == 0) {
+		return false;
+	}
+
+	/* Expand exclude array */
+	char **new_exclude = realloc(watch->exclude, (watch->num_exclude + 1) * sizeof(char *));
+	if (new_exclude == NULL) {
+		log_message(ERROR, "Failed to allocate memory for exclude pattern");
+		return false;
+	}
+
+	watch->exclude = new_exclude;
+	watch->exclude[watch->num_exclude] = strdup(pattern);
+	if (watch->exclude[watch->num_exclude] == NULL) {
+		log_message(ERROR, "Failed to duplicate exclude pattern: %s", pattern);
+		return false;
+	}
+
+	watch->num_exclude++;
+	log_message(DEBUG, "Added exclude pattern: %s", pattern);
+	return true;
+}
+
+/* Check if a path matches any exclude pattern in a watch */
+bool config_exclude_match(const watch_t *watch, const char *path) {
+	if (!watch || !path || watch->num_exclude == 0 || !watch->exclude) {
+		return false;
+	}
+
+	for (int i = 0; i < watch->num_exclude; i++) {
+		const char *pattern = watch->exclude[i];
+		if (!pattern) continue;
+
+		/* Use fnmatch for glob pattern matching */
+		if (fnmatch(pattern, path, FNM_PATHNAME) == 0) {
+			log_message(DEBUG, "Path '%s' matches exclude pattern '%s'", path, pattern);
+			return true;
+		}
+
+		/* Also try relative path matching - extract basename and match against pattern */
+		const char *basename = strrchr(path, '/');
+		if (basename && fnmatch(pattern, basename + 1, 0) == 0) {
+			log_message(DEBUG, "Path '%s' basename matches exclude pattern '%s'", path, pattern);
+			return true;
+		}
+	}
+
+	return false;
 }

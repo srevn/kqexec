@@ -466,7 +466,7 @@ optype_t events_operation(monitor_t *monitor, entity_t *state, filter_t filter) 
 			if (state->stability) {
 				watch_t *watch = registry_get(monitor->registry, state->watchref);
 				if (watch) {
-					scanner_scan(state->node->path, &state->stability->stats, watch->recursive, watch->hidden);
+					scanner_scan(state->node->path, watch, &state->stability->stats, watch->recursive, watch->hidden);
 					state->stability->prev_stats = state->stability->stats;
 				}
 			}
@@ -525,6 +525,12 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 
 	log_message(DEBUG, "Processing event for %s (watch: %s, type: %s)",
 	            event->path, watch->name, filter_to_string(event->type));
+
+	/* Check if path is excluded by patterns */
+	if (config_exclude_match(watch, event->path)) {
+		log_message(DEBUG, "Skipping excluded path: %s", event->path);
+		return false;
+	}
 
 	/* Handle config file events specially for hot reload */
 	if (strcmp(watch->name, "__config_file__") == 0) {

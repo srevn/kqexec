@@ -187,7 +187,7 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 	if (strstr(result, "%l")) {
 		/* Use current event time with 1-second buffer to catch files modified around this event */
 		time_t since_time = event->wall_time.tv_sec - 1;
-		char *modified_files = scanner_modified(watch->path, since_time, watch->recursive, true);
+		char *modified_files = scanner_modified(watch->path, watch, since_time, watch->recursive, true);
 		if (modified_files) {
 			command_substitute(result, "%l", modified_files);
 			free(modified_files);
@@ -200,7 +200,7 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 	if (strstr(result, "%L")) {
 		/* Use current event time with 1-second buffer to catch files modified around this event */
 		time_t since_time = event->wall_time.tv_sec - 1;
-		char *modified_files = scanner_modified(watch->path, since_time, watch->recursive, false);
+		char *modified_files = scanner_modified(watch->path, watch, since_time, watch->recursive, false);
 		if (modified_files) {
 			command_substitute(result, "%L", modified_files);
 			free(modified_files);
@@ -600,7 +600,7 @@ void command_environment(monitor_t *monitor, watchref_t watchref, const event_t 
 
 	/* KQ_MODIFIED_FILES - recent files modified around this event */
 	time_t since_time = event->wall_time.tv_sec - 1;
-	char *modified_files = scanner_modified(watch->path, since_time, watch->recursive, true);
+	char *modified_files = scanner_modified(watch->path, watch, since_time, watch->recursive, true);
 	if (modified_files) {
 		setenv("KQ_MODIFIED_FILES", modified_files, 1);
 		free(modified_files);
