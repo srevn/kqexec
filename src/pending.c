@@ -1,17 +1,18 @@
+#include "pending.h"
+
+#include <dirent.h>
+#include <fnmatch.h>
+#include <glob.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <sys/types.h>
 #include <sys/stat.h>
-#include <fnmatch.h>
-#include <dirent.h>
-#include <glob.h>
+#include <sys/types.h>
+#include <unistd.h>
 
-#include "monitor.h"
-#include "pending.h"
-#include "logger.h"
 #include "config.h"
+#include "logger.h"
+#include "monitor.h"
 #include "registry.h"
 
 /* Check if a path contains glob patterns */
@@ -39,8 +40,7 @@ static char *pending_join(const char *parent, const char *component) {
 	if (!result) return NULL;
 
 	strcpy(result, parent);
-	if (needs_slash)
-		strcat(result, "/");
+	if (needs_slash) strcat(result, "/");
 	strcat(result, component);
 	return result;
 }
@@ -50,8 +50,7 @@ static watcher_t *pending_watcher(monitor_t *monitor, const char *path, watchref
 	if (!monitor || !path || !watchref_valid(watchref)) return NULL;
 
 	for (int i = 0; i < monitor->num_watches; i++) {
-		if (strcmp(monitor->watches[i]->path, path) == 0 &&
-		    watchref_equal(monitor->watches[i]->watchref, watchref)) {
+		if (strcmp(monitor->watches[i]->path, path) == 0 && watchref_equal(monitor->watches[i]->watchref, watchref)) {
 			return monitor->watches[i];
 		}
 	}
@@ -335,7 +334,7 @@ bool pending_add(monitor_t *monitor, const char *target_path, watchref_t watchre
 	monitor->num_pending++;
 
 	log_message(DEBUG, "Added pending watch (%s): target=%s, parent=%s, next=%s",
-	            is_glob ? "glob" : "exact", target_path, parent, next_component);
+				is_glob ? "glob" : "exact", target_path, parent, next_component);
 	return true;
 }
 
@@ -347,7 +346,7 @@ static void pending_promote_match(monitor_t *monitor, pending_t *pending, const 
 	}
 
 	log_message(DEBUG, "Promoting glob match: %s from pattern %s",
-	            path, pending->glob_pattern ? pending->glob_pattern : "unknown");
+				path, pending->glob_pattern ? pending->glob_pattern : "unknown");
 
 	/* Check if a watch for this path with the same name already exists */
 	if (monitor->config && path) {
@@ -363,10 +362,10 @@ static void pending_promote_match(monitor_t *monitor, pending_t *pending, const 
 		if (watchrefs) {
 			for (uint32_t i = 0; i < num_active; i++) {
 				watch_t *watch = registry_get(monitor->registry, watchrefs[i]);
-				if (watch && watch->path && watch->name &&
-				    strcmp(watch->path, path) == 0 && strcmp(watch->name, pending_watch->name) == 0) {
+				if (watch && watch->path && watch->name && strcmp(watch->path, path) == 0 &&
+					strcmp(watch->name, pending_watch->name) == 0) {
 					log_message(INFO, "Watch for %s with name '%s' from pattern %s already exists, skipping promotion",
-					            path, watch->name, pending->glob_pattern);
+								path, watch->name, pending->glob_pattern);
 					free(watchrefs);
 					return;
 				}
@@ -420,8 +419,8 @@ static void pending_promote_match(monitor_t *monitor, pending_t *pending, const 
 		/* Find the watch with matching path and name */
 		for (uint32_t i = 0; i < num_active; i++) {
 			watch_t *watch = registry_get(monitor->registry, watchrefs[i]);
-			if (watch && watch->path && watch->name &&
-			    strcmp(watch->path, path) == 0 && strcmp(watch->name, resolved_watch->name) == 0) {
+			if (watch && watch->path && watch->name && strcmp(watch->path, path) == 0 &&
+				strcmp(watch->name, resolved_watch->name) == 0) {
 				resolved_ref = watchrefs[i];
 				break;
 			}
@@ -430,8 +429,8 @@ static void pending_promote_match(monitor_t *monitor, pending_t *pending, const 
 	}
 
 	if (watchref_valid(resolved_ref)) {
-		log_message(INFO, "Adding resolved watch to monitoring system: %s (watchref %u:%u)",
-		            path, resolved_ref.watch_id, resolved_ref.generation);
+		log_message(INFO, "Adding resolved watch to monitoring system: %s (watchref %u:%u)", path,
+					resolved_ref.watch_id, resolved_ref.generation);
 	} else {
 		log_message(ERROR, "Could not find watchref for newly added watch: %s", path);
 		return;
@@ -456,9 +455,8 @@ static void pending_intermediate(monitor_t *monitor, pending_t *pending, const c
 	/* Check if a pending watch for this intermediate parent, glob pattern, and watchref already exists */
 	for (int i = 0; i < monitor->num_pending; i++) {
 		pending_t *p = monitor->pending[i];
-		if (p->is_glob && strcmp(p->current_parent, path) == 0 &&
-		    p->glob_pattern && strcmp(p->glob_pattern, pending->glob_pattern) == 0 &&
-		    watchref_equal(p->watchref, pending->watchref)) {
+		if (p->is_glob && strcmp(p->current_parent, path) == 0 && p->glob_pattern &&
+			strcmp(p->glob_pattern, pending->glob_pattern) == 0 && watchref_equal(p->watchref, pending->watchref)) {
 			log_message(DEBUG, "Pending watch for intermediate path %s with same watchref already exists", path);
 			return;
 		}
@@ -510,7 +508,7 @@ static void pending_intermediate(monitor_t *monitor, pending_t *pending, const c
 			monitor->num_pending++;
 
 			log_message(DEBUG, "Added new glob pending watch: target=%s, parent=%s, next=%s",
-			            new_pending->target_path, new_pending->current_parent, new_pending->next_component);
+						new_pending->target_path, new_pending->current_parent, new_pending->next_component);
 
 			/* Recursively process the new parent to handle pre-existing subdirectories */
 			pending_process(monitor, new_pending->current_parent);
@@ -537,7 +535,7 @@ static void pending_process_glob(monitor_t *monitor, pending_t *pending) {
 
 	if (match_count > 0) {
 		log_message(DEBUG, "Found %d glob matches in %s for pattern %s",
-		            match_count, pending->current_parent, pending->next_component);
+					match_count, pending->current_parent, pending->next_component);
 
 		/* For each matching file, check if it completes the pattern */
 		for (int m = 0; m < match_count; m++) {
@@ -601,7 +599,7 @@ static void pending_process_exact(monitor_t *monitor, pending_t *pending, int in
 			pending->parent_watcher = pending_watcher(monitor, pending->current_parent, pending->watchref);
 
 			log_message(DEBUG, "Updated pending watch: target=%s, new_parent=%s, next=%s",
-			            pending->target_path, pending->current_parent, pending->next_component);
+						pending->target_path, pending->current_parent, pending->next_component);
 		}
 	}
 }
@@ -657,12 +655,12 @@ void pending_delete(monitor_t *monitor, const char *deleted_path) {
 
 		/* Check if this pending watch is affected by the deletion */
 		bool affected = (strcmp(pending->current_parent, deleted_path) == 0) ||
-		                (strncmp(pending->current_parent, deleted_path, deleted_path_len) == 0 &&
-		                 pending->current_parent[deleted_path_len] == '/');
+						(strncmp(pending->current_parent, deleted_path, deleted_path_len) == 0 &&
+						 pending->current_parent[deleted_path_len] == '/');
 
 		if (affected) {
 			log_message(DEBUG, "Pending watch (%s) affected by deletion of %s: target=%s, current_parent=%s",
-			            pending->is_glob ? "glob" : "exact", deleted_path, pending->target_path, pending->current_parent);
+						pending->is_glob ? "glob" : "exact", deleted_path, pending->target_path, pending->current_parent);
 
 			/* Remove and re-add to find new deepest parent */
 			char *target_path = strdup(pending->target_path);
@@ -724,7 +722,7 @@ void pending_handle_deactivation(watchref_t watchref, void *context) {
 	}
 
 	log_message(DEBUG, "Watch ID %u (gen %u) deactivated, cleaning up pending entries",
-	            watchref.watch_id, watchref.generation);
+				watchref.watch_id, watchref.generation);
 
 	int entries_removed = 0;
 
@@ -733,7 +731,7 @@ void pending_handle_deactivation(watchref_t watchref, void *context) {
 		pending_t *pending = monitor->pending[i];
 		if (pending && watchref_equal(pending->watchref, watchref)) {
 			log_message(DEBUG, "Removing orphaned pending entry for path: %s",
-			            pending->target_path ? pending->target_path : "<null>");
+						pending->target_path ? pending->target_path : "<null>");
 
 			/* Remove using the public pending_remove function for proper cleanup */
 			pending_remove(monitor, i);

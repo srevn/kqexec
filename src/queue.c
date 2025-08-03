@@ -1,9 +1,10 @@
+#include "queue.h"
+
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
-#include <limits.h>
 #include <sys/types.h>
 
-#include "queue.h"
 #include "logger.h"
 #include "registry.h"
 
@@ -15,7 +16,7 @@ static void queue_handle_deactivation(watchref_t watchref, void *context) {
 	}
 
 	log_message(DEBUG, "Queue observer: Watch ID %u (gen %u) deactivated, cleaning up queue",
-	            watchref.watch_id, watchref.generation);
+				watchref.watch_id, watchref.generation);
 
 	/* Scan all queue items for the deactivated watch */
 	for (int i = queue->size - 1; i >= 0; i--) {
@@ -29,7 +30,7 @@ static void queue_handle_deactivation(watchref_t watchref, void *context) {
 				check->watchrefs[write_pos++] = check->watchrefs[read_pos];
 			} else {
 				log_message(DEBUG, "Removed deactivated watch from queue item: %s",
-				            check->path ? check->path : "<null>");
+							check->path ? check->path : "<null>");
 			}
 		}
 		check->num_watches = write_pos;
@@ -37,7 +38,7 @@ static void queue_handle_deactivation(watchref_t watchref, void *context) {
 		/* If check has no watches left, remove entire check */
 		if (check->num_watches == 0) {
 			log_message(DEBUG, "Removing empty queue item after watch cleanup: %s",
-			            check->path ? check->path : "<null>");
+						check->path ? check->path : "<null>");
 			queue_remove_by_index(queue, i);
 		}
 	}
@@ -78,7 +79,7 @@ queue_t *queue_create(registry_t *registry, int initial_capacity) {
 	}
 
 	log_message(DEBUG, "Initialized deferred check queue with capacity %d",
-	            initial_capacity);
+				initial_capacity);
 	return queue;
 }
 
@@ -287,7 +288,7 @@ void queue_upsert(queue_t *queue, const char *path, watchref_t watchref, struct 
 		heap_down(queue->items, queue->size, queue_index);
 
 		log_message(DEBUG, "Updated check time for %s (new time: %ld.%09ld)",
-		            path, (long) next_check.tv_sec, next_check.tv_nsec);
+					path, (long) next_check.tv_sec, next_check.tv_nsec);
 		return;
 	}
 
@@ -346,7 +347,7 @@ void queue_upsert(queue_t *queue, const char *path, watchref_t watchref, struct 
 	heap_up(queue->items, new_index);
 
 	log_message(DEBUG, "Added new deferred check for %s (next check at %ld.%09ld)",
-	            path, (long) next_check.tv_sec, next_check.tv_nsec);
+				path, (long) next_check.tv_sec, next_check.tv_nsec);
 }
 
 /* Remove an entry from the queue */

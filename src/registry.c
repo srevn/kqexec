@@ -1,8 +1,9 @@
+#include "registry.h"
+
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
-#include <errno.h>
 
-#include "registry.h"
 #include "config.h"
 #include "logger.h"
 
@@ -102,11 +103,11 @@ static bool registry_expand(registry_t *registry) {
 
 	/* Zero out new entries */
 	memset(&registry->watches[registry->capacity], 0,
-	       (new_capacity - registry->capacity) * sizeof(watch_t *));
+		   (new_capacity - registry->capacity) * sizeof(watch_t *));
 	memset(&registry->generations[registry->capacity], 0,
-	       (new_capacity - registry->capacity) * sizeof(uint32_t));
+		   (new_capacity - registry->capacity) * sizeof(uint32_t));
 	memset(&registry->states[registry->capacity], 0,
-	       (new_capacity - registry->capacity) * sizeof(lifecycle_t));
+		   (new_capacity - registry->capacity) * sizeof(lifecycle_t));
 
 	log_message(DEBUG, "Expanded registry capacity from %u to %u", registry->capacity, new_capacity);
 	registry->capacity = new_capacity;
@@ -158,8 +159,8 @@ struct watch *registry_get(registry_t *registry, watchref_t watchref) {
 
 	watch_t *watch = NULL;
 	if (watchref.watch_id < registry->capacity &&
-	    registry->generations[watchref.watch_id] == watchref.generation &&
-	    registry->states[watchref.watch_id] == WATCH_STATE_ACTIVE) {
+		registry->generations[watchref.watch_id] == watchref.generation &&
+		registry->states[watchref.watch_id] == WATCH_STATE_ACTIVE) {
 		watch = registry->watches[watchref.watch_id];
 	}
 
@@ -176,8 +177,8 @@ bool registry_valid(registry_t *registry, watchref_t watchref) {
 	pthread_rwlock_rdlock(&registry->lock);
 
 	bool valid = (watchref.watch_id < registry->capacity &&
-	              registry->generations[watchref.watch_id] == watchref.generation &&
-	              registry->states[watchref.watch_id] == WATCH_STATE_ACTIVE);
+				  registry->generations[watchref.watch_id] == watchref.generation &&
+				  registry->states[watchref.watch_id] == WATCH_STATE_ACTIVE);
 
 	pthread_rwlock_unlock(&registry->lock);
 	return valid;
@@ -294,15 +295,15 @@ void registry_deactivate(registry_t *registry, watchref_t watchref) {
 
 	/* Validate reference */
 	if (watchref.watch_id >= registry->capacity ||
-	    registry->generations[watchref.watch_id] != watchref.generation ||
-	    registry->states[watchref.watch_id] != WATCH_STATE_ACTIVE) {
+		registry->generations[watchref.watch_id] != watchref.generation ||
+		registry->states[watchref.watch_id] != WATCH_STATE_ACTIVE) {
 		pthread_rwlock_unlock(&registry->lock);
 		return; /* Invalid or already deactivated */
 	}
 
 	watch_t *watch = registry->watches[watchref.watch_id];
 	log_message(DEBUG, "Deactivating watch '%s' (ID: %u, Gen: %u)",
-	            watch ? watch->name : "unknown", watchref.watch_id, watchref.generation);
+				watch ? watch->name : "unknown", watchref.watch_id, watchref.generation);
 
 	/* Phase 1: Notify all observers (releases and reacquires lock) */
 	registry_notify(registry, watchref);
@@ -315,7 +316,7 @@ void registry_deactivate(registry_t *registry, watchref_t watchref) {
 	pthread_rwlock_unlock(&registry->lock);
 
 	log_message(DEBUG, "Watch deactivated, generation incremented to %u",
-	            registry->generations[watchref.watch_id]);
+				registry->generations[watchref.watch_id]);
 }
 
 /* Garbage collect inactive watches */

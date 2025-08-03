@@ -1,9 +1,10 @@
 #ifndef LOGGER_H
 #define LOGGER_H
 
-#include <syslog.h>
+#include <stdbool.h>
 #include <string.h>
 #include <sys/select.h>
+#include <syslog.h>
 
 /* Log levels (matching syslog levels) */
 typedef enum loglevel {

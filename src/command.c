@@ -1,24 +1,25 @@
+#include "command.h"
+
+#include <errno.h>
+#include <libgen.h>
+#include <pthread.h>
+#include <pwd.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
-#include <unistd.h>
-#include <pwd.h>
-#include <signal.h>
-#include <errno.h>
-#include <pthread.h>
-#include <libgen.h>
+#include <sys/select.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
-#include <sys/select.h>
+#include <time.h>
+#include <unistd.h>
 
-#include "command.h"
-#include "threads.h"
-#include "states.h"
-#include "stability.h"
+#include "events.h"
 #include "logger.h"
 #include "scanner.h"
-#include "events.h"
+#include "stability.h"
+#include "states.h"
+#include "threads.h"
 
 /* Module-scoped threads reference */
 static threads_t *command_threads = NULL;
@@ -60,9 +61,7 @@ void command_debounce_time(int milliseconds) {
 }
 
 /* Get debounce time */
-int command_get_debounce_time(void) {
-	return debounce_ms;
-}
+int command_get_debounce_time(void) { return debounce_ms; }
 
 /* Helper function to substitute a placeholder in a string */
 static void command_substitute(char *result, const char *placeholder, const char *value) {
@@ -71,8 +70,7 @@ static void command_substitute(char *result, const char *placeholder, const char
 		char temp[MAX_CMD_LEN];
 		*current_pos = '\0';
 		strcpy(temp, result);
-		snprintf(temp + strlen(temp), MAX_CMD_LEN - strlen(temp), "%s%s",
-		         value, current_pos + strlen(placeholder));
+		snprintf(temp + strlen(temp), MAX_CMD_LEN - strlen(temp), "%s%s", value, current_pos + strlen(placeholder));
 		strcpy(result, temp);
 	}
 }
@@ -395,10 +393,8 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 		/* Read until both pipes are closed */
 		while (stdout_open || stderr_open) {
 			FD_ZERO(&read_fds);
-			if (stdout_open)
-				FD_SET(stdout_pipe[0], &read_fds);
-			if (stderr_open)
-				FD_SET(stderr_pipe[0], &read_fds);
+			if (stdout_open) FD_SET(stdout_pipe[0], &read_fds);
+			if (stderr_open) FD_SET(stderr_pipe[0], &read_fds);
 
 			/* No timeout - wait until data is available or pipes close */
 			int select_result = select(max_fd + 1, &read_fds, NULL, NULL, NULL);
@@ -494,7 +490,7 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 
 	/* Log command completion */
 	log_message(INFO, "[%s] Finished execution (pid %d, duration: %lds, exit: %d)",
-	            watch->name, pid, end_time - start, WEXITSTATUS(status));
+				watch->name, pid, end_time - start, WEXITSTATUS(status));
 
 	/* Clear command executing flag and reset baseline */
 	if (state) {
@@ -619,7 +615,7 @@ void command_cleanup(threads_t *threads) {
 
 		if (pending_commands > 0) {
 			log_message(INFO, "Waiting for %d pending command%s to finish...",
-			            pending_commands, pending_commands == 1 ? "" : "s");
+						pending_commands, pending_commands == 1 ? "" : "s");
 		}
 
 		threads_wait(exec_threads);

@@ -1,11 +1,12 @@
+#include "logger.h"
+
+#include <pthread.h>
+#include <stdarg.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdarg.h>
 #include <time.h>
-#include <pthread.h>
-#include <stdbool.h>
-#include "logger.h"
 
 /* Global flags */
 static loglevel_t current_loglevel = NOTICE;

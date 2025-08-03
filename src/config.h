@@ -46,7 +46,7 @@ typedef struct watch {
 	int processing_delay;                  /* Delay in milliseconds before processing events (0 = no delay) */
 	char **exclude;                        /* Array of exclude patterns */
 	int num_exclude;                       /* Number of exclude patterns */
-	
+
 	/* Dynamic watch tracking fields */
 	bool is_dynamic;                       /* True if created from glob promotion */
 	char *source_pattern;                  /* Original glob pattern that created this watch */

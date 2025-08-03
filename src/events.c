@@ -1,19 +1,20 @@
+#include "events.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <sys/time.h>
 #include <sys/event.h>
 #include <sys/stat.h>
+#include <sys/time.h>
+#include <unistd.h>
 
-#include "events.h"
-#include "monitor.h"
-#include "logger.h"
 #include "command.h"
-#include "states.h"
-#include "stability.h"
-#include "scanner.h"
+#include "logger.h"
+#include "monitor.h"
 #include "registry.h"
+#include "scanner.h"
+#include "stability.h"
+#include "states.h"
 
 /* Initialize a sync request structure */
 void events_sync_init(sync_t *sync) {
@@ -114,7 +115,7 @@ void events_schedule(monitor_t *monitor, watchref_t watchref, event_t *event, ki
 			existing->process_time = process_time;
 
 			log_message(DEBUG, "Updated existing delayed event for %s (watch: %s) to process in %d ms",
-			            existing->event.path, watch->name, watch->processing_delay);
+						existing->event.path, watch->name, watch->processing_delay);
 			return;
 		}
 	}
@@ -143,7 +144,7 @@ void events_schedule(monitor_t *monitor, watchref_t watchref, event_t *event, ki
 	delayed->process_time = process_time;
 
 	log_message(DEBUG, "Scheduled delayed event for %s (watch: %s) in %d ms",
-	            event->path, watch->name, watch->processing_delay);
+				event->path, watch->name, watch->processing_delay);
 }
 
 /* Process delayed events that are ready */
@@ -162,20 +163,19 @@ void events_delayed(monitor_t *monitor) {
 
 		/* Check if this event is ready to process */
 		if (current_time.tv_sec > delayed->process_time.tv_sec ||
-		    (current_time.tv_sec == delayed->process_time.tv_sec && current_time.tv_nsec >= delayed->process_time.tv_nsec)) {
+			(current_time.tv_sec == delayed->process_time.tv_sec && current_time.tv_nsec >= delayed->process_time.tv_nsec)) {
 			/* Resolve watch reference at processing time */
 			watch_t *watch = registry_get(monitor->registry, delayed->watchref);
 			if (!watch) {
 				/* Watch was deactivated, skip this event */
-				log_message(DEBUG, "Delayed event for %s skipped - watch was deactivated",
-				            delayed->event.path);
+				log_message(DEBUG, "Delayed event for %s skipped - watch was deactivated", delayed->event.path);
 				free(delayed->event.path);
 				processed++;
 				continue;
 			}
 
 			log_message(DEBUG, "Delayed event for %s (watch: %s) expired, initiating stability check",
-			            delayed->event.path, watch->name);
+						delayed->event.path, watch->name);
 
 			/* Pass the event to the main processing function */
 			events_process(monitor, delayed->watchref, &delayed->event, delayed->kind);
@@ -210,7 +210,7 @@ int events_timeout(monitor_t *monitor, struct timespec *current_time) {
 	for (int i = 1; i < monitor->delayed_count; i++) {
 		delayed_t *delayed = &monitor->delayed_events[i];
 		if (delayed->process_time.tv_sec < earliest.tv_sec ||
-		    (delayed->process_time.tv_sec == earliest.tv_sec && delayed->process_time.tv_nsec < earliest.tv_nsec)) {
+			(delayed->process_time.tv_sec == earliest.tv_sec && delayed->process_time.tv_nsec < earliest.tv_nsec)) {
 			earliest = delayed->process_time;
 		}
 	}
@@ -218,7 +218,7 @@ int events_timeout(monitor_t *monitor, struct timespec *current_time) {
 	/* Calculate timeout in milliseconds */
 	long timeout_ms;
 	if (current_time->tv_sec > earliest.tv_sec ||
-	    (current_time->tv_sec == earliest.tv_sec && current_time->tv_nsec > earliest.tv_nsec)) {
+		(current_time->tv_sec == earliest.tv_sec && current_time->tv_nsec > earliest.tv_nsec)) {
 		timeout_ms = 1; /* Already overdue */
 	} else {
 		struct timespec diff_time;
@@ -296,9 +296,8 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 
 				kind_t kind = (watch->target == WATCH_FILE) ? ENTITY_FILE : ENTITY_DIRECTORY;
 
-				log_message(DEBUG, "Event: path=%s, flags=0x%x -> type=%s (watch: %s)",
-				            watcher->path, events[i].fflags, filter_to_string(event.type),
-				            watch->name);
+				log_message(DEBUG, "Event: path=%s, flags=0x%x -> type=%s (watch: %s)", watcher->path, events[i].fflags,
+							filter_to_string(event.type), watch->name);
 
 				/* Proactive validation for directory events on NOTE_WRITE */
 				if (watch->target == WATCH_DIRECTORY && (events[i].fflags & NOTE_WRITE)) {
@@ -345,7 +344,7 @@ struct timespec *timeout_calculate(monitor_t *monitor, struct timespec *timeout,
 		/* Debug output for the queue status */
 		if (monitor->check_queue->items[0].path) {
 			log_message(DEBUG, "Deferred queue status: %d entries, next check for path %s",
-			            monitor->check_queue->size, monitor->check_queue->items[0].path);
+						monitor->check_queue->size, monitor->check_queue->items[0].path);
 		}
 
 		/* Get the earliest check time (top of min-heap) */
@@ -353,8 +352,7 @@ struct timespec *timeout_calculate(monitor_t *monitor, struct timespec *timeout,
 
 		/* Calculate relative timeout */
 		if (current_time->tv_sec < next_check.tv_sec ||
-		    (current_time->tv_sec == next_check.tv_sec &&
-		     current_time->tv_nsec < next_check.tv_nsec)) {
+			(current_time->tv_sec == next_check.tv_sec && current_time->tv_nsec < next_check.tv_nsec)) {
 			/* Time until next check */
 			timeout->tv_sec = next_check.tv_sec - current_time->tv_sec;
 			if (next_check.tv_nsec >= current_time->tv_nsec) {
@@ -523,8 +521,8 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 		return false;
 	}
 
-	log_message(DEBUG, "Processing event for %s (watch: %s, type: %s)",
-	            event->path, watch->name, filter_to_string(event->type));
+	log_message(DEBUG, "Processing event for %s (watch: %s, type: %s)", event->path, watch->name,
+				filter_to_string(event->type));
 
 	/* Check if path is excluded by patterns */
 	if (kind == ENTITY_FILE) {
@@ -545,8 +543,7 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 			return false;
 		}
 
-		log_message(DEBUG, "Directory event for %s triggered by non-excluded files: %s",
-		            event->path, modified_files);
+		log_message(DEBUG, "Directory event for %s triggered by non-excluded files: %s", event->path, modified_files);
 		free(modified_files);
 	}
 
@@ -571,8 +568,8 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 	/* Check if command is executing for this path or its root - defer events during execution */
 	entity_t *root = stability_root(monitor, state);
 	if (state->node->executing || (root && root->node->executing)) {
-		log_message(DEBUG, "Deferring event for %s, command is currently executing %s",
-		            event->path, root ? root->node->path : "N/A");
+		log_message(DEBUG, "Deferring event for %s, command is currently executing %s", event->path,
+					root ? root->node->path : "N/A");
 		/* Schedule event for reprocessing after a short delay */
 		events_schedule(monitor, watchref, event, kind);
 		return false;
@@ -602,8 +599,8 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 			/* Check if this pending watch's current_parent is a child of the changed directory */
 			size_t parent_len = strlen(state->node->path);
 			if (strlen(pending->current_parent) > parent_len &&
-			    strncmp(pending->current_parent, state->node->path, parent_len) == 0 &&
-			    pending->current_parent[parent_len] == '/') {
+				strncmp(pending->current_parent, state->node->path, parent_len) == 0 &&
+				pending->current_parent[parent_len] == '/') {
 				/* Check if the current_parent still exists */
 				struct stat info;
 				if (stat(pending->current_parent, &info) != 0) {
@@ -618,7 +615,7 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 	filter_t filter_for_mask = operation_to_filter(optype);
 	if ((watch->filter & filter_for_mask) == 0) {
 		log_message(DEBUG, "Operation maps to event type %s, which is not in watch mask for %s",
-		            filter_to_string(filter_for_mask), watch->name);
+					filter_to_string(filter_for_mask), watch->name);
 		return false;
 	}
 
@@ -630,11 +627,10 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 			.type = filter_for_mask,
 			.time = state->last_time,
 			.wall_time = state->wall_time,
-			.user_id = event->user_id
-		};
+			.user_id = event->user_id};
 
 		log_message(INFO, "Executing command for %s (watch: %s, operation: %d)",
-		            state->node->path, watch->name, optype);
+					state->node->path, watch->name, optype);
 
 		/* Set executing flag to prevent race condition for async commands */
 		entity_t *root = stability_root(monitor, state);

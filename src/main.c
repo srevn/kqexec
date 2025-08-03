@@ -1,16 +1,16 @@
+#include <getopt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <getopt.h>
 
-#include "config.h"
-#include "monitor.h"
 #include "command.h"
-#include "threads.h"
+#include "config.h"
 #include "daemon.h"
 #include "logger.h"
+#include "monitor.h"
 #include "registry.h"
+#include "threads.h"
 
 /* Default configuration file */
 #define DEFAULT_CONFIG_FILE "/usr/local/etc/kqexec.conf"
@@ -62,8 +62,7 @@ int main(int argc, char *argv[]) {
 		{"loglevel", required_argument, 0, 'l'},
 		{"debounce", required_argument, 0, 'b'},
 		{"help", no_argument, 0, 'h'},
-		{0, 0, 0, 0}
-	};
+		{0, 0, 0, 0}};
 
 	while ((c = getopt_long(argc, argv, "c:dl:b:h", long_options, &option_index)) != -1) {
 		switch (c) {

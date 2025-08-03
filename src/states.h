@@ -5,8 +5,8 @@
 #include <time.h>
 
 #include "config.h"
-#include "scanner.h"
 #include "registry.h"
+#include "scanner.h"
 
 /* Forward declarations */
 typedef struct stability stability_t;
@@ -53,12 +53,12 @@ typedef struct entity {
 	/* Composed state */
 	scanner_t *scanner;                    /* NULL if not tracking activity */
 	stability_t *stability;                /* NULL if not checking stability */
-	
+
 	/* Timestamps */
 	struct timespec last_time;             /* When state was last updated (MONOTONIC) */
 	struct timespec wall_time;             /* Wall clock time (REALTIME) */
 	struct timespec op_time;               /* Timestamp of the last operation to prevent duplicates */
-	
+
 	/* Linkage for all states under the same path */
 	struct entity *next;                   /* Next state for the same path */
 } entity_t;

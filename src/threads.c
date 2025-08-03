@@ -1,8 +1,9 @@
+#include "threads.h"
+
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
-#include <pthread.h>
 
-#include "threads.h"
 #include "command.h"
 #include "logger.h"
 #include "registry.h"
@@ -67,12 +68,12 @@ static void *threads_worker(void *arg) {
 			watch_t *watch = registry_get(task->monitor->registry, task->watchref);
 			if (watch) {
 				log_message(DEBUG, "Executing async command for %s (watch: %s)",
-				            task->event->path, watch->name);
+							task->event->path, watch->name);
 				command_execute(task->monitor, task->watchref, task->event, false);
 			} else {
 				/* Watch was deactivated while task was queued */
 				log_message(DEBUG, "Skipping async command for %s - watch was deactivated",
-				            task->event->path);
+							task->event->path);
 			}
 
 			/* Clean up work task */
@@ -233,7 +234,7 @@ bool threads_submit(threads_t *threads, monitor_t *monitor, watchref_t watchref,
 	pthread_mutex_unlock(&threads->queue_mutex);
 
 	log_message(DEBUG, "Submitted command execution for %s to thread pool (queue size: %d)",
-	            event->path, threads->queue_size);
+				event->path, threads->queue_size);
 
 	return true;
 }

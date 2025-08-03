@@ -2,8 +2,8 @@
 #define EVENTS_H
 
 #include <stdbool.h>
-#include <time.h>
 #include <sys/event.h>
+#include <time.h>
 
 #include "config.h"
 #include "registry.h"

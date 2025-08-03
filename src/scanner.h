@@ -4,8 +4,8 @@
 #include <stdbool.h>
 #include <sys/types.h>
 
-#include "events.h"
 #include "config.h"
+#include "events.h"
 
 /* Forward declarations */
 typedef struct entity entity_t;

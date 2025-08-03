@@ -1,22 +1,23 @@
+#include "scanner.h"
+
+#include <dirent.h>
+#include <errno.h>
+#include <limits.h>
+#include <pthread.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
-#include <limits.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
-#include <stdbool.h>
-#include <stdint.h>
-#include <dirent.h>
-#include <pthread.h>
-#include <errno.h>
 
-#include "scanner.h"
-#include "states.h"
-#include "stability.h"
-#include "monitor.h"
-#include "logger.h"
 #include "events.h"
+#include "logger.h"
+#include "monitor.h"
+#include "stability.h"
+#include "states.h"
 
 /* Create a scanner state */
 scanner_t *scanner_create(const char *path) {
@@ -72,9 +73,9 @@ void scanner_update(entity_t *state) {
 	/* Log significant cumulative changes */
 	if (new_files != 0 || new_dirs != 0 || new_depth != 0 || new_size != 0) {
 		log_message(DEBUG, "Updated cumulative changes for %s: files=%+d (%+d), dirs=%+d (%+d), depth=%+d (%+d), size=%s (%s)",
-		            state->node->path, state->stability->delta_files, new_files, state->stability->delta_dirs,
-		            new_dirs, state->stability->delta_depth, new_depth, format_size(state->stability->delta_size, true),
-		            format_size(new_size, true));
+					state->node->path, state->stability->delta_files, new_files, state->stability->delta_dirs, new_dirs,
+					state->stability->delta_depth, new_depth, format_size(state->stability->delta_size, true),
+					format_size(new_size, true));
 	}
 }
 
@@ -90,8 +91,8 @@ bool scanner_scan(const char *dir_path, const watch_t *watch, stats_t *stats) {
 	}
 
 	/* Extract flags from watch with correct defaults */
-	bool recursive = watch ? watch->recursive : true;  /* Default: recursive for directories */
-	bool hidden = watch ? watch->hidden : false;       /* Default: exclude hidden files */
+	bool recursive = watch ? watch->recursive : true; /* Default: recursive for directories */
+	bool hidden = watch ? watch->hidden : false;	  /* Default: exclude hidden files */
 
 	/* Initialize stats with recursive fields */
 	memset(stats, 0, sizeof(stats_t));
@@ -196,7 +197,7 @@ bool scanner_compare(stats_t *prev_stats, stats_t *current_stats) {
 	/* Log depth changes */
 	if (depth_change != 0) {
 		log_message(DEBUG, "Directory tree depth changed: %d -> %d (%+d levels)",
-		            prev_stats->max_depth, current_stats->max_depth, depth_change);
+					prev_stats->max_depth, current_stats->max_depth, depth_change);
 	}
 
 	/* Allow small changes for larger directories */
@@ -240,10 +241,10 @@ bool scanner_compare(stats_t *prev_stats, stats_t *current_stats) {
 
 	/* Check if changes are within allowances */
 	if (!((total_change <= max_allowed_change || change_percentage <= max_allowed_percent) &&
-	      (depth_change == 0 || (abs(depth_change) == 1 && prev_stats->max_depth > 2)))) {
+		  (depth_change == 0 || (abs(depth_change) == 1 && prev_stats->max_depth > 2)))) {
 		log_message(DEBUG, "Directory unstable: %d/%d to %d/%d, depth %d to %d (%+d files, %+d dirs, %+d depth, %.1f%% change)",
-		            prev_stats->tree_files, prev_stats->tree_dirs, current_stats->tree_files, current_stats->tree_dirs,
-		            prev_stats->max_depth, current_stats->max_depth, file_change, dir_change, depth_change, change_percentage);
+					prev_stats->tree_files, prev_stats->tree_dirs, current_stats->tree_files, current_stats->tree_dirs,
+					prev_stats->max_depth, current_stats->max_depth, file_change, dir_change, depth_change, change_percentage);
 		is_stable = false;
 	}
 
@@ -256,7 +257,7 @@ bool scanner_compare(stats_t *prev_stats, stats_t *current_stats) {
 	/* Log if stable despite minor changes */
 	if (is_stable && (total_change > 0 || depth_change != 0)) {
 		log_message(DEBUG, "Directory considered stable despite small changes: %+d files, %+d dirs, %+d depth (%.1f%% change)",
-		            file_change, dir_change, depth_change, change_percentage);
+					file_change, dir_change, depth_change, change_percentage);
 	}
 
 	return is_stable;
@@ -279,8 +280,8 @@ bool scanner_stable(monitor_t *monitor, entity_t *context, const char *dir_path,
 	if (monitor && context) {
 		watch = registry_get(monitor->registry, context->watchref);
 	}
-	bool recursive = watch ? watch->recursive : true;  /* Default: recursive for directories */
-	bool hidden = watch ? watch->hidden : false;       /* Default: exclude hidden files */
+	bool recursive = watch ? watch->recursive : true; /* Default: recursive for directories */
+	bool hidden = watch ? watch->hidden : false;	  /* Default: exclude hidden files */
 
 	/* Initialize stats including the new recursive fields */
 	memset(stats, 0, sizeof(stats_t));
@@ -338,7 +339,7 @@ bool scanner_stable(monitor_t *monitor, entity_t *context, const char *dir_path,
 			/* Check for very recent file modifications (< 1 seconds) */
 			if (difftime(current_time, info.st_mtime) < 1.0) {
 				log_message(DEBUG, "Directory %s unstable: recent file modification (%s, %.1f seconds ago)",
-				            dir_path, dirent->d_name, difftime(current_time, info.st_mtime));
+							dir_path, dirent->d_name, difftime(current_time, info.st_mtime));
 				stats->temp_files = true;
 				is_stable = false; /* Mark as unstable but continue scanning */
 			}
@@ -421,8 +422,7 @@ void scanner_sync(monitor_t *monitor, node_t *node, entity_t *source) {
 
 		struct timespec state_time = state->scanner ? state->scanner->latest_time : state->last_time;
 		if (state_time.tv_sec > sync_time.tv_sec ||
-		    (state_time.tv_sec == sync_time.tv_sec &&
-		     state_time.tv_nsec > sync_time.tv_nsec)) {
+			(state_time.tv_sec == sync_time.tv_sec && state_time.tv_nsec > sync_time.tv_nsec)) {
 			sync_time = state_time;
 		}
 
@@ -477,8 +477,8 @@ void scanner_sync(monitor_t *monitor, node_t *node, entity_t *source) {
 			watch_t *state_watch = registry_get(monitor->registry, state->watchref);
 			watch_t *source_watch = registry_get(monitor->registry, source->watchref);
 			bool stats_compatible = (state_watch && source_watch &&
-			                         state_watch->recursive == source_watch->recursive &&
-			                         state_watch->hidden == source_watch->hidden);
+									 state_watch->recursive == source_watch->recursive &&
+									 state_watch->hidden == source_watch->hidden);
 
 			if (stats_compatible) {
 				/* Compatible watches: copy stats from source (canonical) to others */
@@ -491,7 +491,7 @@ void scanner_sync(monitor_t *monitor, node_t *node, entity_t *source) {
 						*state->stability = *source->stability;
 					}
 					log_message(DEBUG, "Shared directory statistics with compatible watch %s",
-					            state_watch ? state_watch->name : "unknown");
+								state_watch ? state_watch->name : "unknown");
 				}
 			} else {
 				/* Incompatible watches: each needs its own rescan */
@@ -507,12 +507,12 @@ void scanner_sync(monitor_t *monitor, node_t *node, entity_t *source) {
 					}
 					scanner_update(state);
 					log_message(DEBUG, "Rescanned directory for incompatible watch %s (recursive=%s, hidden=%s)",
-					            state_watch ? state_watch->name : "unknown",
-					            state_watch && state_watch->recursive ? "true" : "false",
-					            state_watch && state_watch->hidden ? "true" : "false");
+								state_watch ? state_watch->name : "unknown",
+								state_watch && state_watch->recursive ? "true" : "false",
+								state_watch && state_watch->hidden ? "true" : "false");
 				} else {
 					log_message(WARNING, "Failed to rescan directory for watch %s during sync",
-					            state_watch ? state_watch->name : "unknown");
+								state_watch ? state_watch->name : "unknown");
 				}
 			}
 		}
@@ -575,9 +575,9 @@ static void scanner_stats(monitor_t *monitor, entity_t *state, optype_t optype) 
 
 		if (state->stability) {
 			log_message(DEBUG, "Directory stats for %s: files=%d, dirs=%d, max_depth=%d (was: files=%d, dirs=%d, max_depth=%d)",
-			            state->node->path, state->stability->stats.tree_files, state->stability->stats.tree_dirs,
-			            state->stability->stats.max_depth, state->stability->prev_stats.tree_files,
-			            state->stability->prev_stats.tree_dirs, state->stability->prev_stats.max_depth);
+						state->node->path, state->stability->stats.tree_files, state->stability->stats.tree_dirs,
+						state->stability->stats.max_depth, state->stability->prev_stats.tree_files,
+						state->stability->prev_stats.tree_dirs, state->stability->prev_stats.max_depth);
 		}
 	}
 }
@@ -636,9 +636,8 @@ static void scanner_propagate(monitor_t *monitor, entity_t *state, entity_t *roo
 					watch_t *parent_watch = registry_get(monitor->registry, parent->watchref);
 					watch_t *root_watch_for_scope = registry_get(monitor->registry, root->watchref);
 					bool in_scope = (root_stats && parent_watch && root_watch_for_scope &&
-					                 parent_watch->recursive &&
-					                 parent_watch == root_watch_for_scope &&
-					                 strlen(path_copy) >= strlen(root_watch_for_scope->path));
+									 parent_watch->recursive && parent_watch == root_watch_for_scope &&
+									 strlen(path_copy) >= strlen(root_watch_for_scope->path));
 
 					if (in_scope && root->stability && parent->stability) {
 						if (parent != root) {
@@ -748,10 +747,9 @@ void scanner_track(monitor_t *monitor, entity_t *state, optype_t optype) {
 	if (!state) return;
 
 	/* Check for duplicate tracking to avoid re-processing the same event */
-	if (state->op_time.tv_sec == state->last_time.tv_sec &&
-	    state->op_time.tv_nsec == state->last_time.tv_nsec) {
+	if (state->op_time.tv_sec == state->last_time.tv_sec && state->op_time.tv_nsec == state->last_time.tv_nsec) {
 		log_message(DEBUG, "Skipping duplicate track for %s (optype=%d)",
-		            state->node ? state->node->path : "NULL", optype);
+					state->node ? state->node->path : "NULL", optype);
 		return;
 	}
 
@@ -855,18 +853,16 @@ static long scanner_adjust(entity_t *state, long base_ms) {
 
 	/* Log recent activity calculation */
 	log_message(DEBUG, "Recent activity for %s: files=%d, dirs=%d, depth=%d, size=%s, size_weight=%d (total_change=%d)",
-	            state->node->path, recent_files, recent_dirs, recent_depth,
-	            format_size(recent_size, true), size_weight, recent_change);
+				state->node->path, recent_files, recent_dirs, recent_depth,
+				format_size(recent_size, true), size_weight, recent_change);
 
 	if (state->stability) {
 		/* Calculate a cumulative magnitude factor to scale the quiet period */
 		ssize_t cumulative_size = state->stability->delta_size > 0 ? state->stability->delta_size : 0;
 		int cumulative_size_weight = (int) (cumulative_size / (100 * 1024 * 1024)); /* 1 point per 100MB */
 
-		int cumulative_magnitude = abs(state->stability->delta_files) +
-		                           abs(state->stability->delta_dirs) +
-		                           abs(state->stability->delta_depth) +
-		                           cumulative_size_weight;
+		int cumulative_magnitude = abs(state->stability->delta_files) + abs(state->stability->delta_dirs) +
+								   abs(state->stability->delta_depth) + cumulative_size_weight;
 
 		/* Only apply the multiplier if the cumulative change is significant */
 		if (cumulative_magnitude > 100) {
@@ -880,7 +876,7 @@ static long scanner_adjust(entity_t *state, long base_ms) {
 			long pre_magnitude = required_ms;
 			required_ms = (long) (required_ms * magnitude_factor);
 			log_message(DEBUG, "Applied magnitude factor %.2f: %ld ms -> %ld ms",
-			            magnitude_factor, pre_magnitude, required_ms);
+						magnitude_factor, pre_magnitude, required_ms);
 		}
 	}
 
@@ -890,7 +886,7 @@ static long scanner_adjust(entity_t *state, long base_ms) {
 		long pre_stability = required_ms;
 		required_ms = (long) (required_ms * 1.25); /* 25% increase */
 		log_message(DEBUG, "Applied stability loss penalty: %ld ms -> %ld ms",
-		            pre_stability, required_ms);
+					pre_stability, required_ms);
 	}
 
 	/* Tree depth multiplier - based on recent activity rate */
@@ -936,7 +932,7 @@ static long scanner_backoff(entity_t *state, long required_ms) {
 
 	long adjusted_ms = (long) (required_ms * backoff_factor);
 	log_message(DEBUG, "Applied backoff factor %.2f: %ld ms -> %ld ms",
-	            backoff_factor, required_ms, adjusted_ms);
+				backoff_factor, required_ms, adjusted_ms);
 
 	return adjusted_ms;
 }
@@ -951,7 +947,7 @@ static long scanner_limit(monitor_t *monitor, entity_t *state, long required_ms)
 
 	if (required_ms > maximum_ms) {
 		log_message(DEBUG, "Capping quiet period for %s from %ld ms to %ld ms",
-		            state->node->path, required_ms, maximum_ms);
+					state->node->path, required_ms, maximum_ms);
 		required_ms = maximum_ms;
 	}
 
@@ -961,7 +957,7 @@ static long scanner_limit(monitor_t *monitor, entity_t *state, long required_ms)
 		long pre_multiplier = required_ms;
 		required_ms = (long) (required_ms * state_watch->complexity);
 		log_message(DEBUG, "Applied complexity multiplier %.2f to %s: %ld ms -> %ld ms",
-		            state_watch->complexity, state->node->path, pre_multiplier, required_ms);
+					state_watch->complexity, state->node->path, pre_multiplier, required_ms);
 	}
 
 	return required_ms;
@@ -1009,8 +1005,8 @@ long scanner_delay(monitor_t *monitor, entity_t *state) {
 			ssize_t delta_size = state->stability ? state->stability->delta_size : 0;
 
 			log_message(DEBUG, "Quiet period for %s: %ld ms (cumulative: %+d files, %+d dirs, %+d depth, %s size) (total: %d entries, %d depth)",
-			            state->node->path, required_ms, delta_files, delta_dirs, delta_depth,
-			            format_size(delta_size, true), tree_entries, tree_depth);
+						state->node->path, required_ms, delta_files, delta_dirs, delta_depth,
+						format_size(delta_size, true), tree_entries, tree_depth);
 		} else {
 			/* For inactive directories, just log the base period with recursive stats */
 			int tree_entries = 0;
@@ -1023,7 +1019,7 @@ long scanner_delay(monitor_t *monitor, entity_t *state) {
 			}
 
 			log_message(DEBUG, "Using base quiet period for %s: %ld ms (recursive entries: %d, depth: %d, subdirs: %d)",
-			            state->node->path, required_ms, tree_entries, tree_depth, num_subdir);
+						state->node->path, required_ms, tree_entries, tree_depth, num_subdir);
 		}
 	}
 
@@ -1071,7 +1067,7 @@ bool scanner_ready(monitor_t *monitor, entity_t *state, struct timespec *current
 	/* Calculate elapsed time */
 	long elapsed_ms;
 	if (current_time->tv_sec < scanner_time->tv_sec ||
-	    (current_time->tv_sec == scanner_time->tv_sec && current_time->tv_nsec < scanner_time->tv_nsec)) {
+		(current_time->tv_sec == scanner_time->tv_sec && current_time->tv_nsec < scanner_time->tv_nsec)) {
 		elapsed_ms = -1; /* Clock went backwards */
 	} else {
 		struct timespec diff_time;
@@ -1087,7 +1083,7 @@ bool scanner_ready(monitor_t *monitor, entity_t *state, struct timespec *current
 
 	if (elapsed_ms < 0) {
 		log_message(WARNING, "Clock appears to have moved backwards for %s, assuming quiet period elapsed",
-		            state->node->path);
+					state->node->path);
 		return true;
 	}
 
@@ -1095,10 +1091,10 @@ bool scanner_ready(monitor_t *monitor, entity_t *state, struct timespec *current
 
 	if (!elapsed) {
 		log_message(DEBUG, "Quiet period check for %s: %ld ms elapsed < %ld ms required (using time from %s)",
-		            state->node->path, elapsed_ms, required_quiet, source_path);
+					state->node->path, elapsed_ms, required_quiet, source_path);
 	} else {
 		log_message(DEBUG, "Quiet period elapsed for %s: %ld ms >= %ld ms required",
-		            state->node->path, elapsed_ms, required_quiet);
+					state->node->path, elapsed_ms, required_quiet);
 	}
 
 	return elapsed;

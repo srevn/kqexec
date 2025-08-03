@@ -1,22 +1,22 @@
+#include "states.h"
+
+#include <dirent.h>
+#include <limits.h>
+#include <pthread.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
-#include <limits.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
-#include <stdbool.h>
-#include <stdint.h>
-#include <dirent.h>
-#include <pthread.h>
 
-#include "states.h"
-#include "scanner.h"
-#include "stability.h"
-#include "logger.h"
 #include "events.h"
+#include "logger.h"
 #include "registry.h"
 #include "scanner.h"
+#include "stability.h"
 
 /* Free resources used by an entity state */
 static void state_free_entity(entity_t *state) {
@@ -216,7 +216,7 @@ bool state_corrupted(const entity_t *state) {
 
 	if (state->magic != ENTITY_STATE_MAGIC) {
 		log_message(WARNING, "Entity state corruption detected: magic=0x%x, expected=0x%x",
-		            state->magic, ENTITY_STATE_MAGIC);
+					state->magic, ENTITY_STATE_MAGIC);
 		return true;
 	}
 	return false;
@@ -414,8 +414,8 @@ entity_t *states_get(states_t *states, registry_t *registry, const char *path, w
 				state->stability->reference_init = true;
 
 				log_message(DEBUG, "Initial baseline established for %s: files=%d, dirs=%d, depth=%d, size=%s",
-				            path, state->stability->stats.tree_files, state->stability->stats.tree_dirs,
-				            state->stability->stats.max_depth, format_size((ssize_t) state->stability->stats.tree_size, false));
+							path, state->stability->stats.tree_files, state->stability->stats.tree_dirs,
+							state->stability->stats.max_depth, format_size((ssize_t) state->stability->stats.tree_size, false));
 			} else {
 				log_message(WARNING, "Failed to gather initial stats for directory: %s", path);
 			}

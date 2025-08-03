@@ -3,12 +3,12 @@
 
 #include <stdbool.h>
 
-#include "queue.h"
 #include "config.h"
 #include "events.h"
-#include "states.h"
 #include "pending.h"
+#include "queue.h"
 #include "registry.h"
+#include "states.h"
 
 /* Monitor configuration */
 #define MAX_WATCHES 128
@@ -43,11 +43,11 @@ typedef struct monitor {
 	states_t *states;                      /* State table for this monitor */
 	registry_t *registry;                  /* Watch registry */
 	graveyard_t graveyard;                 /* Graveyard for stale items */
-	
+
 	/* Watch tracking */
 	watcher_t **watches;                   /* Array of watch information */
 	int num_watches;                       /* Number of watches */
-	
+
 	/* Pending watches for non-existent paths */
 	watchref_t glob_watchref;              /* Special watch for intermediate glob directories */
 	pending_t **pending;                   /* Array of pending watch information */
@@ -58,15 +58,15 @@ typedef struct monitor {
 	struct delayed *delayed_events;        /* Array of delayed events */
 	int delayed_count;                     /* Current number of delayed events */
 	int delayed_capacity;                  /* Allocated capacity */
-	
+
 	/* Control flags & config */
 	bool running;                          /* Monitor running flag */
 	bool reload;                           /* Flag to indicate reload requested */
 	char *config_path;                     /* Copy of config file path for reloading */
-	
+
 	/* Observers for watcher cleanups */
 	observer_t monitor_observer;           /* Observer registration for direct watcher cleanup */
-	observer_t pending_observer;           /* Observer registration for pending cleanup */	
+	observer_t pending_observer;           /* Observer registration for pending cleanup */
 } monitor_t;
 
 /* Monitor lifecycle management */

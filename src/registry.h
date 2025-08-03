@@ -1,9 +1,9 @@
 #ifndef REGISTRY_H
 #define REGISTRY_H
 
-#include <stdint.h>
-#include <stdbool.h>
 #include <pthread.h>
+#include <stdbool.h>
+#include <stdint.h>
 
 /* Registry configuration */
 #define REGISTRY_INITIAL_CAPACITY 256

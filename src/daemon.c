@@ -1,14 +1,15 @@
-#include <stdlib.h>
-#include <unistd.h>
-#include <signal.h>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <errno.h>
-#include <string.h>
-
-#include "monitor.h"
 #include "daemon.h"
+
+#include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include "logger.h"
+#include "monitor.h"
 
 /* Global monitor reference for signal handler */
 static monitor_t *g_monitor = NULL;

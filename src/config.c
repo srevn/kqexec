@@ -1,14 +1,15 @@
+#include "config.h"
+
+#include <ctype.h>
+#include <errno.h>
+#include <fnmatch.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
-#include <errno.h>
-#include <limits.h>
-#include <fnmatch.h>
 
-#include "config.h"
-#include "registry.h"
 #include "logger.h"
+#include "registry.h"
 
 /* Trim whitespace from a string */
 static char *trim(char *str) {
@@ -56,7 +57,7 @@ static char *canonize_path(const char *path, int line_number) {
 	} else {
 		/* realpath() failed - log warning and use original path */
 		log_message(DEBUG, "Failed to canonicalize path '%s' at line %d: %s (using original path)",
-		            path, line_number, strerror(errno));
+					path, line_number, strerror(errno));
 		result = strdup(path);
 	}
 
@@ -264,7 +265,7 @@ watch_t *config_clone_watch(const watch_t *source) {
 	}
 
 	if ((source->name && !clone->name) || (source->path && !clone->path) || (source->command && !clone->command) ||
-	    (source->source_pattern && !clone->source_pattern) || exclude_failure) {
+		(source->source_pattern && !clone->source_pattern) || exclude_failure) {
 		log_message(ERROR, "Failed to allocate strings for watch clone");
 		config_destroy_watch(clone);
 		return NULL;
@@ -437,13 +438,13 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 			}
 
 			current_watch->name = strdup(str + 1);
-			current_watch->log_output = false; /* Default to not logging command output */
+			current_watch->log_output = false;	  /* Default to not logging command output */
 			current_watch->buffer_output = false; /* Default to not buffering output */
-			current_watch->recursive = true; /* Default to recursive for directories */
-			current_watch->hidden = false; /* Default to not including hidden files */
-			current_watch->environment = false; /* Default to not injecting environment variables */
-			current_watch->processing_delay = 0; /* Default to no delay */
-			current_watch->complexity = 1.0; /* Default complexity multiplier */
+			current_watch->recursive = true;	  /* Default to recursive for directories */
+			current_watch->hidden = false;		  /* Default to not including hidden files */
+			current_watch->environment = false;	  /* Default to not injecting environment variables */
+			current_watch->processing_delay = 0;  /* Default to no delay */
+			current_watch->complexity = 1.0;	  /* Default complexity multiplier */
 
 			/* Initialize exclude patterns */
 			current_watch->exclude = NULL;
@@ -499,7 +500,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 			} else if (strcasecmp(key, "events") == 0) {
 				if (!config_events(value, &current_watch->filter)) {
 					log_message(ERROR, "Invalid value for %s at line %d: %s", key,
-					            line_number, value);
+								line_number, value);
 					config_destroy_watch(current_watch);
 					fclose(fp);
 					return false;
@@ -513,7 +514,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 					current_watch->log_output = false;
 				} else {
 					log_message(ERROR, "Invalid value for %s at line %d: %s", key,
-					            line_number, value);
+								line_number, value);
 					config_destroy_watch(current_watch);
 					fclose(fp);
 					return false;
@@ -525,7 +526,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 					current_watch->buffer_output = false;
 				} else {
 					log_message(ERROR, "Invalid value for %s at line %d: %s", key,
-					            line_number, value);
+								line_number, value);
 					config_destroy_watch(current_watch);
 					fclose(fp);
 					return false;
@@ -537,7 +538,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 					current_watch->recursive = false;
 				} else {
 					log_message(ERROR, "Invalid value for %s at line %d: %s", key,
-					            line_number, value);
+								line_number, value);
 					config_destroy_watch(current_watch);
 					fclose(fp);
 					return false;
@@ -549,7 +550,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 					current_watch->hidden = false;
 				} else {
 					log_message(ERROR, "Invalid value for %s at line %d: %s", key,
-					            line_number, value);
+								line_number, value);
 					config_destroy_watch(current_watch);
 					fclose(fp);
 					return false;
@@ -561,7 +562,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 					current_watch->environment = false;
 				} else {
 					log_message(ERROR, "Invalid value for %s at line %d: %s", key,
-					            line_number, value);
+								line_number, value);
 					config_destroy_watch(current_watch);
 					fclose(fp);
 					return false;
@@ -570,7 +571,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 				double complexity_value = atof(value);
 				if (complexity_value <= 0) {
 					log_message(ERROR, "Invalid %s value at line %d: %s (must be > 0)", key,
-					            line_number, value);
+								line_number, value);
 					config_destroy_watch(current_watch);
 					fclose(fp);
 					return false;
@@ -581,7 +582,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 				int processing_delay_value = atoi(value);
 				if (processing_delay_value < 0) {
 					log_message(ERROR, "Invalid %s value at line %d: %s (must be >= 0)", key,
-					            line_number, value);
+								line_number, value);
 					config_destroy_watch(current_watch);
 					fclose(fp);
 					return false;
@@ -592,7 +593,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 				char *patterns = strdup(value);
 				if (patterns == NULL) {
 					log_message(ERROR, "Failed to allocate memory for exclude patterns at line %d",
-					            line_number);
+								line_number);
 					config_destroy_watch(current_watch);
 					fclose(fp);
 					return false;
@@ -604,7 +605,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 					if (strlen(trimmed_pattern) > 0) {
 						if (!config_exclude_add(current_watch, trimmed_pattern)) {
 							log_message(ERROR, "Failed to add exclude pattern '%s' at line %d",
-							            trimmed_pattern, line_number);
+										trimmed_pattern, line_number);
 							free(patterns);
 							config_destroy_watch(current_watch);
 							fclose(fp);

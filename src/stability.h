@@ -3,9 +3,9 @@
 
 #include <stdbool.h>
 
-#include "states.h"
 #include "queue.h"
 #include "scanner.h"
+#include "states.h"
 
 /* Maximum allowed failures before giving up */
 #define MAX_CHECKS_FAILED 3

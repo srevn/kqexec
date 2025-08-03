@@ -1,23 +1,24 @@
+#include "monitor.h"
+
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <dirent.h>
-#include <sys/types.h>
 #include <sys/event.h>
-#include <sys/time.h>
 #include <sys/stat.h>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <unistd.h>
 
-#include "monitor.h"
-#include "stability.h"
 #include "command.h"
-#include "states.h"
-#include "logger.h"
-#include "queue.h"
 #include "events.h"
+#include "logger.h"
 #include "pending.h"
+#include "queue.h"
+#include "stability.h"
+#include "states.h"
 
 /* Check if a path is a hidden file or directory (starts with dot) */
 static bool path_hidden(const char *path) {
@@ -107,7 +108,7 @@ static watcher_t *watcher_find(monitor_t *monitor, const char *path) {
 		if (monitor->watches[i] && monitor->watches[i]->path) {
 			if (strcmp(monitor->watches[i]->path, path) == 0) {
 				log_message(DEBUG, "Found existing watcher for path %s (fd %d)",
-				            path, monitor->watches[i]->wd);
+							path, monitor->watches[i]->wd);
 				return monitor->watches[i];
 			}
 		}
@@ -123,7 +124,7 @@ static void monitor_handle_deactivation(watchref_t watchref, void *context) {
 	}
 
 	log_message(DEBUG, "Monitor observer: Watch ID %u (gen %u) deactivated, cleaning up watcher resources",
-	            watchref.watch_id, watchref.generation);
+				watchref.watch_id, watchref.generation);
 
 	/* Scan monitor watchers for the deactivated watch (iterate backwards for safe removal) */
 	for (int i = monitor->num_watches - 1; i >= 0; i--) {
@@ -358,7 +359,7 @@ static bool monitor_kq(monitor_t *monitor, watcher_t *watcher) {
 
 	if (shared_count > 1) {
 		log_message(DEBUG, "Configuring kqueue for fd %d with %d shared watches, combined flags: 0x%x",
-		            watcher->wd, shared_count, flags);
+					watcher->wd, shared_count, flags);
 	}
 
 	/* Register for events */
@@ -366,7 +367,7 @@ static bool monitor_kq(monitor_t *monitor, watcher_t *watcher) {
 
 	if (kevent(monitor->kq, changes, 1, NULL, 0, NULL) == -1) {
 		log_message(ERROR, "Failed to register kqueue events for %s (fd %d): %s",
-		            watcher->path, watcher->wd, strerror(errno));
+					watcher->path, watcher->wd, strerror(errno));
 		return false;
 	}
 
@@ -395,7 +396,7 @@ bool monitor_path(monitor_t *monitor, const char *path, watchref_t watchref) {
 	if (shared_watcher) {
 		/* Path is already being watched, share the fd */
 		log_message(INFO, "Sharing file descriptor for path %s (watchref %u:%u with existing fd %d)",
-		            path, watchref.watch_id, watchref.generation, shared_watcher->wd);
+					path, watchref.watch_id, watchref.generation, shared_watcher->wd);
 
 		watcher_t *watcher = calloc(1, sizeof(watcher_t));
 		if (!watcher) {
@@ -588,7 +589,7 @@ bool monitor_add(monitor_t *monitor, watchref_t watchref, bool skip_pending) {
 		} else {
 			/* Other stat error or skipping pending */
 			log_message(WARNING, "Failed to stat %s: %s%s", watch->path, strerror(errno),
-			            skip_pending ? " (skipping pending)" : ". It may have been deleted");
+						skip_pending ? " (skipping pending)" : ". It may have been deleted");
 			return skip_pending ? false : true; /* Fail if skipping pending, else not fatal */
 		}
 	}
@@ -800,7 +801,7 @@ bool monitor_poll(monitor_t *monitor) {
 		/* nev == 0 means timeout occurred */
 		if (p_timeout) {
 			log_message(DEBUG, "Timeout occurred after %ld.%09ld seconds, checking deferred scans",
-			            p_timeout->tv_sec, p_timeout->tv_nsec);
+						p_timeout->tv_sec, p_timeout->tv_nsec);
 		} else {
 			log_message(DEBUG, "Timeout occurred, checking deferred scans");
 		}
@@ -1003,7 +1004,7 @@ bool monitor_reload(monitor_t *monitor) {
 			if (watchref_valid(new_watchrefs[i])) {
 				watch_t *watch = registry_get(monitor->registry, new_watchrefs[i]);
 				log_message(DEBUG, "Reloading watch: %s (%s)",
-				            watch ? watch->name : "unknown", watch ? watch->path : "unknown");
+							watch ? watch->name : "unknown", watch ? watch->path : "unknown");
 				if (!monitor_add(monitor, new_watchrefs[i], false)) {
 					log_message(WARNING, "Failed to add watch for %s", watch ? watch->path : "unknown");
 				}
@@ -1068,9 +1069,8 @@ bool monitor_prune(monitor_t *monitor, const char *parent) {
 		if (!watcher || !watcher->path) continue;
 
 		/* Check if it's a subdirectory */
-		if ((int) strlen(watcher->path) > parent_len &&
-		    strncmp(watcher->path, parent, parent_len) == 0 &&
-		    watcher->path[parent_len] == '/') {
+		if ((int) strlen(watcher->path) > parent_len && strncmp(watcher->path, parent, parent_len) == 0 &&
+			watcher->path[parent_len] == '/') {
 			log_message(DEBUG, "Pruning stale subdirectory watch: %s", watcher->path);
 
 			/* Destroy the watcher (closes FD if not shared) */
