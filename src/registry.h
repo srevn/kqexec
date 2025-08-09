@@ -13,7 +13,8 @@
 /* Watch lifecycle states */
 typedef enum {
 	WATCH_STATE_ACTIVE,                    /* Watch is operational */
-	WATCH_STATE_INACTIVE                   /* Watch marked for deletion */
+	WATCH_STATE_INACTIVE,                  /* Watch marked for deletion */
+	WATCH_STATE_INTERNAL                   /* Internal watch, excluded from monitoring */
 } lifecycle_t;
 
 /* Watch reference structure */

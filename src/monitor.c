@@ -237,6 +237,7 @@ monitor_t *monitor_create(config_t *config, registry_t *registry) {
 		return NULL;
 	}
 	glob_watch->name = strdup("__glob_intermediate__");
+	glob_watch->path = strdup("/");
 	glob_watch->target = WATCH_DIRECTORY;
 	glob_watch->filter = EVENT_STRUCTURE;
 	glob_watch->command = NULL; /* No command execution */
@@ -256,6 +257,9 @@ monitor_t *monitor_create(config_t *config, registry_t *registry) {
 		free(monitor);
 		return NULL;
 	}
+
+	/* Mark glob watch as internal so it's excluded from normal monitoring */
+	monitor->registry->states[monitor->glob_watchref.watch_id] = WATCH_STATE_INTERNAL;
 
 	return monitor;
 }
@@ -908,6 +912,7 @@ bool monitor_reload(monitor_t *monitor) {
 		return false;
 	}
 	glob_watch->name = strdup("__glob_intermediate__");
+	glob_watch->path = strdup("/");
 	glob_watch->target = WATCH_DIRECTORY;
 	glob_watch->filter = EVENT_STRUCTURE;
 	glob_watch->command = NULL;
@@ -923,6 +928,9 @@ bool monitor_reload(monitor_t *monitor) {
 		registry_destroy(new_registry);
 		return false;
 	}
+
+	/* Mark glob watch as internal so it's excluded from normal monitoring */
+	new_registry->states[new_glob_watchref.watch_id] = WATCH_STATE_INTERNAL;
 
 	/* Add config file watch to the new config */
 	if (monitor->config_path != NULL) {
