@@ -731,19 +731,74 @@ bool config_exclude_match(const watch_t *watch, const char *path) {
 		return false;
 	}
 
+	/* Calculate relative path from watch base to target path */
+	const char *relative_path = path;
+	if (watch->path && strncmp(path, watch->path, strlen(watch->path)) == 0) {
+		/* Path is under watch directory, extract relative portion */
+		size_t base_len = strlen(watch->path);
+		if (path[base_len] == '/') {
+			relative_path = path + base_len + 1; /* Skip the base path and trailing slash */
+		} else if (path[base_len] == '\0') {
+			relative_path = "."; /* Target is the watch directory itself */
+		}
+	}
+
 	for (int i = 0; i < watch->num_exclude; i++) {
 		const char *pattern = watch->exclude[i];
 		if (!pattern) continue;
 
-		/* Use fnmatch for glob pattern matching */
-		if (fnmatch(pattern, path, FNM_PATHNAME) == 0) {
-			return true;
-		}
+		/* Determine matching strategy based on pattern content */
+		if (strchr(pattern, '/') != NULL) {
+			/* Pattern contains '/' - match against relative path */
+			if (fnmatch(pattern, relative_path, FNM_PATHNAME) == 0) {
+				return true;
+			}
 
-		/* Also try relative path matching - extract basename and match against pattern */
-		const char *basename = strrchr(path, '/');
-		if (basename && fnmatch(pattern, basename + 1, 0) == 0) {
-			return true;
+			/* Check for recursive pattern ending with suffix */
+			size_t pattern_len = strlen(pattern);
+			if (pattern_len >= 3 && strcmp(pattern + pattern_len - 3, "/**") == 0) {
+				/* Create base pattern without suffix */
+				char base_pattern[PATH_MAX];
+				strncpy(base_pattern, pattern, pattern_len - 3);
+				base_pattern[pattern_len - 3] = '\0';
+
+				/* Check if path starts with the base pattern */
+				if (strncmp(relative_path, base_pattern, strlen(base_pattern)) == 0) {
+					/* Path starts with base pattern - check if it's exactly the directory or under it */
+					size_t base_len = strlen(base_pattern);
+					if (relative_path[base_len] == '\0' || relative_path[base_len] == '/') {
+						return true;
+					}
+				}
+			}
+		} else {
+			/* Pattern is basename-only - extract basename and match */
+			const char *basename;
+
+			/* Handle root and current dir edge cases */
+			if (strcmp(relative_path, "/") == 0) {
+				/* Root path has no meaningful basename for exclude matching */
+				basename = "";
+			} else if (strcmp(relative_path, ".") == 0) {
+				/* For the watch directory itself, use the basename of the watch path */
+				if (watch->path && strcmp(watch->path, "/") == 0) {
+					/* Watch path is root, no meaningful basename */
+					basename = "";
+				} else {
+					const char *last_slash = strrchr(watch->path, '/');
+					basename = last_slash ? last_slash + 1 : watch->path;
+				}
+			} else {
+				const char *last_slash = strrchr(relative_path, '/');
+				basename = last_slash ? last_slash + 1 : relative_path;
+			}
+
+			/* Don't match empty basename unless pattern is specifically empty */
+			if (strlen(basename) > 0 || strlen(pattern) == 0) {
+				if (fnmatch(pattern, basename, 0) == 0) {
+					return true;
+				}
+			}
 		}
 	}
 
