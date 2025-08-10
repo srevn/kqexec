@@ -227,13 +227,73 @@ void pending_remove(monitor_t *monitor, int index) {
 		return;
 	}
 
-	pending_destroy(monitor->pending[index]);
+	pending_t *pending = monitor->pending[index];
+
+	/* Clean up intermediate watch if this is a glob pattern */
+	if (pending && pending->is_glob && watchref_valid(pending->parentref)) {
+		registry_deactivate(monitor->registry, pending->parentref);
+	}
+
+	pending_destroy(pending);
 
 	/* Shift remaining entries */
 	for (int j = index; j < monitor->num_pending - 1; j++) {
 		monitor->pending[j] = monitor->pending[j + 1];
 	}
 	monitor->num_pending--;
+}
+
+/* Generate unique name for individual glob intermediate watch */
+static char *pending_glob_name(watchref_t original_ref) {
+	static uint32_t counter = 0;
+	char *name = malloc(64);
+	if (!name) return NULL;
+	snprintf(name, 64, "__glob_%u_%u_%u__", original_ref.watch_id, original_ref.generation, ++counter);
+	return name;
+}
+
+/* Create individual glob intermediate watch with properties from original watch */
+static watchref_t pending_glob_watch(monitor_t *monitor, const watch_t *original_watch, watchref_t original_ref, const char *parent_path) {
+	if (!monitor || !original_watch || !parent_path) {
+		return WATCH_REF_INVALID;
+	}
+
+	watch_t *glob_watch = calloc(1, sizeof(watch_t));
+	if (!glob_watch) {
+		log_message(ERROR, "Failed to allocate memory for individual glob watch");
+		return WATCH_REF_INVALID;
+	}
+
+	/* Create unique name for this glob watch */
+	glob_watch->name = pending_glob_name(original_ref);
+	if (!glob_watch->name) {
+		free(glob_watch);
+		return WATCH_REF_INVALID;
+	}
+
+	glob_watch->path = strdup(parent_path);
+	glob_watch->target = WATCH_DIRECTORY;
+	glob_watch->filter = EVENT_STRUCTURE;
+	glob_watch->command = NULL;
+	glob_watch->is_dynamic = false;
+	glob_watch->source_pattern = NULL;
+
+	/* Copy relevant properties from original watch */
+	glob_watch->recursive = original_watch->recursive;
+	glob_watch->hidden = original_watch->hidden;
+
+	/* Add to registry */
+	watchref_t glob_ref = registry_add(monitor->registry, glob_watch);
+	if (!watchref_valid(glob_ref)) {
+		log_message(ERROR, "Failed to add individual glob watch to registry");
+		config_destroy_watch(glob_watch);
+		return WATCH_REF_INVALID;
+	}
+
+	log_message(DEBUG, "Created individual glob watch '%s' for pattern from watch %u:%u",
+				glob_watch->name, original_ref.watch_id, original_ref.generation);
+
+	return glob_ref;
 }
 
 /* Add a pending watch to the monitor's pending list */
@@ -300,20 +360,30 @@ bool pending_add(monitor_t *monitor, const char *target_path, watchref_t watchre
 	pending->glob_pattern = is_glob ? strdup(target_path) : NULL;
 	pending->watchref = watchref;
 	pending->parent_watcher = NULL;
+	pending->parentref = WATCH_REF_INVALID;
 
 	/* Add watch on the parent directory */
-	watchref_t pending_watchref = is_glob ? monitor->glob_watchref : watchref;
+	watchref_t pending_watchref;
 	if (is_glob) {
-		/* Copy relevant properties from original watch to glob watch */
-		watch_t *glob_watch = registry_get(monitor->registry, monitor->glob_watchref);
-		if (glob_watch && watch) {
-			glob_watch->recursive = watch->recursive;
-			glob_watch->hidden = watch->hidden;
+		/* Create individual glob intermediate watch with correct properties */
+		pending_watchref = pending_glob_watch(monitor, watch, watchref, parent);
+		if (!watchref_valid(pending_watchref)) {
+			log_message(ERROR, "Failed to create individual glob watch for %s", target_path);
+			pending_destroy(pending);
+			return false;
 		}
+		/* Store intermediate watch reference for cleanup */
+		pending->parentref = pending_watchref;
+	} else {
+		pending_watchref = watchref;
 	}
 
 	if (!monitor_path(monitor, parent, pending_watchref)) {
 		log_message(WARNING, "Failed to add parent watch for %s, parent: %s", target_path, parent);
+		/* Clean up intermediate watch if it was created */
+		if (is_glob && watchref_valid(pending->parentref)) {
+			registry_deactivate(monitor->registry, pending->parentref);
+		}
 		pending_destroy(pending);
 		return false;
 	}
@@ -487,18 +557,29 @@ static void pending_intermediate(monitor_t *monitor, pending_t *pending, const c
 	new_pending->glob_pattern = strdup(pending->glob_pattern);
 	new_pending->watchref = pending->watchref;
 	new_pending->parent_watcher = NULL;
+	new_pending->parentref = WATCH_REF_INVALID;
 
-	/* Use the special glob watch for intermediate directories */
-	watch_t *pending_watch = registry_get(monitor->registry, monitor->glob_watchref);
+	/* Create individual glob watch for this intermediate directory */
 	watch_t *orig_watch = registry_get(monitor->registry, pending->watchref);
-	if (pending_watch && orig_watch) {
-		pending_watch->recursive = orig_watch->recursive;
-		pending_watch->hidden = orig_watch->hidden;
+	if (!orig_watch) {
+		log_message(ERROR, "Invalid original watch reference in pending_intermediate");
+		pending_destroy(new_pending);
+		return;
 	}
 
-	if (new_pending->next_component && monitor_tree(monitor, path, monitor->glob_watchref)) {
+	watchref_t parentref = pending_glob_watch(monitor, orig_watch, pending->watchref, path);
+	if (!watchref_valid(parentref)) {
+		log_message(ERROR, "Failed to create intermediate glob watch for %s", path);
+		pending_destroy(new_pending);
+		return;
+	}
+
+	/* Store intermediate watch reference for cleanup */
+	new_pending->parentref = parentref;
+
+	if (new_pending->next_component && monitor_tree(monitor, path, parentref)) {
 		/* Find the watcher for this parent */
-		new_pending->parent_watcher = pending_watcher(monitor, path, monitor->glob_watchref);
+		new_pending->parent_watcher = pending_watcher(monitor, path, parentref);
 
 		/* Add to pending array */
 		pending_t **new_pending_array = realloc(monitor->pending, (monitor->num_pending + 1) * sizeof(pending_t *));
@@ -513,10 +594,15 @@ static void pending_intermediate(monitor_t *monitor, pending_t *pending, const c
 			/* Recursively process the new parent to handle pre-existing subdirectories */
 			pending_process(monitor, new_pending->current_parent);
 		} else {
+			log_message(ERROR, "Failed to allocate memory for new pending array");
+			/* Clean up intermediate watch */
+			registry_deactivate(monitor->registry, parentref);
 			pending_destroy(new_pending);
 		}
 	} else {
 		log_message(WARNING, "Failed to add monitor or get next component for '%s'", path);
+		/* Clean up intermediate watch */
+		registry_deactivate(monitor->registry, parentref);
 		pending_destroy(new_pending);
 	}
 }
@@ -632,13 +718,14 @@ void pending_cleanup(monitor_t *monitor) {
 		return;
 	}
 
-	for (int i = 0; i < monitor->num_pending; i++) {
-		pending_destroy(monitor->pending[i]);
+	/* Use pending_remove() to ensure proper cleanup of intermediate watches */
+	while (monitor->num_pending > 0) {
+		pending_remove(monitor, monitor->num_pending - 1);
 	}
 
+	/* Clean up the pointer */
 	free(monitor->pending);
 	monitor->pending = NULL;
-	monitor->num_pending = 0;
 }
 
 /* Handle deletion of parent directories that affect pending watches */

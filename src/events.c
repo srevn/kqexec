@@ -511,7 +511,7 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 	}
 
 	/* Handle intermediate glob events - they only trigger pending_process, not commands */
-	if (watch->name != NULL && strcmp(watch->name, "__glob_intermediate__") == 0) {
+	if (watch->name != NULL && strncmp(watch->name, "__glob_", 7) == 0) {
 		return false; /* Don't process further, event has served its purpose */
 	}
 

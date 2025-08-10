@@ -226,41 +226,6 @@ monitor_t *monitor_create(config_t *config, registry_t *registry) {
 	monitor->delayed_count = 0;
 	monitor->delayed_capacity = 0;
 
-	/* Initialize the special watch for intermediate glob directories */
-	watch_t *glob_watch = calloc(1, sizeof(watch_t));
-	if (!glob_watch) {
-		log_message(ERROR, "Failed to allocate memory for glob watch");
-		states_destroy(monitor->states);
-		queue_destroy(monitor->check_queue);
-		free(monitor->config_path);
-		free(monitor);
-		return NULL;
-	}
-	glob_watch->name = strdup("__glob_intermediate__");
-	glob_watch->path = strdup("/");
-	glob_watch->target = WATCH_DIRECTORY;
-	glob_watch->filter = EVENT_STRUCTURE;
-	glob_watch->command = NULL; /* No command execution */
-
-	/* Initialize dynamic tracking fields (glob intermediate watch is not dynamic) */
-	glob_watch->is_dynamic = false;
-	glob_watch->source_pattern = NULL;
-
-	/* Add glob watch to registry and store reference */
-	monitor->glob_watchref = registry_add(monitor->registry, glob_watch);
-	if (!watchref_valid(monitor->glob_watchref)) {
-		log_message(ERROR, "Failed to add glob watch to registry");
-		config_destroy_watch(glob_watch);
-		states_destroy(monitor->states);
-		queue_destroy(monitor->check_queue);
-		free(monitor->config_path);
-		free(monitor);
-		return NULL;
-	}
-
-	/* Mark glob watch as internal so it's excluded from normal monitoring */
-	monitor->registry->states[monitor->glob_watchref.watch_id] = WATCH_STATE_INTERNAL;
-
 	return monitor;
 }
 
@@ -902,36 +867,6 @@ bool monitor_reload(monitor_t *monitor) {
 		return false;
 	}
 
-	/* Create the special watch for intermediate glob directories in the new registry */
-	watch_t *glob_watch = calloc(1, sizeof(watch_t));
-	if (!glob_watch) {
-		log_message(ERROR, "Failed to allocate memory for glob watch during reload");
-		close(new_kq);
-		config_destroy(new_config);
-		registry_destroy(new_registry);
-		return false;
-	}
-	glob_watch->name = strdup("__glob_intermediate__");
-	glob_watch->path = strdup("/");
-	glob_watch->target = WATCH_DIRECTORY;
-	glob_watch->filter = EVENT_STRUCTURE;
-	glob_watch->command = NULL;
-	glob_watch->is_dynamic = false;
-	glob_watch->source_pattern = NULL;
-
-	watchref_t new_glob_watchref = registry_add(new_registry, glob_watch);
-	if (!watchref_valid(new_glob_watchref)) {
-		log_message(ERROR, "Failed to add glob watch to new registry during reload");
-		config_destroy_watch(glob_watch);
-		close(new_kq);
-		config_destroy(new_config);
-		registry_destroy(new_registry);
-		return false;
-	}
-
-	/* Mark glob watch as internal so it's excluded from normal monitoring */
-	new_registry->states[new_glob_watchref.watch_id] = WATCH_STATE_INTERNAL;
-
 	/* Add config file watch to the new config */
 	if (monitor->config_path != NULL) {
 		watch_t *config_watch = monitor_config(monitor->config_path);
@@ -970,7 +905,6 @@ bool monitor_reload(monitor_t *monitor) {
 	/* Switch configuration and registry */
 	monitor->config = new_config;
 	monitor->registry = new_registry;
-	monitor->glob_watchref = new_glob_watchref;
 
 	/* Switch state management */
 	states_t *old_states = monitor->states;

@@ -21,6 +21,7 @@ typedef struct pending {
 	bool is_glob;                          /* Whether this is a glob pattern */
 	watcher_t *parent_watcher;             /* The watcher on the current parent directory */
 	watchref_t watchref;                   /* Reference to the original watch configuration */
+	watchref_t parentref;                  /* Reference to intermediate glob watch */
 } pending_t;
 
 /* Pending watch management functions */

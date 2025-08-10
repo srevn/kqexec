@@ -49,7 +49,6 @@ typedef struct monitor {
 	int num_watches;                       /* Number of watches */
 
 	/* Pending watches for non-existent paths */
-	watchref_t glob_watchref;              /* Special watch for intermediate glob directories */
 	pending_t **pending;                   /* Array of pending watch information */
 	int num_pending;                       /* Number of pending watches */
 
