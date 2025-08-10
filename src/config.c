@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "logger.h"
 #include "registry.h"
@@ -48,17 +49,47 @@ static char *canonize_path(const char *path, int line_number) {
 	}
 
 	char resolved_path[PATH_MAX];
+	char absolute_path[PATH_MAX];
 	char *result;
 
+	/* First try realpath on the original path (handles both absolute and relative) */
 	if (realpath(path, resolved_path) != NULL) {
 		/* Success - path exists and was canonicalized */
 		log_message(DEBUG, "Canonized path '%s' -> '%s' at line %d", path, resolved_path, line_number);
 		result = strdup(resolved_path);
 	} else {
-		/* realpath() failed - log warning and use original path */
-		log_message(DEBUG, "Failed to canonicalize path '%s' at line %d: %s (using original path)",
-					path, line_number, strerror(errno));
-		result = strdup(path);
+		/* realpath() failed - need to construct absolute path if relative */
+		if (path[0] == '/') {
+			/* Already absolute, just use it */
+			log_message(DEBUG, "Failed to canonicalize absolute path '%s' at line %d: %s (using original path)",
+						path, line_number, strerror(errno));
+			result = strdup(path);
+		} else {
+			/* Relative path - make it absolute based on current working directory */
+			if (getcwd(absolute_path, sizeof(absolute_path)) == NULL) {
+				log_message(ERROR, "Failed to get current working directory at line %d: %s",
+							line_number, strerror(errno));
+				return NULL;
+			}
+
+			/* Construct absolute path */
+			int ret = snprintf(resolved_path, sizeof(resolved_path), "%s/%s", absolute_path, path);
+			if (ret >= (int)sizeof(resolved_path)) {
+				log_message(ERROR, "Constructed path too long at line %d", line_number);
+				return NULL;
+			}
+
+			/* Try to canonicalize the constructed absolute path */
+			if (realpath(resolved_path, absolute_path) != NULL) {
+				log_message(DEBUG, "Canonized relative path '%s' -> '%s' at line %d", path, absolute_path, line_number);
+				result = strdup(absolute_path);
+			} else {
+				/* Use the constructed absolute path anyway */
+				log_message(DEBUG, "Failed to canonicalize constructed path '%s' at line %d: %s (using constructed absolute path)",
+							resolved_path, line_number, strerror(errno));
+				result = strdup(resolved_path);
+			}
+		}
 	}
 
 	if (result == NULL) {
