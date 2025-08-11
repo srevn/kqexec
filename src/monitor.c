@@ -1096,6 +1096,9 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 			/* Remove dynamic watch from config to prevent resurrection during reload */
 			if (target_watch && target_watch->is_dynamic) {
 				config_remove_watch(monitor->config, monitor->registry, watcher->watchref);
+				/* The observer handles the cleanup */
+				list_modified = true;
+				continue;
 			}
 
 			/* Remove the watcher - destroy it and shift array elements */
