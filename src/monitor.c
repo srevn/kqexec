@@ -1079,6 +1079,8 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 
 			/* Store watch config before watcher becomes invalid */
 			watch_t *target_watch = registry_get(monitor->registry, watcher->watchref);
+			watchref_t file_watchref = watcher->watchref;
+			bool file_watch = (target_watch && target_watch->target == WATCH_FILE);
 
 			/* Clear any pending deferred checks to prevent use-after-free */
 			queue_remove(monitor->check_queue, path);
@@ -1103,6 +1105,12 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 			}
 			monitor->num_watches--;
 			list_modified = true;
+
+			/* If a file watch was deleted, re-establish it as a pending watch */
+			if (file_watch) {
+				log_message(DEBUG, "Re-establishing pending watch for deleted file: %s", path);
+				monitor_add(monitor, file_watchref, false);
+			}
 		} else if (watcher->inode != info.st_ino || watcher->device != info.st_dev) {
 			/* Path exists but inode/device changed - it was recreated */
 			log_message(DEBUG, "Path recreated: %s. Refreshing watch", path);

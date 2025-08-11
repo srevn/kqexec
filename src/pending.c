@@ -29,17 +29,17 @@ static bool pending_is_dir(const char *path) {
 }
 
 /* Join two path components */
-static char *pending_join(const char *parent, const char *component) {
-	if (!parent || !component) return NULL;
+static char *pending_join(const char *parent_path, const char *component) {
+	if (!parent_path || !component) return NULL;
 
-	int parent_len = strlen(parent);
+	int parent_len = strlen(parent_path);
 	int component_len = strlen(component);
-	bool needs_slash = (parent_len > 0 && parent[parent_len - 1] != '/');
+	bool needs_slash = (parent_len > 0 && parent_path[parent_len - 1] != '/');
 
 	char *result = malloc(parent_len + (needs_slash ? 1 : 0) + component_len + 1);
 	if (!result) return NULL;
 
-	strcpy(result, parent);
+	strcpy(result, parent_path);
 	if (needs_slash) strcat(result, "/");
 	strcat(result, component);
 	return result;
@@ -229,9 +229,9 @@ void pending_remove(monitor_t *monitor, int index) {
 
 	pending_t *pending = monitor->pending[index];
 
-	/* Clean up intermediate watch if this is a glob pattern */
-	if (pending && pending->is_glob && watchref_valid(pending->parentref)) {
-		registry_deactivate(monitor->registry, pending->parentref);
+	/* Clean up the proxy watch on the parent directory */
+	if (pending && watchref_valid(pending->proxyref)) {
+		registry_deactivate(monitor->registry, pending->proxyref);
 	}
 
 	pending_destroy(pending);
@@ -243,57 +243,57 @@ void pending_remove(monitor_t *monitor, int index) {
 	monitor->num_pending--;
 }
 
-/* Generate unique name for individual glob intermediate watch */
-static char *pending_glob_name(watchref_t original_ref) {
+/* Generate unique name for a proxy watch */
+static char *pending_proxy_name(watchref_t original_ref, const char *type) {
 	static uint32_t counter = 0;
-	char *name = malloc(64);
+	char *name = malloc(PROXY_NAME_MAX_LEN);
 	if (!name) return NULL;
-	snprintf(name, 64, "__glob_%u_%u_%u__", original_ref.watch_id, original_ref.generation, ++counter);
+	snprintf(name, PROXY_NAME_MAX_LEN, "__%s_%u_%u_%u__", type, original_ref.watch_id, original_ref.generation, ++counter);
 	return name;
 }
 
-/* Create individual glob intermediate watch with properties from original watch */
-static watchref_t pending_glob_watch(monitor_t *monitor, const watch_t *original_watch, watchref_t original_ref, const char *parent_path) {
+/* Create a proxy watch for a pending path's parent */
+static watchref_t pending_proxy_watch(monitor_t *monitor, const watch_t *original_watch, watchref_t original_ref, const char *parent_path, const char *type) {
 	if (!monitor || !original_watch || !parent_path) {
 		return WATCH_REF_INVALID;
 	}
 
-	watch_t *glob_watch = calloc(1, sizeof(watch_t));
-	if (!glob_watch) {
-		log_message(ERROR, "Failed to allocate memory for individual glob watch");
+	watch_t *proxy_watch = calloc(1, sizeof(watch_t));
+	if (!proxy_watch) {
+		log_message(ERROR, "Failed to allocate memory for proxy watch");
 		return WATCH_REF_INVALID;
 	}
 
-	/* Create unique name for this glob watch */
-	glob_watch->name = pending_glob_name(original_ref);
-	if (!glob_watch->name) {
-		free(glob_watch);
+	/* Create unique name for this proxy watch */
+	proxy_watch->name = pending_proxy_name(original_ref, type);
+	if (!proxy_watch->name) {
+		free(proxy_watch);
 		return WATCH_REF_INVALID;
 	}
 
-	glob_watch->path = strdup(parent_path);
-	glob_watch->target = WATCH_DIRECTORY;
-	glob_watch->filter = EVENT_STRUCTURE;
-	glob_watch->command = NULL;
-	glob_watch->is_dynamic = false;
-	glob_watch->source_pattern = NULL;
+	proxy_watch->path = strdup(parent_path);
+	proxy_watch->target = WATCH_DIRECTORY;
+	proxy_watch->filter = EVENT_STRUCTURE;
+	proxy_watch->command = NULL;
+	proxy_watch->is_dynamic = false;
+	proxy_watch->source_pattern = NULL;
 
 	/* Copy relevant properties from original watch */
-	glob_watch->recursive = original_watch->recursive;
-	glob_watch->hidden = original_watch->hidden;
+	proxy_watch->recursive = original_watch->recursive;
+	proxy_watch->hidden = original_watch->hidden;
 
 	/* Add to registry */
-	watchref_t glob_ref = registry_add(monitor->registry, glob_watch);
-	if (!watchref_valid(glob_ref)) {
-		log_message(ERROR, "Failed to add individual glob watch to registry");
-		config_destroy_watch(glob_watch);
+	watchref_t proxyref = registry_add(monitor->registry, proxy_watch);
+	if (!watchref_valid(proxyref)) {
+		log_message(ERROR, "Failed to add proxy watch to registry");
+		config_destroy_watch(proxy_watch);
 		return WATCH_REF_INVALID;
 	}
 
-	log_message(DEBUG, "Created individual glob watch '%s' for pattern from watch %u:%u",
-				glob_watch->name, original_ref.watch_id, original_ref.generation);
+	log_message(DEBUG, "Created proxy watch '%s' for pattern from watch %u:%u",
+				proxy_watch->name, original_ref.watch_id, original_ref.generation);
 
-	return glob_ref;
+	return proxyref;
 }
 
 /* Add a pending watch to the monitor's pending list */
@@ -309,36 +309,36 @@ bool pending_add(monitor_t *monitor, const char *target_path, watchref_t watchre
 
 	/* Check if this is a glob pattern */
 	bool is_glob = pending_has_glob(target_path);
-	char *parent = NULL;
+	char *parent_path = NULL;
 	char *next_component = NULL;
 
 	if (is_glob) {
 		/* Handle glob pattern */
-		parent = pending_parent(target_path, true);
-		if (!parent) {
 			log_message(ERROR, "No existing parent found for glob pattern: %s", target_path);
+		parent_path = pending_parent(target_path, true);
+		if (!parent_path) {
 			return false;
 		}
 
 		/* Get the glob component to match */
-		next_component = pending_component(target_path, parent, false);
+		next_component = pending_component(target_path, parent_path, false);
 		if (!next_component) {
 			log_message(ERROR, "Unable to determine glob component for pattern: %s", target_path);
-			free(parent);
+			free(parent_path);
 			return false;
 		}
 	} else {
 		/* Handle exact path (existing logic) */
-		parent = pending_parent(target_path, false);
-		if (!parent) {
 			log_message(ERROR, "No existing parent found for path: %s", target_path);
+		parent_path = pending_parent(target_path, false);
+		if (!parent_path) {
 			return false;
 		}
 
-		next_component = pending_component(target_path, parent, true);
+		next_component = pending_component(target_path, parent_path, true);
 		if (!next_component) {
 			log_message(ERROR, "Unable to determine next component for path: %s", target_path);
-			free(parent);
+			free(parent_path);
 			return false;
 		}
 	}
@@ -347,49 +347,40 @@ bool pending_add(monitor_t *monitor, const char *target_path, watchref_t watchre
 	pending_t *pending = calloc(1, sizeof(pending_t));
 	if (!pending) {
 		log_message(ERROR, "Failed to allocate memory for pending watch");
-		free(parent);
+		free(parent_path);
 		free(next_component);
 		return false;
 	}
 
 	pending->target_path = strdup(target_path);
-	pending->current_parent = parent;
+	pending->current_parent = parent_path;
 	pending->next_component = next_component;
 	pending->is_glob = is_glob;
-	pending->unresolved_path = is_glob ? strdup(parent) : NULL;
+	pending->unresolved_path = is_glob ? strdup(parent_path) : NULL;
 	pending->glob_pattern = is_glob ? strdup(target_path) : NULL;
 	pending->watchref = watchref;
-	pending->parent_watcher = NULL;
-	pending->parentref = WATCH_REF_INVALID;
+	pending->proxy_watcher = NULL;
 
-	/* Add watch on the parent directory */
-	watchref_t pending_watchref;
-	if (is_glob) {
-		/* Create individual glob intermediate watch with correct properties */
-		pending_watchref = pending_glob_watch(monitor, watch, watchref, parent);
-		if (!watchref_valid(pending_watchref)) {
-			log_message(ERROR, "Failed to create individual glob watch for %s", target_path);
-			pending_destroy(pending);
-			return false;
-		}
-		/* Store intermediate watch reference for cleanup */
-		pending->parentref = pending_watchref;
-	} else {
-		pending_watchref = watchref;
+	/* Create a dedicated proxy watch to monitor the parent directory */
+	const char *type = is_glob ? "proxy_glob" : "proxy_exact";
+	watchref_t proxyref = pending_proxy_watch(monitor, watch, watchref, parent_path, type);
+	if (!watchref_valid(proxyref)) {
+		log_message(ERROR, "Failed to create proxy watch for %s", target_path);
+		pending_destroy(pending);
+		return false;
 	}
+	pending->proxyref = proxyref; /* Store for cleanup */
 
-	if (!monitor_path(monitor, parent, pending_watchref)) {
-		log_message(WARNING, "Failed to add parent watch for %s, parent: %s", target_path, parent);
-		/* Clean up intermediate watch if it was created */
-		if (is_glob && watchref_valid(pending->parentref)) {
-			registry_deactivate(monitor->registry, pending->parentref);
-		}
+	/* Add watch on the parent directory using the proxy watch's ref */
+	if (!monitor_path(monitor, parent_path, proxyref)) {
+		log_message(WARNING, "Failed to add parent watch for %s, parent: %s", target_path, parent_path);
+		registry_deactivate(monitor->registry, proxyref); /* Clean up proxy watch */
 		pending_destroy(pending);
 		return false;
 	}
 
 	/* Find the watcher we just created for the parent */
-	pending->parent_watcher = pending_watcher(monitor, parent, pending_watchref);
+	pending->proxy_watcher = pending_watcher(monitor, parent_path, proxyref);
 
 	/* Add to pending watches array */
 	pending_t **new_pending = realloc(monitor->pending, (monitor->num_pending + 1) * sizeof(pending_t *));
@@ -404,7 +395,7 @@ bool pending_add(monitor_t *monitor, const char *target_path, watchref_t watchre
 	monitor->num_pending++;
 
 	log_message(DEBUG, "Added pending watch (%s): target=%s, parent=%s, next=%s",
-				is_glob ? "glob" : "exact", target_path, parent, next_component);
+				is_glob ? "glob" : "exact", target_path, parent_path, next_component);
 	return true;
 }
 
@@ -515,29 +506,29 @@ static void pending_promote_match(monitor_t *monitor, pending_t *pending, const 
 	}
 }
 
-/* Create a new pending watch for an intermediate directory that matches a glob component */
-static void pending_intermediate(monitor_t *monitor, pending_t *pending, const char *path) {
-	/* For globs, this means we found an intermediate directory that matches part of the pattern */
+/* Create a new pending watch for a proxy directory that matches a glob component */
+static void pending_proxy(monitor_t *monitor, pending_t *pending, const char *path) {
+	/* For globs, this means we found a proxy directory that matches part of the pattern */
 	if (!pending_is_dir(path)) {
-		return; /* Not a directory, so it can't be an intermediate step */
+		return; /* Not a directory, so it can't be a proxy step */
 	}
 
-	/* Check if a pending watch for this intermediate parent, glob pattern, and watchref already exists */
+	/* Check if a pending watch for this proxy parent, glob pattern, and watchref already exists */
 	for (int i = 0; i < monitor->num_pending; i++) {
 		pending_t *p = monitor->pending[i];
 		if (p->is_glob && strcmp(p->current_parent, path) == 0 && p->glob_pattern &&
 			strcmp(p->glob_pattern, pending->glob_pattern) == 0 && watchref_equal(p->watchref, pending->watchref)) {
-			log_message(DEBUG, "Pending watch for intermediate path %s with same watchref already exists", path);
+			log_message(DEBUG, "Pending watch for proxy path %s with same watchref already exists", path);
 			return;
 		}
 	}
 
-	log_message(DEBUG, "Glob intermediate directory created: %s", path);
+	log_message(DEBUG, "Glob proxy directory created: %s", path);
 
 	/* Create a new pending watch for this path */
 	pending_t *new_pending = calloc(1, sizeof(pending_t));
 	if (!new_pending) {
-		log_message(ERROR, "Failed to allocate memory for intermediate pending watch");
+		log_message(ERROR, "Failed to allocate memory for proxy pending watch");
 		return;
 	}
 
@@ -556,30 +547,30 @@ static void pending_intermediate(monitor_t *monitor, pending_t *pending, const c
 	new_pending->is_glob = true;
 	new_pending->glob_pattern = strdup(pending->glob_pattern);
 	new_pending->watchref = pending->watchref;
-	new_pending->parent_watcher = NULL;
-	new_pending->parentref = WATCH_REF_INVALID;
+	new_pending->proxy_watcher = NULL;
+	new_pending->proxyref = WATCH_REF_INVALID;
 
-	/* Create individual glob watch for this intermediate directory */
+	/* Create individual proxy watch for this glob directory */
 	watch_t *orig_watch = registry_get(monitor->registry, pending->watchref);
 	if (!orig_watch) {
-		log_message(ERROR, "Invalid original watch reference in pending_intermediate");
+		log_message(ERROR, "Invalid original watch reference in pending_proxy");
 		pending_destroy(new_pending);
 		return;
 	}
 
-	watchref_t parentref = pending_glob_watch(monitor, orig_watch, pending->watchref, path);
-	if (!watchref_valid(parentref)) {
-		log_message(ERROR, "Failed to create intermediate glob watch for %s", path);
+	watchref_t proxyref = pending_proxy_watch(monitor, orig_watch, pending->watchref, path, "proxy_glob");
+	if (!watchref_valid(proxyref)) {
+		log_message(ERROR, "Failed to create proxy glob watch for %s", path);
 		pending_destroy(new_pending);
 		return;
 	}
 
-	/* Store intermediate watch reference for cleanup */
-	new_pending->parentref = parentref;
+	/* Store proxy watch reference for cleanup */
+	new_pending->proxyref = proxyref;
 
-	if (new_pending->next_component && monitor_tree(monitor, path, parentref)) {
+	if (new_pending->next_component && monitor_tree(monitor, path, proxyref)) {
 		/* Find the watcher for this parent */
-		new_pending->parent_watcher = pending_watcher(monitor, path, parentref);
+		new_pending->proxy_watcher = pending_watcher(monitor, path, proxyref);
 
 		/* Add to pending array */
 		pending_t **new_pending_array = realloc(monitor->pending, (monitor->num_pending + 1) * sizeof(pending_t *));
@@ -595,14 +586,14 @@ static void pending_intermediate(monitor_t *monitor, pending_t *pending, const c
 			pending_process(monitor, new_pending->current_parent);
 		} else {
 			log_message(ERROR, "Failed to allocate memory for new pending array");
-			/* Clean up intermediate watch */
-			registry_deactivate(monitor->registry, parentref);
+			/* Clean up proxy watch */
+			registry_deactivate(monitor->registry, proxyref);
 			pending_destroy(new_pending);
 		}
 	} else {
 		log_message(WARNING, "Failed to add monitor or get next component for '%s'", path);
-		/* Clean up intermediate watch */
-		registry_deactivate(monitor->registry, parentref);
+		/* Clean up proxy watch */
+		registry_deactivate(monitor->registry, proxyref);
 		pending_destroy(new_pending);
 	}
 }
@@ -628,7 +619,7 @@ static void pending_process_glob(monitor_t *monitor, pending_t *pending) {
 			if (glob_matches(matches[m], pending->glob_pattern)) {
 				pending_promote_match(monitor, pending, matches[m]);
 			} else {
-				pending_intermediate(monitor, pending, matches[m]);
+				pending_proxy(monitor, pending, matches[m]);
 			}
 		}
 	}
@@ -642,50 +633,58 @@ static void pending_process_glob(monitor_t *monitor, pending_t *pending) {
 
 /* Process a pending watch for an exact path */
 static void pending_process_exact(monitor_t *monitor, pending_t *pending, int index) {
-	if (pending_is_dir(pending->next_component) || access(pending->next_component, F_OK) == 0) {
-		log_message(DEBUG, "Next component created: %s", pending->next_component);
+	/* Loop to process multiple path components created in a single event (e.g., mkdir -p) */
+	while (true) {
+		if (pending_is_dir(pending->next_component) || access(pending->next_component, F_OK) == 0) {
+			log_message(DEBUG, "Next component created: %s", pending->next_component);
 
-		/* Check if this completes the full target path */
-		if (strcmp(pending->next_component, pending->target_path) == 0) {
-			/* Full path now exists - promote to regular watch */
-			log_message(DEBUG, "Promoting pending watch to regular watch: %s", pending->target_path);
+			/* Check if this completes the full target path */
+			if (strcmp(pending->next_component, pending->target_path) == 0) {
+				/* Full path now exists - promote to regular watch */
+				log_message(DEBUG, "Promoting pending watch to regular watch: %s", pending->target_path);
 
-			if (monitor_add(monitor, pending->watchref, true)) {
-				log_message(INFO, "Successfully promoted pending watch: %s", pending->target_path);
+				if (monitor_add(monitor, pending->watchref, true)) {
+					log_message(INFO, "Successfully promoted pending watch: %s", pending->target_path);
+				} else {
+					log_message(WARNING, "Failed to promote pending watch: %s", pending->target_path);
+				}
+
+				/* Remove from pending list and exit */
+				pending_remove(monitor, index);
+				return;
 			} else {
-				log_message(WARNING, "Failed to promote pending watch: %s", pending->target_path);
-			}
+				/* Proxy directory created - update pending watch and continue loop */
+				log_message(DEBUG, "Proxy component created, updating pending watch: %s",
+							pending->next_component);
 
-			/* Remove from pending list */
-			pending_remove(monitor, index);
+				free(pending->current_parent);
+				pending->current_parent = strdup(pending->next_component);
+
+				free(pending->next_component);
+				pending->next_component = pending_component(pending->target_path, pending->current_parent, true);
+
+				if (!pending->next_component) {
+					log_message(ERROR, "Failed to determine next component, removing pending watch");
+					pending_remove(monitor, index);
+					return;
+				}
+
+				/* Add watch on the new parent directory */
+				if (!monitor_path(monitor, pending->current_parent, pending->proxyref)) {
+					log_message(WARNING, "Failed to add watch on new parent: %s", pending->current_parent);
+					pending_remove(monitor, index);
+					return;
+				}
+
+				/* Update parent watcher reference */
+				pending->proxy_watcher = pending_watcher(monitor, pending->current_parent, pending->proxyref);
+
+				log_message(DEBUG, "Updated pending watch: target=%s, new_parent=%s, next=%s",
+							pending->target_path, pending->current_parent, pending->next_component);
+			}
 		} else {
-			/* Intermediate directory created - update pending watch */
-			log_message(DEBUG, "Intermediate component created, updating pending watch: %s", pending->next_component);
-
-			free(pending->current_parent);
-			pending->current_parent = strdup(pending->next_component);
-
-			free(pending->next_component);
-			pending->next_component = pending_component(pending->target_path, pending->current_parent, true);
-
-			if (!pending->next_component) {
-				log_message(ERROR, "Failed to determine next component, removing pending watch");
-				pending_remove(monitor, index);
-				return;
-			}
-
-			/* Add watch on the new parent directory */
-			if (!monitor_path(monitor, pending->current_parent, pending->watchref)) {
-				log_message(WARNING, "Failed to add watch on new parent: %s", pending->current_parent);
-				pending_remove(monitor, index);
-				return;
-			}
-
-			/* Update parent watcher reference */
-			pending->parent_watcher = pending_watcher(monitor, pending->current_parent, pending->watchref);
-
-			log_message(DEBUG, "Updated pending watch: target=%s, new_parent=%s, next=%s",
-						pending->target_path, pending->current_parent, pending->next_component);
+			/* Next component does not exist, so we stop here and wait for another event */
+			break;
 		}
 	}
 }
@@ -718,7 +717,7 @@ void pending_cleanup(monitor_t *monitor) {
 		return;
 	}
 
-	/* Use pending_remove() to ensure proper cleanup of intermediate watches */
+	/* Use pending_remove() to ensure proper cleanup of proxy watches */
 	while (monitor->num_pending > 0) {
 		pending_remove(monitor, monitor->num_pending - 1);
 	}

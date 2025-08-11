@@ -510,9 +510,14 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 		return false; /* Error already logged by registry */
 	}
 
-	/* Handle intermediate glob events - they only trigger pending_process, not commands */
-	if (watch->name != NULL && strncmp(watch->name, "__glob_", 7) == 0) {
-		return false; /* Don't process further, event has served its purpose */
+	/* Handle internal watches - they only trigger pending_process, not commands */
+	if (watch->name != NULL && strncmp(watch->name, "__", 2) == 0) {
+		/* Specifically allow __config_file__ to pass through for hot-reloading */
+		if (strcmp(watch->name, "__config_file__") != 0) {
+			log_message(DEBUG, "Filtered proxy watch event: %s (watch: %s), served pending resolution purpose",
+						event->path, watch->name);
+			return false; /* Don't process further, event has served its purpose */
+		}
 	}
 
 	/* Additional safety checks for watch structure */

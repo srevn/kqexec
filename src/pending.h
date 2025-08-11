@@ -5,6 +5,9 @@
 
 #include "registry.h"
 
+/* Maximum length for proxy watch names */
+#define PROXY_NAME_MAX_LEN 64
+
 /* Forward declarations */
 typedef struct monitor monitor_t;
 typedef struct watcher watcher_t;
@@ -19,9 +22,9 @@ typedef struct pending {
 	char *unresolved_path;                 /* The unresolved glob path up to the current parent */
 	char *glob_pattern;                    /* Original glob pattern for matching */
 	bool is_glob;                          /* Whether this is a glob pattern */
-	watcher_t *parent_watcher;             /* The watcher on the current parent directory */
+	watcher_t *proxy_watcher;              /* The watcher on the current parent directory */
 	watchref_t watchref;                   /* Reference to the original watch configuration */
-	watchref_t parentref;                  /* Reference to intermediate glob watch */
+	watchref_t proxyref;                   /* Reference to proxy watch */
 } pending_t;
 
 /* Pending watch management functions */
