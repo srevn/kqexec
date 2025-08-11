@@ -266,7 +266,7 @@ void monitor_destroy(monitor_t *monitor) {
 	}
 
 	/* Clean up pending watches */
-	pending_cleanup(monitor);
+	pending_cleanup(monitor, monitor->registry);
 
 	free(monitor->config_path);
 
@@ -928,7 +928,7 @@ bool monitor_reload(monitor_t *monitor) {
 	}
 
 	/* Clear pending watches that may reference old watches */
-	pending_cleanup(monitor);
+	pending_cleanup(monitor, old_registry);
 
 	/* Save old watches to be moved to the graveyard */
 	watcher_t **stale_watches = monitor->watches;

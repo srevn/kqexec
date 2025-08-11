@@ -314,7 +314,7 @@ bool pending_add(monitor_t *monitor, const char *target_path, watchref_t watchre
 
 	if (is_glob) {
 		/* Handle glob pattern */
-			log_message(ERROR, "No existing parent found for glob pattern: %s", target_path);
+		log_message(ERROR, "No existing parent found for glob pattern: %s", target_path);
 		parent_path = pending_parent(target_path, true);
 		if (!parent_path) {
 			return false;
@@ -329,7 +329,7 @@ bool pending_add(monitor_t *monitor, const char *target_path, watchref_t watchre
 		}
 	} else {
 		/* Handle exact path (existing logic) */
-			log_message(ERROR, "No existing parent found for path: %s", target_path);
+		log_message(ERROR, "No existing parent found for path: %s", target_path);
 		parent_path = pending_parent(target_path, false);
 		if (!parent_path) {
 			return false;
@@ -712,19 +712,30 @@ void pending_process(monitor_t *monitor, const char *parent_path) {
 }
 
 /* Clean up all pending watches */
-void pending_cleanup(monitor_t *monitor) {
+void pending_cleanup(monitor_t *monitor, registry_t *registry) {
 	if (!monitor || !monitor->pending) {
 		return;
 	}
 
-	/* Use pending_remove() to ensure proper cleanup of proxy watches */
-	while (monitor->num_pending > 0) {
-		pending_remove(monitor, monitor->num_pending - 1);
+	if (!registry) {
+		log_message(WARNING, "pending_cleanup called with NULL registry");
+		return;
 	}
 
-	/* Clean up the pointer */
+	/* Deactivate proxy watches and destroy pending entries */
+	for (int i = 0; i < monitor->num_pending; i++) {
+		pending_t *pending = monitor->pending[i];
+		if (pending) {
+			if (watchref_valid(pending->proxyref)) {
+				registry_deactivate(registry, pending->proxyref);
+			}
+			pending_destroy(pending);
+		}
+	}
+
 	free(monitor->pending);
 	monitor->pending = NULL;
+	monitor->num_pending = 0;
 }
 
 /* Handle deletion of parent directories that affect pending watches */
