@@ -80,21 +80,28 @@ bool stability_ready(monitor_t *monitor, entity_t *state, optype_t optype, int b
 	/* Defer all directory-related operations to the stability system */
 	if (state->node->kind == ENTITY_DIRECTORY) {
 		entity_t *root = stability_root(monitor, state);
-		if (root && monitor) {
-			/* Always trigger a deferred check; queue deduplicates */
-			root->group->scanner->active = true;
-			root->group->stability->stability_lost = false;
+		if (!root || !monitor) {
+			return false;
+		}
 
-			log_message(DEBUG, "Directory content change for %s, marked root %s as active, command deferred",
-						state->node->path, root->node->path);
-
-			if (!root) {
+		/* Ensure scanner is created for this group */
+		if (!root->group->scanner) {
+			root->group->scanner = scanner_create(root->node->path);
+			if (!root->group->scanner) {
+				log_message(ERROR, "Failed to create scanner for directory: %s", root->node->path);
 				return false;
 			}
-
-			stability_defer(monitor, root);
-			log_message(DEBUG, "Added directory %s to deferred check queue", root->node->path);
 		}
+
+		/* Always trigger a deferred check; queue deduplicates */
+		root->group->scanner->active = true;
+		root->group->stability->stability_lost = false;
+
+		log_message(DEBUG, "Directory content change for %s, marked root %s as active, command deferred",
+					state->node->path, root->node->path);
+
+		stability_defer(monitor, root);
+		log_message(DEBUG, "Added directory %s to deferred check queue", root->node->path);
 		return false; /* Decision happens later */
 	}
 
