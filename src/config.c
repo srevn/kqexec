@@ -734,12 +734,20 @@ bool config_exclude_match(const watch_t *watch, const char *path) {
 	/* Calculate relative path from watch base to target path */
 	const char *relative_path = path;
 	if (watch->path && strncmp(path, watch->path, strlen(watch->path)) == 0) {
-		/* Path is under watch directory, extract relative portion */
+		/* Verify path is truly within watch directory hierarchy */
 		size_t base_len = strlen(watch->path);
 		if (path[base_len] == '/') {
+			/* Path is under watch directory, extract relative portion */
 			relative_path = path + base_len + 1; /* Skip the base path and trailing slash */
 		} else if (path[base_len] == '\0') {
-			relative_path = "."; /* Target is the watch directory itself */
+			/* Target is the watch directory itself */
+			relative_path = ".";
+		} else if (strcmp(watch->path, "/") == 0 && path[0] == '/') {
+			/* Root directory watch - all absolute paths are within hierarchy */
+			relative_path = path + 1; /* Skip the leading slash */
+		} else {
+			/* Path starts with watch path but is not within hierarchy */
+			return false;
 		}
 	}
 
