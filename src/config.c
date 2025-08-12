@@ -802,7 +802,22 @@ bool config_exclude_match(const watch_t *watch, const char *path) {
 				}
 			}
 		} else {
-			/* Pattern is basename-only - extract basename and match */
+			/* Pattern is basename-only - check both directory components and final basename */
+			if (strchr(relative_path, '/') != NULL) {
+				char path_copy[PATH_MAX];
+				strncpy(path_copy, relative_path, sizeof(path_copy) - 1);
+				path_copy[sizeof(path_copy) - 1] = '\0';
+
+				char *dir_component = strtok(path_copy, "/");
+				while (dir_component != NULL) {
+					if (fnmatch(pattern, dir_component, 0) == 0) {
+						return true; /* Path is within a directory that matches the pattern */
+					}
+					dir_component = strtok(NULL, "/");
+				}
+			}
+
+			/* Then, check the basename */
 			const char *basename;
 
 			/* Handle root and current dir edge cases */
