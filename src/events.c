@@ -350,7 +350,7 @@ struct timespec *timeout_calculate(monitor_t *monitor, struct timespec *timeout,
 						monitor->check_queue->size, monitor->check_queue->items[0].path);
 		}
 
-		/* Get the earliest check time (top of min-heap) */
+		/* Get the earliest check time */
 		struct timespec next_check = monitor->check_queue->items[0].next_check;
 
 		/* Calculate relative timeout */

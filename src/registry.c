@@ -189,7 +189,7 @@ bool watchref_equal(watchref_t a, watchref_t b) {
 	return a.watch_id == b.watch_id && a.generation == b.generation;
 }
 
-/* Utility function: Check if watch reference is valid (non-zero) */
+/* Utility function: Check if watch reference is valid */
 bool watchref_valid(watchref_t watchref) {
 	return watchref.watch_id != 0 || watchref.generation != 0;
 }
@@ -203,7 +203,7 @@ bool observer_register(registry_t *registry, observer_t *observer) {
 
 	pthread_rwlock_wrlock(&registry->lock);
 
-	/* Check if observer is already registered (prevent duplicates) */
+	/* Check if observer is already registered */
 	for (observer_t *existing = registry->observers; existing; existing = existing->next) {
 		if (existing == observer) {
 			pthread_rwlock_unlock(&registry->lock);
@@ -269,7 +269,7 @@ static void registry_notify(registry_t *registry, watchref_t watchref) {
 		snapshot[i++] = obs;
 	}
 
-	/* Temporarily release lock for callbacks (prevents deadlock) */
+	/* Temporarily release lock for callbacks */
 	pthread_rwlock_unlock(&registry->lock);
 
 	/* Notify all observers in snapshot */

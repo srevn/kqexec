@@ -1208,7 +1208,7 @@ char *scanner_modified(const char *base_path, const watch_t *watch, time_t since
 			continue;
 		}
 
-		/* Handle files. */
+		/* Handle files */
 		if (S_ISREG(info.st_mode)) {
 			/* Use the most recent of modification or status change time */
 			time_t latest_time = (info.st_mtime > info.st_ctime) ? info.st_mtime : info.st_ctime;
@@ -1241,7 +1241,7 @@ char *scanner_modified(const char *base_path, const watch_t *watch, time_t since
 				result_size += name_len;
 			}
 		}
-		/* Handle directories for recursion. */
+		/* Handle directories for recursion */
 		else if (S_ISDIR(info.st_mode) && recursive) {
 			char *subdir_result = scanner_modified(path, watch, since_time, recursive, basename);
 

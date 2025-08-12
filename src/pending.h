@@ -32,7 +32,7 @@ bool pending_add(monitor_t *monitor, const char *target_path, watchref_t watchre
 void pending_process(monitor_t *monitor, const char *parent_path);
 void pending_delete(monitor_t *monitor, const char *deleted_path);
 
-/* Clean up all pending watches */
+/* Pending cleanup functions */
 void pending_cleanup(monitor_t *monitor, registry_t *registry);
 void pending_destroy(pending_t *pending);
 void pending_remove(monitor_t *monitor, int index);

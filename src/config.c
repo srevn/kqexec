@@ -74,7 +74,7 @@ static char *canonize_path(const char *path, int line_number) {
 
 			/* Construct absolute path */
 			int ret = snprintf(resolved_path, sizeof(resolved_path), "%s/%s", absolute_path, path);
-			if (ret >= (int)sizeof(resolved_path)) {
+			if (ret >= (int) sizeof(resolved_path)) {
 				log_message(ERROR, "Constructed path too long at line %d", line_number);
 				return NULL;
 			}
@@ -213,7 +213,7 @@ bool config_remove_watch(config_t *config, registry_t *registry, watchref_t watc
 		log_message(DEBUG, "Removing watch '%s' for path '%s' from config", watch->name, watch->path);
 	}
 
-	/* Deactivate in registry (triggers observer notifications) */
+	/* Deactivate in registry */
 	registry_deactivate(registry, watchref);
 
 	return true;

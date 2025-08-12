@@ -419,7 +419,7 @@ failure_t stability_fail(monitor_t *monitor, check_t *check, entity_t *root, str
 
 		return SCAN_FAILURE_DIRECTORY_DELETED;
 	} else {
-		/* Scan failed for other reasons (e.g., temp files) */
+		/* Scan failed for other reasons */
 		root->stability->checks_failed = 0; /* Reset counter */
 		return SCAN_FAILURE_TEMPORARY_ERROR;
 	}
@@ -632,7 +632,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 
 	/* Process one overdue check to maintain main loop responsiveness */
 	if (monitor->check_queue->size > 0) {
-		/* Get the top check (earliest scheduled check) */
+		/* Get the earliest scheduled check */
 		check_t *check = &monitor->check_queue->items[0];
 
 		/* Validate the top check before processing */

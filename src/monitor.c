@@ -126,7 +126,7 @@ static void monitor_handle_deactivation(watchref_t watchref, void *context) {
 	log_message(DEBUG, "Monitor observer: Watch ID %u (gen %u) deactivated, cleaning up watcher resources",
 				watchref.watch_id, watchref.generation);
 
-	/* Scan monitor watchers for the deactivated watch (iterate backwards for safe removal) */
+	/* Scan monitor watchers for the deactivated watch */
 	for (int i = monitor->num_watches - 1; i >= 0; i--) {
 		watcher_t *watcher = monitor->watches[i];
 		if (watcher && watchref_equal(watcher->watchref, watchref)) {
@@ -293,7 +293,7 @@ void monitor_destroy(monitor_t *monitor) {
 	/* Destroy the configuration */
 	config_destroy(monitor->config);
 
-	/* Destroy the registry (monitor owns it) */
+	/* Destroy the registry */
 	if (monitor->registry) {
 		registry_destroy(monitor->registry);
 	}
