@@ -212,7 +212,9 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 		size_t size = 0;
 		if (state && state->node->kind == ENTITY_DIRECTORY) {
 			entity_t *size_state = stability_root(monitor, state);
+			pthread_mutex_lock(&state->group->mutex);
 			size = size_state ? size_state->group->stability->stats.tree_size : state->group->stability->stats.tree_size;
+			pthread_mutex_unlock(&state->group->mutex);
 		} else if (stat(event->path, &info) == 0) {
 			size = info.st_size;
 		}

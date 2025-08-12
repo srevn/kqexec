@@ -460,6 +460,9 @@ optype_t events_operation(monitor_t *monitor, entity_t *state, filter_t filter) 
 
 		/* For directory creation, gather initial stats */
 		if (state->node->kind == ENTITY_DIRECTORY) {
+			/* Lock the group mutex to protect shared state */
+			pthread_mutex_lock(&state->group->mutex);
+			
 			/* Stability state should already be created by states_get() in the appropriate group */
 			if (!state->group->stability) {
 				state->group->stability = stability_create();
@@ -471,6 +474,8 @@ optype_t events_operation(monitor_t *monitor, entity_t *state, filter_t filter) 
 					state->group->stability->prev_stats = state->group->stability->stats;
 				}
 			}
+			
+			pthread_mutex_unlock(&state->group->mutex);
 		}
 	} else if (exists_now) {
 		/* Existed before and exists now - check for other changes */

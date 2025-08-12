@@ -1,6 +1,7 @@
 #ifndef STATES_H
 #define STATES_H
 
+#include <pthread.h>
 #include <stdint.h>
 #include <time.h>
 
@@ -19,6 +20,7 @@ typedef struct group group_t;
 /* Stability group for watches with compatible scan configurations */
 typedef struct group {
 	uint64_t config_hash;                  /* Hash of the scan configuration (recursive, hidden, excludes) */
+	pthread_mutex_t mutex;                 /* Mutex to protect this group's shared state */
 	stability_t *stability;                /* Shared stability state for this group */
 	scanner_t *scanner;                    /* Shared scanner state for this group */
 	entity_t *entities;                    /* Head of list of entities that belong to this group */

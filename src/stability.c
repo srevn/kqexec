@@ -654,9 +654,13 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 			return;
 		}
 
+		/* Lock the group mutex to protect shared state during stability processing */
+		pthread_mutex_lock(&root->group->mutex);
+
 		/* If the entity is no longer active, just remove from queue */
 		if (!root->group->scanner->active) {
 			log_message(DEBUG, "Directory %s no longer active, removing from queue", check->path);
+			pthread_mutex_unlock(&root->group->mutex);
 			queue_remove(monitor->check_queue, check->path);
 			return;
 		}
@@ -682,6 +686,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 							root->node->path, primary_watch ? primary_watch->name : "unknown");
 
 				stability_delay(monitor, check, root, current_time, required_quiet);
+				pthread_mutex_unlock(&root->group->mutex);
 				return;
 			}
 
@@ -722,6 +727,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 			}
 			check->next_check = next_check;
 			heap_down(monitor->check_queue->items, monitor->check_queue->size, 0);
+			pthread_mutex_unlock(&root->group->mutex);
 			return;
 		}
 
@@ -735,6 +741,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 
 			if (failure_type == SCAN_FAILURE_MAX_ATTEMPTS_REACHED) {
 				/* Remove from queue */
+				pthread_mutex_unlock(&root->group->mutex);
 				queue_remove(monitor->check_queue, check->path);
 				return;
 			} else if (failure_type == SCAN_FAILURE_DIRECTORY_DELETED) {
@@ -746,6 +753,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 				/* Update check */
 				check->next_check = next_check;
 				heap_down(monitor->check_queue->items, monitor->check_queue->size, 0);
+				pthread_mutex_unlock(&root->group->mutex);
 				return;
 			}
 		}
@@ -770,6 +778,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 			required_quiet = scanner_delay(monitor, root);
 			log_message(DEBUG, "Recalculated quiet period for instability: %ld ms", required_quiet);
 			stability_delay(monitor, check, root, current_time, required_quiet);
+			pthread_mutex_unlock(&root->group->mutex);
 			return;
 		}
 
@@ -804,6 +813,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 			check->next_check = next_check;
 			heap_down(monitor->check_queue->items, monitor->check_queue->size, 0);
 
+			pthread_mutex_unlock(&root->group->mutex);
 			return;
 		}
 
@@ -816,6 +826,9 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 		int executed_now = 0;
 		stability_execute(monitor, check, root, current_time, &executed_now);
 		commands_executed += executed_now;
+
+		/* Unlock the group mutex before queue operations */
+		pthread_mutex_unlock(&root->group->mutex);
 
 		/* Remove check from queue after processing all watches */
 		queue_remove(monitor->check_queue, check->path);

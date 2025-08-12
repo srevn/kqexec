@@ -598,7 +598,7 @@ static void scanner_root(monitor_t *monitor, entity_t *state, optype_t optype) {
 
 /* Record a new activity event in the entity's history */
 void scanner_track(monitor_t *monitor, entity_t *state, optype_t optype) {
-	if (!state) return;
+	if (!state || !state->group) return;
 
 	/* Check for duplicate tracking to avoid re-processing the same event */
 	if (state->node->op_time.tv_sec == state->node->last_time.tv_sec && state->node->op_time.tv_nsec == state->node->last_time.tv_nsec) {
@@ -607,6 +607,9 @@ void scanner_track(monitor_t *monitor, entity_t *state, optype_t optype) {
 		return;
 	}
 
+	/* Lock the group mutex to protect shared state */
+	pthread_mutex_lock(&state->group->mutex);
+
 	/* Record basic activity in circular buffer */
 	scanner_record(state->group, state->node->last_time, state->node->path, optype);
 
@@ -614,6 +617,7 @@ void scanner_track(monitor_t *monitor, entity_t *state, optype_t optype) {
 	watch_t *state_watch = registry_get(monitor->registry, state->watchref);
 	if (!state_watch) {
 		log_message(WARNING, "Cannot get watch for state %s in scanner_track", state->node->path);
+		pthread_mutex_unlock(&state->group->mutex);
 		return;
 	}
 
@@ -628,6 +632,9 @@ void scanner_track(monitor_t *monitor, entity_t *state, optype_t optype) {
 
 	/* Record the timestamp of this operation to prevent duplicates */
 	state->node->op_time = state->node->last_time;
+
+	/* Unlock the group mutex */
+	pthread_mutex_unlock(&state->group->mutex);
 }
 
 /* Calculate base quiet period based on recent change magnitude */
