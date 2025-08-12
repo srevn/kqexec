@@ -78,13 +78,12 @@ bool stability_ready(monitor_t *monitor, entity_t *state, optype_t optype, int b
 	scanner_track(monitor, state, optype);
 
 	/* Defer all directory-related operations to the stability system */
-	if (state->kind == ENTITY_DIRECTORY) {
+	if (state->node->kind == ENTITY_DIRECTORY) {
 		entity_t *root = stability_root(monitor, state);
 		if (root && monitor) {
 			/* Always trigger a deferred check; queue deduplicates */
-			root->scanner->active = true;
-			root->stability->stability_lost = false;
-			scanner_sync(monitor, root->node, root);
+			root->node->scanner->active = true;
+			root->node->stability->stability_lost = false;
 
 			log_message(DEBUG, "Directory content change for %s, marked root %s as active, command deferred",
 						state->node->path, root->node->path);
@@ -149,7 +148,7 @@ void stability_defer(monitor_t *monitor, entity_t *state) {
 	entity_t *root = stability_root(monitor, state);
 	if (!root) {
 		/* If no root found, use the provided state if it's a directory */
-		if (state->kind == ENTITY_DIRECTORY) {
+		if (state->node->kind == ENTITY_DIRECTORY) {
 			root = state;
 		} else {
 			log_message(WARNING, "Cannot schedule check for %s: no root state found", state->node->path);
@@ -158,27 +157,26 @@ void stability_defer(monitor_t *monitor, entity_t *state) {
 	}
 
 	/* Ensure the root state has a scanner before we use it */
-	if (!root->scanner) {
-		root->scanner = scanner_create(root->node->path);
-		if (!root->scanner) {
+	if (!root->node->scanner) {
+		root->node->scanner = scanner_create(root->node->path);
+		if (!root->node->scanner) {
 			log_message(ERROR, "Failed to create scanner for root %s in stability_defer", root->node->path);
 			return;
 		}
 	}
 
 	/* Force root state to be active and update its activity time to now */
-	root->scanner->active = true;
-	root->stability->stability_lost = false;
-	clock_gettime(CLOCK_MONOTONIC, &root->scanner->latest_time);
-	scanner_sync(monitor, root->node, root); /* Propagate new activity time */
+	root->node->scanner->active = true;
+	root->node->stability->stability_lost = false;
+	clock_gettime(CLOCK_MONOTONIC, &root->node->scanner->latest_time);
 
 	/* Initialize reference stats if needed */
-	if (!root->stability->reference_init) {
-		root->stability->ref_stats = root->stability->stats;
-		root->stability->reference_init = true;
+	if (!root->node->stability->reference_init) {
+		root->node->stability->ref_stats = root->node->stability->stats;
+		root->node->stability->reference_init = true;
 		log_message(DEBUG, "Initialized reference stats for %s: files=%d, dirs=%d, depth=%d",
-					root->node->path, root->stability->stats.local_files,
-					root->stability->stats.local_dirs, root->stability->stats.depth);
+					root->node->path, root->node->stability->stats.local_files,
+					root->node->stability->stats.local_dirs, root->node->stability->stats.depth);
 	}
 
 	/* Calculate check time based on quiet period */
@@ -186,9 +184,9 @@ void stability_defer(monitor_t *monitor, entity_t *state) {
 	clock_gettime(CLOCK_MONOTONIC, &current_time);
 
 	/* Ensure we don't use a timestamp in the past */
-	if (root->scanner->latest_time.tv_sec < current_time.tv_sec - 10) {
+	if (root->node->scanner->latest_time.tv_sec < current_time.tv_sec - 10) {
 		log_message(DEBUG, "Last activity timestamp for %s is too old, using current time", root->node->path);
-		root->scanner->latest_time = current_time;
+		root->node->scanner->latest_time = current_time;
 	}
 
 	/* Check if there's already a pending check to implement lock-in behavior */
@@ -230,11 +228,10 @@ void stability_defer(monitor_t *monitor, entity_t *state) {
 		}
 
 		/* Update activity time for true timer refresh */
-		clock_gettime(CLOCK_MONOTONIC, &root->scanner->latest_time);
-		scanner_sync(monitor, root->node, root); /* Propagate new activity time */
+		clock_gettime(CLOCK_MONOTONIC, &root->node->scanner->latest_time);
 
 		/* Use existing scheduling logic with effective period */
-		stability_delay(monitor, check, root, &root->scanner->latest_time, effective_quiet);
+		stability_delay(monitor, check, root, &root->node->scanner->latest_time, effective_quiet);
 
 		log_message(DEBUG, "Event received, using quiet period of %ld ms for %s (locked: %ld ms, calculated: %ld ms)",
 					effective_quiet, root->node->path, locked_quiet, current_complexity);
@@ -247,8 +244,8 @@ void stability_defer(monitor_t *monitor, entity_t *state) {
 				root->node->path, required_quiet);
 
 	struct timespec next_check;
-	next_check.tv_sec = root->scanner->latest_time.tv_sec + (required_quiet / 1000);
-	next_check.tv_nsec = root->scanner->latest_time.tv_nsec + ((required_quiet % 1000) * 1000000);
+	next_check.tv_sec = root->node->scanner->latest_time.tv_sec + (required_quiet / 1000);
+	next_check.tv_nsec = root->node->scanner->latest_time.tv_nsec + ((required_quiet % 1000) * 1000000);
 
 	/* Normalize nsec */
 	if (next_check.tv_nsec >= 1000000000) {
@@ -266,8 +263,8 @@ void stability_defer(monitor_t *monitor, entity_t *state) {
 	}
 
 	log_message(DEBUG, "Scheduled deferred check for %s: in %ld ms (directory with %d files, %d dirs)",
-				root->node->path, required_quiet, root->stability->stats.local_files,
-				root->stability->stats.local_dirs);
+				root->node->path, required_quiet, root->node->stability->stats.local_files,
+				root->node->stability->stats.local_dirs);
 }
 
 /* Get the root entity state for a deferred check */
@@ -295,7 +292,7 @@ bool stability_quiet(monitor_t *monitor, entity_t *root, struct timespec *curren
 		return false;
 	}
 
-	struct timespec scanner_time = root->scanner->latest_time;
+	struct timespec scanner_time = root->node->scanner->latest_time;
 	long elapsed_ms;
 
 	/* Robustly calculate elapsed time in milliseconds */
@@ -315,9 +312,9 @@ bool stability_quiet(monitor_t *monitor, entity_t *root, struct timespec *curren
 	}
 
 	log_message(DEBUG, "Path %s: %ld ms elapsed of %ld ms quiet period, direct_entries=%d+%d, recursive_entries=%d+%d, depth=%d",
-				root->node->path, elapsed_ms, required_quiet, root->stability->stats.local_files,
-				root->stability->stats.local_dirs, root->stability->stats.tree_files, root->stability->stats.tree_dirs,
-				root->stability->stats.depth);
+				root->node->path, elapsed_ms, required_quiet, root->node->stability->stats.local_files,
+				root->node->stability->stats.local_dirs, root->node->stability->stats.tree_files, root->node->stability->stats.tree_dirs,
+				root->node->stability->stats.depth);
 
 	return scanner_ready(monitor, root, current_time, required_quiet);
 }
@@ -330,8 +327,8 @@ void stability_delay(monitor_t *monitor, check_t *check, entity_t *root, struct 
 
 	/* Update next check time based on latest activity */
 	struct timespec next_check;
-	next_check.tv_sec = root->scanner->latest_time.tv_sec + (required_quiet / 1000);
-	next_check.tv_nsec = root->scanner->latest_time.tv_nsec + ((required_quiet % 1000) * 1000000);
+	next_check.tv_sec = root->node->scanner->latest_time.tv_sec + (required_quiet / 1000);
+	next_check.tv_nsec = root->node->scanner->latest_time.tv_nsec + ((required_quiet % 1000) * 1000000);
 
 	/* Normalize timestamp */
 	if (next_check.tv_nsec >= 1000000000) {
@@ -371,18 +368,19 @@ bool stability_scan(monitor_t *monitor, entity_t *root, const char *path, stats_
 	}
 
 	/* Perform recursive stability verification */
-	bool is_stable = scanner_stable(monitor, root, path, stats_out);
+	watch_t *watch = registry_get(monitor->registry, root->watchref);
+	bool is_stable = scanner_stable(monitor, root->node, path, watch, stats_out);
 
 	/* Always update stats and cumulative changes, even if unstable, to track progress */
-	root->stability->checks_failed = is_stable ? 0 : root->stability->checks_failed;
+	root->node->stability->checks_failed = is_stable ? 0 : root->node->stability->checks_failed;
 
 	/* Save previous stats for comparison before overwriting */
-	stats_t temp_stats = root->stability->stats;
-	root->stability->stats = *stats_out;
+	stats_t temp_stats = root->node->stability->stats;
+	root->node->stability->stats = *stats_out;
 
 	/* Update cumulative changes based on the difference */
-	root->stability->prev_stats = temp_stats;
-	scanner_update(root);
+	root->node->stability->prev_stats = temp_stats;
+	scanner_update(root->node);
 
 	log_message(DEBUG, "Stability scan for %s: files=%d, dirs=%d, size=%s, recursive_files=%d, recursive_dirs=%d, max_depth=%d",
 				path, stats_out->local_files, stats_out->local_dirs, format_size((ssize_t) stats_out->tree_size, false),
@@ -400,19 +398,18 @@ failure_t stability_fail(monitor_t *monitor, check_t *check, entity_t *root, str
 	/* Check if the directory still exists */
 	struct stat info;
 	if (stat(check->path, &info) != 0 || !S_ISDIR(info.st_mode)) {
-		root->stability->checks_failed++;
+		root->node->stability->checks_failed++;
 		log_message(DEBUG, "Directory %s not found (attempt %d/%d)", check->path,
-					root->stability->checks_failed, MAX_CHECKS_FAILED);
+					root->node->stability->checks_failed, MAX_CHECKS_FAILED);
 
 		/* After multiple consecutive failures, consider it permanently deleted */
-		if (root->stability->checks_failed >= MAX_CHECKS_FAILED) {
+		if (root->node->stability->checks_failed >= MAX_CHECKS_FAILED) {
 			log_message(INFO, "Directory %s confirmed deleted after %d failed checks, cleaning up",
-						check->path, root->stability->checks_failed);
+						check->path, root->node->stability->checks_failed);
 
 			/* Mark as not active for all watches */
-			root->scanner->active = false;
-			root->exists = false;
-			scanner_sync(monitor, root->node, root);
+			root->node->scanner->active = false;
+			root->node->exists = false;
 
 			return SCAN_FAILURE_MAX_ATTEMPTS_REACHED;
 		}
@@ -420,7 +417,7 @@ failure_t stability_fail(monitor_t *monitor, check_t *check, entity_t *root, str
 		return SCAN_FAILURE_DIRECTORY_DELETED;
 	} else {
 		/* Scan failed for other reasons */
-		root->stability->checks_failed = 0; /* Reset counter */
+		root->node->stability->checks_failed = 0; /* Reset counter */
 		return SCAN_FAILURE_TEMPORARY_ERROR;
 	}
 }
@@ -435,9 +432,9 @@ int stability_require(entity_t *root, const stats_t *current_stats) {
 	int tree_depth = current_stats->max_depth > 0 ? current_stats->max_depth : current_stats->depth;
 
 	/* Use cumulative changes for adapting stability requirements */
-	int abs_file_change = abs(root->stability->delta_files);
-	int abs_dir_change = abs(root->stability->delta_dirs);
-	int abs_depth_change = abs(root->stability->delta_depth);
+	int abs_file_change = abs(root->node->stability->delta_files);
+	int abs_dir_change = abs(root->node->stability->delta_dirs);
+	int abs_depth_change = abs(root->node->stability->delta_depth);
 	int abs_change = abs_file_change + abs_dir_change;
 
 	int checks_required;
@@ -460,7 +457,7 @@ int stability_require(entity_t *root, const stats_t *current_stats) {
 	}
 
 	/* Consider previous stability for check reduction */
-	if (root->stability->stability_lost && checks_required > 1) {
+	if (root->node->stability->stability_lost && checks_required > 1) {
 		log_message(DEBUG, "Stability was lost, maintaining required checks at %d", checks_required);
 	}
 
@@ -476,8 +473,8 @@ bool stability_stable(entity_t *root, const stats_t *current_stats, bool scan_co
 		return false;
 	}
 
-	bool has_prev_stats = (root->stability->prev_stats.local_files > 0 || root->stability->prev_stats.local_dirs > 0);
-	if (has_prev_stats && !scanner_compare(&root->stability->prev_stats, (stats_t *) current_stats)) {
+	bool has_prev_stats = (root->node->stability->prev_stats.local_files > 0 || root->node->stability->prev_stats.local_dirs > 0);
+	if (has_prev_stats && !scanner_compare(&root->node->stability->prev_stats, (stats_t *) current_stats)) {
 		return false;
 	}
 
@@ -491,7 +488,7 @@ void stability_reset(monitor_t *monitor, entity_t *root) {
 	}
 
 	/* Only process directories with stability tracking */
-	if (root->kind != ENTITY_DIRECTORY || !root->stability) {
+	if (root->node->kind != ENTITY_DIRECTORY || !root->node->stability) {
 		log_message(DEBUG, "Skipping baseline reset for non-directory or non-tracked entity: %s", root->node->path);
 		return;
 	}
@@ -509,31 +506,28 @@ void stability_reset(monitor_t *monitor, entity_t *root) {
 				root->node->path, new_baseline.tree_files, new_baseline.tree_dirs, new_baseline.max_depth);
 
 	/* Reset stability state to reflect new baseline as authoritative */
-	root->stability->stats = new_baseline;
-	root->stability->prev_stats = new_baseline;
-	root->stability->ref_stats = new_baseline;
+	root->node->stability->stats = new_baseline;
+	root->node->stability->prev_stats = new_baseline;
+	root->node->stability->ref_stats = new_baseline;
 
 	/* Clear all tracking deltas */
-	root->stability->delta_files = 0;
-	root->stability->delta_dirs = 0;
-	root->stability->delta_depth = 0;
-	root->stability->delta_size = 0;
+	root->node->stability->delta_files = 0;
+	root->node->stability->delta_dirs = 0;
+	root->node->stability->delta_depth = 0;
+	root->node->stability->delta_size = 0;
 
 	/* Reset stability verification tracking */
-	root->stability->checks_count = 0;
-	root->stability->checks_failed = 0;
-	root->stability->checks_required = 1;
-	root->stability->unstable_count = 0;
-	root->stability->stability_lost = false;
-	root->stability->reference_init = true;
+	root->node->stability->checks_count = 0;
+	root->node->stability->checks_failed = 0;
+	root->node->stability->checks_required = 1;
+	root->node->stability->unstable_count = 0;
+	root->node->stability->stability_lost = false;
+	root->node->stability->reference_init = true;
 
 	/* Clear activity tracking flag to mark the directory as idle */
-	if (root->scanner) {
-		root->scanner->active = false;
+	if (root->node->scanner) {
+		root->node->scanner->active = false;
 	}
-
-	/* Propagate the reset state to all related states for this path */
-	scanner_sync(monitor, root->node, root);
 }
 
 /* Execute commands for all watches of a stable directory */
@@ -543,7 +537,7 @@ bool stability_execute(monitor_t *monitor, check_t *check, entity_t *root, struc
 	}
 
 	int executed_count = 0;
-	const char *active_path = root->scanner->active_path ? root->scanner->active_path : check->path;
+	const char *active_path = root->node->scanner->active_path ? root->node->scanner->active_path : check->path;
 
 	/* Determine if any command needs the trigger file path (%f or %F) */
 	bool needs_trigger = false;
@@ -578,8 +572,8 @@ bool stability_execute(monitor_t *monitor, check_t *check, entity_t *root, struc
 	event_t synthetic_event = {
 		.path = (char *) active_path,
 		.type = EVENT_STRUCTURE,
-		.time = root->last_time,
-		.wall_time = root->wall_time,
+		.time = root->node->last_time,
+		.wall_time = root->node->wall_time,
 		.user_id = getuid()};
 
 	/* Set the executing flag for the root node before starting any commands */
@@ -661,7 +655,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 		}
 
 		/* If the entity is no longer active, just remove from queue */
-		if (!root->scanner->active) {
+		if (!root->node->scanner->active) {
 			log_message(DEBUG, "Directory %s no longer active, removing from queue", check->path);
 			queue_remove(monitor->check_queue, check->path);
 			return;
@@ -703,20 +697,20 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 			log_message(DEBUG, "Found new directories during scan, scheduling quick follow-up");
 
 			/* This is activity, but we don't need a full quiet period reset */
-			root->scanner->latest_time = *current_time;
+			root->node->scanner->latest_time = *current_time;
 
 			/* Update directory stats to reflect new directory structure */
 			stats_t new_stats;
 			watch_t *watch = registry_get(monitor->registry, root->watchref);
 			if (watch && scanner_scan(root->node->path, watch, &new_stats)) {
-				root->stability->prev_stats = root->stability->stats;
-				root->stability->stats = new_stats;
-				scanner_update(root);
+				root->node->stability->prev_stats = root->node->stability->stats;
+				root->node->stability->stats = new_stats;
+				scanner_update(root->node);
 			}
 
 			/* We stay in verification mode, but reset the check count since the scope has changed */
-			root->stability->checks_count = 0;
-			root->stability->checks_required = 0; /* Recalculate required checks */
+			root->node->stability->checks_count = 0;
+			root->node->stability->checks_required = 0; /* Recalculate required checks */
 
 			/* Schedule a short follow-up check instead of a full quiet period */
 			struct timespec next_check;
@@ -759,22 +753,18 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 		/* Determine stability */
 		bool is_stable = stability_stable(root, &current_stats, scan_completed);
 
-		/* Synchronize updated stats with other watches for the same path */
-		scanner_sync(monitor, root->node, root);
-
 		if (!is_stable) {
 			/* Directory is unstable - reset counter and reschedule */
-			root->stability->checks_count = 0;
-			root->stability->checks_required = 0; /* Reset required checks */
-			root->stability->unstable_count++;	  /* Increment instability counter */
+			root->node->stability->checks_count = 0;
+			root->node->stability->checks_required = 0; /* Reset required checks */
+			root->node->stability->unstable_count++;	/* Increment instability counter */
 
 			/* Update activity timestamp and reset verification flag*/
-			root->scanner->latest_time = *current_time;
-			scanner_sync(monitor, root->node, root);
+			root->node->scanner->latest_time = *current_time;
 			check->verifying = false;
 
 			log_message(DEBUG, "Directory %s failed stability scan (instability count: %d), rescheduling",
-						check->path, root->stability->unstable_count);
+						check->path, root->node->stability->unstable_count);
 
 			/* Recalculate quiet period based on new instability */
 			required_quiet = scanner_delay(monitor, root);
@@ -784,21 +774,21 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 		}
 
 		/* Directory is stable - determine if enough checks have been completed */
-		root->stability->checks_count++;
+		root->node->stability->checks_count++;
 
 		/* Calculate required checks based on complexity factors (only if not already set) */
-		if (root->stability->checks_required == 0) {
-			root->stability->checks_required = stability_require(root, &current_stats);
+		if (root->node->stability->checks_required == 0) {
+			root->node->stability->checks_required = stability_require(root, &current_stats);
 		}
-		int checks_required = root->stability->checks_required;
+		int checks_required = root->node->stability->checks_required;
 
 		log_message(DEBUG, "Stability check %d/%d for %s: changes (%+d files, %+d dirs, %+d depth) total (%d entries, depth %d)",
-					root->stability->checks_count, checks_required, root->node->path, root->stability->delta_files,
-					root->stability->delta_dirs, root->stability->delta_depth, current_stats.tree_files + current_stats.tree_dirs,
+					root->node->stability->checks_count, checks_required, root->node->path, root->node->stability->delta_files,
+					root->node->stability->delta_dirs, root->node->stability->delta_depth, current_stats.tree_files + current_stats.tree_dirs,
 					current_stats.max_depth > 0 ? current_stats.max_depth : current_stats.depth);
 
 		/* Check if we have enough consecutive stable checks */
-		if (root->stability->checks_count < checks_required) {
+		if (root->node->stability->checks_count < checks_required) {
 			/* Not enough checks yet, schedule quick follow-up check */
 			struct timespec next_check;
 			next_check.tv_sec = current_time->tv_sec;
@@ -820,7 +810,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 		/* Directory is stable with sufficient consecutive checks - execute commands */
 		commands_attempted++;
 		log_message(INFO, "Directory %s stability confirmed (%d/%d checks), proceeding to command execution",
-					root->node->path, root->stability->checks_count, checks_required);
+					root->node->path, root->node->stability->checks_count, checks_required);
 
 		/* Execute commands */
 		int executed_now = 0;

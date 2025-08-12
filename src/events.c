@@ -431,9 +431,9 @@ optype_t events_operation(monitor_t *monitor, entity_t *state, filter_t filter) 
 	if (!state) return OP_NONE;
 
 	/* Update state change flags based on the new event type */
-	if (filter & EVENT_STRUCTURE) state->structure_changed = true;
-	if (filter & EVENT_METADATA) state->metadata_changed = true;
-	if (filter & EVENT_CONTENT) state->content_changed = true;
+	if (filter & EVENT_STRUCTURE) state->node->structure_changed = true;
+	if (filter & EVENT_METADATA) state->node->metadata_changed = true;
+	if (filter & EVENT_CONTENT) state->node->content_changed = true;
 
 	/* Check current existence vs tracked existence */
 	struct stat info;
@@ -441,53 +441,53 @@ optype_t events_operation(monitor_t *monitor, entity_t *state, filter_t filter) 
 
 	optype_t determined_op = OP_NONE;
 
-	if (state->exists && !exists_now) {
+	if (state->node->exists && !exists_now) {
 		/* Deletion */
-		determined_op = (state->kind == ENTITY_FILE) ? OP_FILE_DELETED : OP_DIR_DELETED;
+		determined_op = (state->node->kind == ENTITY_FILE) ? OP_FILE_DELETED : OP_DIR_DELETED;
 		log_message(DEBUG, "Entity %s detected as DELETED", state->node->path);
-		state->exists = false;
-	} else if (!state->exists && exists_now) {
+		state->node->exists = false;
+	} else if (!state->node->exists && exists_now) {
 		/* Creation */
-		determined_op = (state->kind == ENTITY_FILE) ? OP_FILE_CREATED : OP_DIR_CREATED;
+		determined_op = (state->node->kind == ENTITY_FILE) ? OP_FILE_CREATED : OP_DIR_CREATED;
 		log_message(DEBUG, "Entity %s detected as CREATED", state->node->path);
-		state->exists = true;
+		state->node->exists = true;
 
 		/* Update type if it was unknown */
-		if (state->kind == ENTITY_UNKNOWN) {
-			if (S_ISDIR(info.st_mode)) state->kind = ENTITY_DIRECTORY;
-			else if (S_ISREG(info.st_mode)) state->kind = ENTITY_FILE;
+		if (state->node->kind == ENTITY_UNKNOWN) {
+			if (S_ISDIR(info.st_mode)) state->node->kind = ENTITY_DIRECTORY;
+			else if (S_ISREG(info.st_mode)) state->node->kind = ENTITY_FILE;
 		}
 
 		/* For directory creation, gather initial stats */
-		if (state->kind == ENTITY_DIRECTORY) {
+		if (state->node->kind == ENTITY_DIRECTORY) {
 			/* Create stability state for new directories */
-			if (!state->stability) {
-				state->stability = stability_create();
+			if (!state->node->stability) {
+				state->node->stability = stability_create();
 			}
-			if (state->stability) {
+			if (state->node->stability) {
 				watch_t *watch = registry_get(monitor->registry, state->watchref);
 				if (watch) {
-					scanner_scan(state->node->path, watch, &state->stability->stats);
-					state->stability->prev_stats = state->stability->stats;
+					scanner_scan(state->node->path, watch, &state->node->stability->stats);
+					state->node->stability->prev_stats = state->node->stability->stats;
 				}
 			}
 		}
 	} else if (exists_now) {
 		/* Existed before and exists now - check for other changes */
-		state->exists = true;
+		state->node->exists = true;
 
 		/* Prioritize which operation to report if multiple flags are set */
-		if (state->kind == ENTITY_DIRECTORY && (state->content_changed || state->structure_changed)) {
+		if (state->node->kind == ENTITY_DIRECTORY && (state->node->content_changed || state->node->structure_changed)) {
 			determined_op = OP_DIR_CONTENT_CHANGED;
 			log_message(DEBUG, "Directory %s structure changed", state->node->path);
-		} else if (state->kind == ENTITY_FILE && state->structure_changed) {
+		} else if (state->node->kind == ENTITY_FILE && state->node->structure_changed) {
 			determined_op = OP_FILE_CONTENT_CHANGED;
 			log_message(DEBUG, "File %s content changed", state->node->path);
-		} else if (state->kind == ENTITY_FILE && state->content_changed) {
+		} else if (state->node->kind == ENTITY_FILE && state->node->content_changed) {
 			determined_op = OP_FILE_RENAMED;
 			log_message(DEBUG, "File %s renamed or replaced", state->node->path);
-		} else if (state->metadata_changed) {
-			determined_op = (state->kind == ENTITY_FILE) ? OP_FILE_METADATA_CHANGED : OP_DIR_METADATA_CHANGED;
+		} else if (state->node->metadata_changed) {
+			determined_op = (state->node->kind == ENTITY_FILE) ? OP_FILE_METADATA_CHANGED : OP_DIR_METADATA_CHANGED;
 			log_message(DEBUG, "Entity %s metadata changed", state->node->path);
 		} else {
 			log_message(DEBUG, "Entity %s exists but no relevant changes detected", state->node->path);
@@ -584,8 +584,8 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 	}
 
 	/* Update timestamps before determining operation */
-	state->last_time = event->time;
-	state->wall_time = event->wall_time;
+	state->node->last_time = event->time;
+	state->node->wall_time = event->wall_time;
 
 	/* Determine the logical operation */
 	optype_t optype = events_operation(monitor, state, event->type);
@@ -633,8 +633,8 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 		event_t synthetic_event = {
 			.path = state->node->path,
 			.type = filter_for_mask,
-			.time = state->last_time,
-			.wall_time = state->wall_time,
+			.time = state->node->last_time,
+			.wall_time = state->node->wall_time,
 			.user_id = event->user_id};
 
 		log_message(INFO, "Executing command for %s (watch: %s, operation: %d)",
@@ -652,10 +652,10 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 			log_message(INFO, "Command execution successful for %s", state->node->path);
 
 			/* Update last command time and reset change flags */
-			state->command_time = state->last_time.tv_sec;
-			state->structure_changed = false;
-			state->metadata_changed = false;
-			state->content_changed = false;
+			state->command_time = state->node->last_time.tv_sec;
+			state->node->structure_changed = false;
+			state->node->metadata_changed = false;
+			state->node->content_changed = false;
 
 			return true;
 		} else {

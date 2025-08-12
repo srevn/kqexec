@@ -20,6 +20,23 @@ typedef struct node {
 	char *path;                            /* The path being watched */
 	entity_t *entities;                    /* Head of the list of states for this path */
 	bool executing;                        /* Flag indicating command is currently executing on this path */
+	
+	/* Consolidated state */
+	kind_t kind;                           /* File or directory */
+	scanner_t *scanner;                    /* Activity tracking state (NULL if not tracking) */
+	stability_t *stability;                /* Stability checking state (NULL if not checking) */
+	
+	/* Basic state flags */
+	bool exists;                           /* Resource currently exists */
+	bool content_changed;                  /* Content has changed */
+	bool metadata_changed;                 /* Metadata has changed */
+	bool structure_changed;                /* Structural change occurred */
+	
+	/* Timestamps */
+	struct timespec last_time;             /* When state was last updated (MONOTONIC) */
+	struct timespec wall_time;             /* Wall clock time (REALTIME) */
+	struct timespec op_time;               /* Timestamp of the last operation to prevent duplicates */
+	
 	struct node *next;                     /* Next node in the hash bucket */
 } node_t;
 
@@ -37,27 +54,11 @@ typedef struct entity {
 	/* Core identity */
 	uint32_t magic;                        /* Magic number for corruption detection */
 	struct node *node;                     /* Back-pointer to the parent path state */
-	kind_t kind;                           /* File or directory */
 	watchref_t watchref;                   /* Watch reference for this state */
-
-	/* Basic state flags */
-	bool exists;                           /* Entity currently exists */
-	bool content_changed;                  /* Content has changed */
-	bool metadata_changed;                 /* Metadata has changed */
-	bool structure_changed;                /* Structural change occurred */
 
 	/* Command & Trigger tracking */
 	time_t command_time;                   /* When a command was last triggered */
 	char *trigger;                         /* Path of the specific file that triggered a directory event */
-
-	/* Composed state */
-	scanner_t *scanner;                    /* NULL if not tracking activity */
-	stability_t *stability;                /* NULL if not checking stability */
-
-	/* Timestamps */
-	struct timespec last_time;             /* When state was last updated (MONOTONIC) */
-	struct timespec wall_time;             /* Wall clock time (REALTIME) */
-	struct timespec op_time;               /* Timestamp of the last operation to prevent duplicates */
 
 	/* Linkage for all states under the same path */
 	struct entity *next;                   /* Next state for the same path */

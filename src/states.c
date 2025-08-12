@@ -20,8 +20,6 @@
 /* Free resources used by an entity state */
 static void state_free_entity(entity_t *state) {
 	if (state) {
-		scanner_destroy(state->scanner);
-		stability_destroy(state->stability);
 		free(state->trigger);
 		free(state);
 	}
@@ -160,6 +158,10 @@ static void node_free(node_t *node) {
 			state_free_entity(state);
 			state = next;
 		}
+
+		/* Free consolidated state resources */
+		scanner_destroy(node->scanner);
+		stability_destroy(node->stability);
 		free(node->path);
 		free(node);
 	}
@@ -221,52 +223,6 @@ bool state_corrupted(const entity_t *state) {
 	return false;
 }
 
-/* Initialize activity tracking for a new entity state */
-static void state_track(entity_t *state, watchref_t watchref) {
-	if (!state) return;
-
-	state->watchref = watchref;
-
-	/* Activity tracking is created on demand */
-	state->scanner = NULL;
-
-	/* Stability tracking is created on demand */
-	state->stability = NULL;
-}
-
-/* Copies all directory-related statistics and tracking fields from a source to a destination state */
-static void state_copy(entity_t *dest, const entity_t *src) {
-	if (!dest || !src) return;
-
-	/* Copy stability state if source has it */
-	if (src->stability) {
-		if (!dest->stability) {
-			dest->stability = stability_create();
-			if (!dest->stability) return;
-		}
-		*dest->stability = *src->stability;
-	}
-
-	/* Copy activity state if source has it */
-	if (src->scanner) {
-		if (!dest->scanner) {
-			/* If the destination doesn't have a scanner, create a blank one */
-			dest->scanner = scanner_create(NULL);
-			if (!dest->scanner) return;
-		}
-
-		/* Preserve the pointer to the old path */
-		char *saved_path = dest->scanner->active_path;
-
-		/* Perform a full, shallow copy of the entire struct */
-		*dest->scanner = *src->scanner;
-
-		/* Give the destination its own deep copy of the path pointer */
-		dest->scanner->active_path = src->scanner->active_path ? strdup(src->scanner->active_path) : NULL;
-		free(saved_path);
-	}
-}
-
 /* Get or create an entity state for a given path and watch reference */
 entity_t *states_get(states_t *states, registry_t *registry, const char *path, watchref_t watchref, kind_t kind) {
 	if (!states || !path || !watchref_valid(watchref) || !registry || !states->buckets) {
@@ -302,7 +258,7 @@ entity_t *states_get(states_t *states, registry_t *registry, const char *path, w
 		node = node->next;
 	}
 
-	/* If node not found, create it */
+	/* If node not found, create it with consolidated state */
 	if (!node) {
 		node = calloc(1, sizeof(node_t));
 		if (!node) {
@@ -317,7 +273,58 @@ entity_t *states_get(states_t *states, registry_t *registry, const char *path, w
 			pthread_mutex_unlock(&states->mutexes[hash]);
 			return NULL;
 		}
+
+		/* Initialize consolidated node state */
 		node->executing = false;
+		node->kind = kind;
+		node->scanner = NULL;
+		node->stability = NULL;
+
+		/* Determine node type and existence from filesystem */
+		struct stat info;
+		node->exists = (stat(path, &info) == 0);
+
+		if (kind == ENTITY_UNKNOWN && node->exists) {
+			if (S_ISDIR(info.st_mode)) node->kind = ENTITY_DIRECTORY;
+			else if (S_ISREG(info.st_mode)) node->kind = ENTITY_FILE;
+		} else if (kind != ENTITY_UNKNOWN) {
+			node->kind = kind;
+		}
+
+		/* Initialize timestamps on the node */
+		clock_gettime(CLOCK_MONOTONIC, &node->last_time);
+		clock_gettime(CLOCK_REALTIME, &node->wall_time);
+		node->op_time.tv_sec = 0;
+		node->op_time.tv_nsec = 0;
+		node->content_changed = false;
+		node->metadata_changed = false;
+		node->structure_changed = false;
+
+		/* Initialize consolidated state for directories */
+		if (node->kind == ENTITY_DIRECTORY && node->exists) {
+			/* Create stability state for directories */
+			node->stability = stability_create();
+			if (!node->stability) {
+				log_message(ERROR, "Failed to create stability state for directory: %s", path);
+				free(node->path);
+				free(node);
+				pthread_mutex_unlock(&states->mutexes[hash]);
+				return NULL;
+			}
+
+			if (scanner_scan(path, watch, &node->stability->stats)) {
+				node->stability->prev_stats = node->stability->stats;
+				node->stability->ref_stats = node->stability->stats;
+				node->stability->reference_init = true;
+
+				log_message(DEBUG, "Initial baseline established for %s: files=%d, dirs=%d, depth=%d, size=%s",
+							path, node->stability->stats.tree_files, node->stability->stats.tree_dirs,
+							node->stability->stats.max_depth, format_size((ssize_t) node->stability->stats.tree_size, false));
+			} else {
+				log_message(WARNING, "Failed to gather initial stats for directory: %s", path);
+			}
+		}
+
 		node->next = states->buckets[hash];
 		states->buckets[hash] = node;
 	}
@@ -326,20 +333,13 @@ entity_t *states_get(states_t *states, registry_t *registry, const char *path, w
 	entity_t *state = node->entities;
 	while (state) {
 		if (watchref_equal(state->watchref, watchref)) {
-			/* Update kind if it was previously unknown */
-			if (state->kind == ENTITY_UNKNOWN && kind != ENTITY_UNKNOWN) {
-				state->kind = kind;
-			}
 			pthread_mutex_unlock(&states->mutexes[hash]);
 			return state;
 		}
 		state = state->next;
 	}
 
-	/* Check if we have an existing state for this path to copy stats from */
-	entity_t *existing_state = node->entities;
-
-	/* Create new entity */
+	/* Create new lightweight entity linking this watch to the node */
 	state = calloc(1, sizeof(entity_t));
 	if (!state) {
 		log_message(ERROR, "Failed to allocate memory for entity: %s", path);
@@ -352,80 +352,17 @@ entity_t *states_get(states_t *states, registry_t *registry, const char *path, w
 		return NULL;
 	}
 
-	/* Initialize magic number for corruption detection */
+	/* Initialize entity as lightweight link */
 	state->magic = ENTITY_STATE_MAGIC;
-
 	state->node = node;
-	state->kind = kind;
 	state->watchref = watchref;
-
-	/* If an existing state for this path was found, inherit its existence status */
-	if (existing_state) {
-		state->exists = existing_state->exists;
-	} else {
-		struct stat info;
-		state->exists = (stat(path, &info) == 0);
-	}
-
-	/* Determine entity type from stat if needed */
-	if (kind == ENTITY_UNKNOWN && state->exists) {
-		struct stat info;
-		if (stat(path, &info) == 0) {
-			if (S_ISDIR(info.st_mode)) state->kind = ENTITY_DIRECTORY;
-			else if (S_ISREG(info.st_mode)) state->kind = ENTITY_FILE;
-		}
-	} else if (kind != ENTITY_UNKNOWN) {
-		state->kind = kind;
-	}
-
-	clock_gettime(CLOCK_MONOTONIC, &state->last_time);
-	clock_gettime(CLOCK_REALTIME, &state->wall_time);
-	state->trigger = NULL;
-
-	state_track(state, watchref);
 	state->command_time = 0;
-	state->op_time.tv_sec = 0;
-	state->op_time.tv_nsec = 0;
-
-	/* If an existing state for this path was found, copy its stats */
-	if (existing_state) {
-		state_copy(state, existing_state);
-	} else {
-		/* This is the first state for this path, initialize stats from scratch */
-		if (state->kind == ENTITY_DIRECTORY && state->exists) {
-			/* Create stability state for directories */
-			state->stability = stability_create();
-			if (!state->stability) {
-				state_free_entity(state);
-				if (!node->entities) {
-					states->buckets[hash] = node->next;
-					node_free(node);
-				}
-				pthread_mutex_unlock(&states->mutexes[hash]);
-				return NULL;
-			}
-
-			watch_t *watch = registry_get(registry, watchref);
-
-			if (scanner_scan(path, watch, &state->stability->stats)) {
-				state->stability->prev_stats = state->stability->stats;
-				state->stability->ref_stats = state->stability->stats;
-				state->stability->reference_init = true;
-
-				log_message(DEBUG, "Initial baseline established for %s: files=%d, dirs=%d, depth=%d, size=%s",
-							path, state->stability->stats.tree_files, state->stability->stats.tree_dirs,
-							state->stability->stats.max_depth, format_size((ssize_t) state->stability->stats.tree_size, false));
-			} else {
-				log_message(WARNING, "Failed to gather initial stats for directory: %s", path);
-			}
-		}
-	}
+	state->trigger = NULL;
 
 	/* Add to the node's list */
 	state->next = node->entities;
 	node->entities = state;
 
-	/* Unlock mutex */
 	pthread_mutex_unlock(&states->mutexes[hash]);
 	return state;
 }
