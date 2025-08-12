@@ -10,21 +10,28 @@
 
 /* Forward declarations */
 typedef struct stability stability_t;
+typedef struct group group_t;
 
 /* States configuration */
 #define PATH_HASH_SIZE 1024
 #define ENTITY_STATE_MAGIC 0x4B514558      /* "KQEX" */
 
+/* Stability group for watches with compatible scan configurations */
+typedef struct group {
+	uint64_t config_hash;                  /* Hash of the scan configuration (recursive, hidden, excludes) */
+	stability_t *stability;                /* Shared stability state for this group */
+	scanner_t *scanner;                    /* Shared scanner state for this group */
+	entity_t *entities;                    /* Head of list of entities that belong to this group */
+	struct group *next;                    /* Next group for the same node */
+} group_t;
+
 /* State for a given path, holding a list of all watches on that path */
 typedef struct node {
 	char *path;                            /* The path being watched */
-	entity_t *entities;                    /* Head of the list of states for this path */
 	bool executing;                        /* Flag indicating command is currently executing on this path */
 	
-	/* Consolidated state */
+	/* Resource state */
 	kind_t kind;                           /* File or directory */
-	scanner_t *scanner;                    /* Activity tracking state (NULL if not tracking) */
-	stability_t *stability;                /* Stability checking state (NULL if not checking) */
 	
 	/* Basic state flags */
 	bool exists;                           /* Resource currently exists */
@@ -36,6 +43,9 @@ typedef struct node {
 	struct timespec last_time;             /* When state was last updated (MONOTONIC) */
 	struct timespec wall_time;             /* Wall clock time (REALTIME) */
 	struct timespec op_time;               /* Timestamp of the last operation to prevent duplicates */
+	
+	/* Stability groups */
+	group_t *groups;                       /* Head of list of stability groups */
 	
 	struct node *next;                     /* Next node in the hash bucket */
 } node_t;
@@ -59,6 +69,9 @@ typedef struct entity {
 	/* Command & Trigger tracking */
 	time_t command_time;                   /* When a command was last triggered */
 	char *trigger;                         /* Path of the specific file that triggered a directory event */
+	
+	/* Stability group association */
+	group_t *group;                        /* The stability group this entity belongs to */
 
 	/* Linkage for all states under the same path */
 	struct entity *next;                   /* Next state for the same path */
@@ -70,5 +83,10 @@ void states_destroy(states_t *states);
 bool state_corrupted(const entity_t *state);
 entity_t *states_get(states_t *states, registry_t *registry, const char *path, watchref_t watchref, kind_t kind);
 unsigned int states_hash(const char *path, size_t bucket_count);
+
+/* Stability group management */
+uint64_t config_hash(const watch_t *watch);
+group_t *group_create(uint64_t hash);
+void group_destroy(group_t *group);
 
 #endif /* STATES_H */

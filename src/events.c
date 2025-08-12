@@ -460,15 +460,15 @@ optype_t events_operation(monitor_t *monitor, entity_t *state, filter_t filter) 
 
 		/* For directory creation, gather initial stats */
 		if (state->node->kind == ENTITY_DIRECTORY) {
-			/* Create stability state for new directories */
-			if (!state->node->stability) {
-				state->node->stability = stability_create();
+			/* Stability state should already be created by states_get() in the appropriate group */
+			if (!state->group->stability) {
+				state->group->stability = stability_create();
 			}
-			if (state->node->stability) {
+			if (state->group->stability) {
 				watch_t *watch = registry_get(monitor->registry, state->watchref);
 				if (watch) {
-					scanner_scan(state->node->path, watch, &state->node->stability->stats);
-					state->node->stability->prev_stats = state->node->stability->stats;
+					scanner_scan(state->node->path, watch, &state->group->stability->stats);
+					state->group->stability->prev_stats = state->group->stability->stats;
 				}
 			}
 		}

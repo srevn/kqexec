@@ -10,6 +10,7 @@
 /* Forward declarations */
 typedef struct entity entity_t;
 typedef struct node node_t;
+typedef struct group group_t;
 
 /* Activity window size for detecting quiet periods (in milliseconds) */
 #define MAX_SAMPLES 5                      /* Number of recent events to track for activity analysis */
@@ -59,7 +60,7 @@ bool scanner_stable(monitor_t *monitor, node_t *node, const char *dir_path, cons
 bool scanner_compare(stats_t *prev_stats, stats_t *current_stats);
 char *scanner_newest(const char *dir_path, const watch_t *watch);
 char *scanner_modified(const char *base_path, const watch_t *watch, time_t since_time, bool recursive, bool basename);
-void scanner_update(node_t *node);
+void scanner_update(group_t *group, const char *path);
 
 /* Activity tracking and timing */
 void scanner_track(monitor_t *monitor, entity_t *state, optype_t optype);

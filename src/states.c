@@ -45,22 +45,38 @@ static void states_handle_deactivation(watchref_t watchref, void *context) {
 		while (*node_ptr) {
 			node_t *node = *node_ptr;
 
-			/* Remove entities with deactivated watch from this node */
-			entity_t **entity_ptr = &node->entities;
-			while (*entity_ptr) {
-				entity_t *entity = *entity_ptr;
-				if (watchref_equal(entity->watchref, watchref)) {
-					log_message(DEBUG, "Removing deactivated entity for path: %s", node->path ? node->path : "<null>");
-					*entity_ptr = entity->next;
-					state_free_entity(entity);
-					entities_removed++;
+			/* Remove entities with deactivated watch from all groups on this node */
+			group_t **group_ptr = &node->groups;
+			while (*group_ptr) {
+				group_t *group = *group_ptr;
+				entity_t **entity_ptr = &group->entities;
+				bool group_has_entities = false;
+
+				while (*entity_ptr) {
+					entity_t *entity = *entity_ptr;
+					if (watchref_equal(entity->watchref, watchref)) {
+						log_message(DEBUG, "Removing deactivated entity for path: %s", node->path ? node->path : "<null>");
+						*entity_ptr = entity->next;
+						state_free_entity(entity);
+						entities_removed++;
+					} else {
+						entity_ptr = &entity->next;
+						group_has_entities = true;
+					}
+				}
+
+				/* If group has no entities left, remove the group */
+				if (!group_has_entities) {
+					log_message(DEBUG, "Removing empty stability group for path: %s", node->path ? node->path : "<null>");
+					*group_ptr = group->next;
+					group_destroy(group);
 				} else {
-					entity_ptr = &entity->next;
+					group_ptr = &group->next;
 				}
 			}
 
-			/* If node has no entities left, remove entire node */
-			if (!node->entities) {
+			/* If node has no groups left, remove entire node */
+			if (!node->groups) {
 				log_message(DEBUG, "Removing empty node after cleanup: %s", node->path ? node->path : "<null>");
 				*node_ptr = node->next;
 				free(node->path);
@@ -152,16 +168,24 @@ states_t *states_create(size_t bucket_count, registry_t *registry) {
 /* Free resources used by a path state and all its entity states */
 static void node_free(node_t *node) {
 	if (node) {
-		entity_t *state = node->entities;
-		while (state) {
-			entity_t *next = state->next;
-			state_free_entity(state);
-			state = next;
+		/* Free all stability groups and their entities */
+		group_t *group = node->groups;
+		while (group) {
+			group_t *next_group = group->next;
+
+			/* Free all entities in this group */
+			entity_t *state = group->entities;
+			while (state) {
+				entity_t *next_state = state->next;
+				state_free_entity(state);
+				state = next_state;
+			}
+
+			/* Free the group itself */
+			group_destroy(group);
+			group = next_group;
 		}
 
-		/* Free consolidated state resources */
-		scanner_destroy(node->scanner);
-		stability_destroy(node->stability);
 		free(node->path);
 		free(node);
 	}
@@ -274,11 +298,10 @@ entity_t *states_get(states_t *states, registry_t *registry, const char *path, w
 			return NULL;
 		}
 
-		/* Initialize consolidated node state */
+		/* Initialize node state */
 		node->executing = false;
 		node->kind = kind;
-		node->scanner = NULL;
-		node->stability = NULL;
+		node->groups = NULL;
 
 		/* Determine node type and existence from filesystem */
 		struct stat info;
@@ -300,37 +323,73 @@ entity_t *states_get(states_t *states, registry_t *registry, const char *path, w
 		node->metadata_changed = false;
 		node->structure_changed = false;
 
-		/* Initialize consolidated state for directories */
+		node->next = states->buckets[hash];
+		states->buckets[hash] = node;
+	}
+
+	/* Calculate configuration hash for this watch */
+	uint64_t watch_config_hash = config_hash(watch);
+
+	/* Find existing stability group with matching configuration */
+	group_t *group = node->groups;
+	while (group) {
+		if (group->config_hash == watch_config_hash) {
+			break;
+		}
+		group = group->next;
+	}
+
+	/* If no matching group found, create a new one */
+	if (!group) {
+		group = group_create(watch_config_hash);
+		if (!group) {
+			log_message(ERROR, "Failed to create stability group for %s", path);
+			/* If the node was newly created, clean it up */
+			if (!node->groups) {
+				states->buckets[hash] = node->next;
+				node_free(node);
+			}
+			pthread_mutex_unlock(&states->mutexes[hash]);
+			return NULL;
+		}
+
+		/* Initialize the group for directories */
 		if (node->kind == ENTITY_DIRECTORY && node->exists) {
-			/* Create stability state for directories */
-			node->stability = stability_create();
-			if (!node->stability) {
+			/* Create stability state for this configuration */
+			group->stability = stability_create();
+			if (!group->stability) {
 				log_message(ERROR, "Failed to create stability state for directory: %s", path);
-				free(node->path);
-				free(node);
+				group_destroy(group);
+				if (!node->groups) {
+					states->buckets[hash] = node->next;
+					node_free(node);
+				}
 				pthread_mutex_unlock(&states->mutexes[hash]);
 				return NULL;
 			}
 
-			if (scanner_scan(path, watch, &node->stability->stats)) {
-				node->stability->prev_stats = node->stability->stats;
-				node->stability->ref_stats = node->stability->stats;
-				node->stability->reference_init = true;
+			/* Perform initial scan with this watch's configuration */
+			if (scanner_scan(path, watch, &group->stability->stats)) {
+				group->stability->prev_stats = group->stability->stats;
+				group->stability->ref_stats = group->stability->stats;
+				group->stability->reference_init = true;
 
-				log_message(DEBUG, "Initial baseline established for %s: files=%d, dirs=%d, depth=%d, size=%s",
-							path, node->stability->stats.tree_files, node->stability->stats.tree_dirs,
-							node->stability->stats.max_depth, format_size((ssize_t) node->stability->stats.tree_size, false));
+				log_message(DEBUG, "Initial baseline established for %s (config_hash=%llu): files=%d, dirs=%d, depth=%d, size=%s",
+							path, (unsigned long long) watch_config_hash,
+							group->stability->stats.tree_files, group->stability->stats.tree_dirs,
+							group->stability->stats.max_depth, format_size((ssize_t) group->stability->stats.tree_size, false));
 			} else {
 				log_message(WARNING, "Failed to gather initial stats for directory: %s", path);
 			}
 		}
 
-		node->next = states->buckets[hash];
-		states->buckets[hash] = node;
+		/* Add the new group to the node */
+		group->next = node->groups;
+		node->groups = group;
 	}
 
-	/* Find existing entity for this watch reference */
-	entity_t *state = node->entities;
+	/* Find existing entity for this watch reference within the group */
+	entity_t *state = group->entities;
 	while (state) {
 		if (watchref_equal(state->watchref, watchref)) {
 			pthread_mutex_unlock(&states->mutexes[hash]);
@@ -344,7 +403,7 @@ entity_t *states_get(states_t *states, registry_t *registry, const char *path, w
 	if (!state) {
 		log_message(ERROR, "Failed to allocate memory for entity: %s", path);
 		/* If the node was newly created for this entity, free it to prevent a leak */
-		if (!node->entities) {
+		if (!node->groups) {
 			states->buckets[hash] = node->next;
 			node_free(node);
 		}
@@ -356,13 +415,71 @@ entity_t *states_get(states_t *states, registry_t *registry, const char *path, w
 	state->magic = ENTITY_STATE_MAGIC;
 	state->node = node;
 	state->watchref = watchref;
+	state->group = group;
 	state->command_time = 0;
 	state->trigger = NULL;
 
-	/* Add to the node's list */
-	state->next = node->entities;
-	node->entities = state;
+	/* Add to the stability group's entity list */
+	state->next = group->entities;
+	group->entities = state;
 
 	pthread_mutex_unlock(&states->mutexes[hash]);
 	return state;
+}
+
+/* Calculate configuration hash for a watch to identify compatible groups */
+uint64_t config_hash(const watch_t *watch) {
+	if (!watch) return 0;
+
+	/* Use FNV-1a hash algorithm */
+	uint64_t hash = 14695981039346656037ULL; /* FNV offset basis */
+	const uint64_t prime = 1099511628211ULL; /* FNV prime */
+
+	/* Hash boolean flags */
+	hash ^= (uint64_t) (watch->recursive ? 1 : 0);
+	hash *= prime;
+	hash ^= (uint64_t) (watch->hidden ? 1 : 0);
+	hash *= prime;
+
+	/* Hash exclude patterns */
+	if (watch->exclude && watch->num_exclude > 0) {
+		for (int i = 0; i < watch->num_exclude; i++) {
+			if (watch->exclude[i]) {
+				const char *pattern = watch->exclude[i];
+				while (*pattern) {
+					hash ^= (uint64_t) (*pattern);
+					hash *= prime;
+					pattern++;
+				}
+			}
+		}
+	}
+
+	return hash;
+}
+
+/* Create a new stability group */
+group_t *group_create(uint64_t hash) {
+	group_t *group = calloc(1, sizeof(group_t));
+	if (!group) {
+		log_message(ERROR, "Failed to allocate memory for stability group");
+		return NULL;
+	}
+
+	group->config_hash = hash;
+	group->stability = NULL;
+	group->scanner = NULL;
+	group->entities = NULL;
+	group->next = NULL;
+
+	return group;
+}
+
+/* Destroy a stability group and all its resources */
+void group_destroy(group_t *group) {
+	if (group) {
+		stability_destroy(group->stability);
+		scanner_destroy(group->scanner);
+		free(group);
+	}
 }

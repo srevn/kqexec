@@ -212,7 +212,7 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 		size_t size = 0;
 		if (state && state->node->kind == ENTITY_DIRECTORY) {
 			entity_t *size_state = stability_root(monitor, state);
-			size = size_state ? size_state->node->stability->stats.tree_size : state->node->stability->stats.tree_size;
+			size = size_state ? size_state->group->stability->stats.tree_size : state->group->stability->stats.tree_size;
 		} else if (stat(event->path, &info) == 0) {
 			size = info.st_size;
 		}

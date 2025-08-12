@@ -44,36 +44,36 @@ void scanner_destroy(scanner_t *scanner) {
 }
 
 /* Update cumulative changes based on current vs. previous stats */
-void scanner_update(node_t *node) {
-	if (!node || !node->stability) return;
+void scanner_update(group_t *group, const char *path) {
+	if (!group || !group->stability) return;
 
 	/* Calculate incremental changes */
 	int new_files, new_dirs, new_depth;
 	ssize_t new_size;
 
 	/* Calculate the difference from previous stats */
-	new_files = node->stability->stats.tree_files - node->stability->prev_stats.tree_files;
-	new_dirs = node->stability->stats.tree_dirs - node->stability->prev_stats.tree_dirs;
-	new_depth = node->stability->stats.max_depth - node->stability->prev_stats.max_depth;
-	new_size = (ssize_t) node->stability->stats.tree_size - (ssize_t) node->stability->prev_stats.tree_size;
+	new_files = group->stability->stats.tree_files - group->stability->prev_stats.tree_files;
+	new_dirs = group->stability->stats.tree_dirs - group->stability->prev_stats.tree_dirs;
+	new_depth = group->stability->stats.max_depth - group->stability->prev_stats.max_depth;
+	new_size = (ssize_t) group->stability->stats.tree_size - (ssize_t) group->stability->prev_stats.tree_size;
 
 	/* Accumulate changes */
-	node->stability->delta_files += new_files;
-	node->stability->delta_dirs += new_dirs;
-	node->stability->delta_depth += new_depth;
-	node->stability->delta_size += new_size;
+	group->stability->delta_files += new_files;
+	group->stability->delta_dirs += new_dirs;
+	group->stability->delta_depth += new_depth;
+	group->stability->delta_size += new_size;
 
 	/* Set flag indicating stability was lost if we're detecting new changes */
-	bool active = node->scanner ? node->scanner->active : false;
+	bool active = group->scanner ? group->scanner->active : false;
 	if (!active && (new_files != 0 || new_dirs != 0 || new_depth != 0 || new_size != 0)) {
-		node->stability->stability_lost = true;
+		group->stability->stability_lost = true;
 	}
 
 	/* Log significant cumulative changes */
 	if (new_files != 0 || new_dirs != 0 || new_depth != 0 || new_size != 0) {
 		log_message(DEBUG, "Updated cumulative changes for %s: files=%+d (%+d), dirs=%+d (%+d), depth=%+d (%+d), size=%s (%s)",
-					node->path, node->stability->delta_files, new_files, node->stability->delta_dirs, new_dirs,
-					node->stability->delta_depth, new_depth, format_size(node->stability->delta_size, true),
+					path, group->stability->delta_files, new_files, group->stability->delta_dirs, new_dirs,
+					group->stability->delta_depth, new_depth, format_size(group->stability->delta_size, true),
 					format_size(new_size, true));
 	}
 }
@@ -385,32 +385,32 @@ bool scanner_stable(monitor_t *monitor, node_t *node, const char *dir_path, cons
 }
 
 /* Record basic activity in circular buffer and update state */
-static void scanner_record(node_t *node, optype_t optype) {
+static void scanner_record(group_t *group, struct timespec timestamp, const char *path, optype_t optype) {
 	/* Create activity state if needed */
-	if (!node->scanner) {
-		node->scanner = scanner_create(node->path);
-		if (!node->scanner) return;
+	if (!group->scanner) {
+		group->scanner = scanner_create(path);
+		if (!group->scanner) return;
 	}
 
 	/* Store in circular buffer */
-	node->scanner->samples[node->scanner->sample_index].timestamp = node->last_time;
-	node->scanner->samples[node->scanner->sample_index].operation = optype;
-	node->scanner->sample_index = (node->scanner->sample_index + 1) % MAX_SAMPLES;
-	if (node->scanner->sample_count < MAX_SAMPLES) {
-		node->scanner->sample_count++;
+	group->scanner->samples[group->scanner->sample_index].timestamp = timestamp;
+	group->scanner->samples[group->scanner->sample_index].operation = optype;
+	group->scanner->sample_index = (group->scanner->sample_index + 1) % MAX_SAMPLES;
+	if (group->scanner->sample_count < MAX_SAMPLES) {
+		group->scanner->sample_count++;
 	}
 
 	/* Reset stability check counter when new activity occurs */
-	if (node->stability) {
-		node->stability->checks_count = 0;
+	if (group->stability) {
+		group->stability->checks_count = 0;
 	}
 
-	/* Update activity timestamp for this node, which is the basis for tree activity time */
-	node->scanner->latest_time = node->last_time;
+	/* Update activity timestamp for this group, which is the basis for tree activity time */
+	group->scanner->latest_time = timestamp;
 
 	/* Update the last activity path */
-	free(node->scanner->active_path);
-	node->scanner->active_path = strdup(node->path);
+	free(group->scanner->active_path);
+	group->scanner->active_path = strdup(path);
 }
 
 /* Update directory stats when content changes */
@@ -421,25 +421,25 @@ static void scanner_stats(monitor_t *monitor, entity_t *state, optype_t optype) 
 		watch_t *watch = registry_get(monitor->registry, state->watchref);
 		if (watch && scanner_scan(state->node->path, watch, &new_stats)) {
 			/* Create stability state if needed */
-			if (!state->node->stability) {
-				state->node->stability = stability_create();
-				if (!state->node->stability) return;
+			if (!state->group->stability) {
+				state->group->stability = stability_create();
+				if (!state->group->stability) return;
 			}
 
 			/* Save previous stats for comparison */
-			state->node->stability->prev_stats = state->node->stability->stats;
+			state->group->stability->prev_stats = state->group->stability->stats;
 			/* Update with new stats */
-			state->node->stability->stats = new_stats;
+			state->group->stability->stats = new_stats;
 
 			/* Update cumulative changes */
-			scanner_update(state->node);
+			scanner_update(state->group, state->node->path);
 		}
 
-		if (state->node->stability) {
+		if (state->group->stability) {
 			log_message(DEBUG, "Directory stats for %s: files=%d, dirs=%d, max_depth=%d (was: files=%d, dirs=%d, max_depth=%d)",
-						state->node->path, state->node->stability->stats.tree_files, state->node->stability->stats.tree_dirs,
-						state->node->stability->stats.max_depth, state->node->stability->prev_stats.tree_files,
-						state->node->stability->prev_stats.tree_dirs, state->node->stability->prev_stats.max_depth);
+						state->node->path, state->group->stability->stats.tree_files, state->group->stability->stats.tree_dirs,
+						state->group->stability->stats.max_depth, state->group->stability->prev_stats.tree_files,
+						state->group->stability->prev_stats.tree_dirs, state->group->stability->prev_stats.max_depth);
 		}
 	}
 }
@@ -469,27 +469,27 @@ static void scanner_propagate(monitor_t *monitor, entity_t *state, entity_t *roo
 			entity_t *parent = states_get(monitor->states, monitor->registry, path_copy, state->watchref, ENTITY_DIRECTORY);
 			if (parent) {
 				/* Create activity state if needed */
-				if (!parent->node->scanner) {
-					parent->node->scanner = scanner_create(parent->node->path);
+				if (!parent->group->scanner) {
+					parent->group->scanner = scanner_create(parent->node->path);
 				}
-				if (parent->node->scanner) {
-					parent->node->scanner->latest_time = state->node->last_time;
-					free(parent->node->scanner->active_path);
-					parent->node->scanner->active_path = strdup(state->node->path);
-					parent->node->scanner->active = true;
+				if (parent->group->scanner) {
+					parent->group->scanner->latest_time = state->node->last_time;
+					free(parent->group->scanner->active_path);
+					parent->group->scanner->active_path = strdup(state->node->path);
+					parent->group->scanner->active = true;
 				}
 
 				/* Create stability state if needed */
-				if (!parent->node->stability) {
-					parent->node->stability = stability_create();
+				if (!parent->group->stability) {
+					parent->group->stability = stability_create();
 				}
-				if (parent->node->stability) {
-					parent->node->stability->checks_count = 0;
+				if (parent->group->stability) {
+					parent->group->stability->checks_count = 0;
 				}
 
 				/* Reset stability_lost flag when activity becomes active to prevent repeated penalties */
-				if (parent->node->stability) {
-					parent->node->stability->stability_lost = false;
+				if (parent->group->stability) {
+					parent->group->stability->stability_lost = false;
 				}
 
 				/* Update directory stats for parent if this is a content change */
@@ -501,38 +501,38 @@ static void scanner_propagate(monitor_t *monitor, entity_t *state, entity_t *roo
 									 parent_watch->recursive && parent_watch == root_watch_for_scope &&
 									 strlen(path_copy) >= strlen(root_watch_for_scope->path));
 
-					if (in_scope && root->node->stability && parent->node->stability) {
+					if (in_scope && root->group->stability && parent->group->stability) {
 						if (parent != root) {
 							/* Calculate incremental changes from root's current update */
-							int root_files = root->node->stability->stats.tree_files - root->node->stability->prev_stats.tree_files;
-							int root_dirs = root->node->stability->stats.tree_dirs - root->node->stability->prev_stats.tree_dirs;
-							int root_depth = root->node->stability->stats.max_depth - root->node->stability->prev_stats.max_depth;
-							ssize_t root_size = (ssize_t) root->node->stability->stats.tree_size - (ssize_t) root->node->stability->prev_stats.tree_size;
+							int root_files = root->group->stability->stats.tree_files - root->group->stability->prev_stats.tree_files;
+							int root_dirs = root->group->stability->stats.tree_dirs - root->group->stability->prev_stats.tree_dirs;
+							int root_depth = root->group->stability->stats.max_depth - root->group->stability->prev_stats.max_depth;
+							ssize_t root_size = (ssize_t) root->group->stability->stats.tree_size - (ssize_t) root->group->stability->prev_stats.tree_size;
 
 							/* Apply incremental changes to parent while preserving its absolute state */
-							parent->node->stability->prev_stats = parent->node->stability->stats;
-							parent->node->stability->stats.tree_files += root_files;
-							parent->node->stability->stats.tree_dirs += root_dirs;
-							parent->node->stability->stats.max_depth = (root_depth > 0) ? parent->node->stability->stats.max_depth + root_depth : parent->node->stability->stats.max_depth;
-							parent->node->stability->stats.tree_size += root_size;
+							parent->group->stability->prev_stats = parent->group->stability->stats;
+							parent->group->stability->stats.tree_files += root_files;
+							parent->group->stability->stats.tree_dirs += root_dirs;
+							parent->group->stability->stats.max_depth = (root_depth > 0) ? parent->group->stability->stats.max_depth + root_depth : parent->group->stability->stats.max_depth;
+							parent->group->stability->stats.tree_size += root_size;
 
 							/* Update cumulative changes */
-							scanner_update(parent->node);
+							scanner_update(parent->group, parent->node->path);
 						}
 					} else {
 						/* Fall back to scanning for non-recursive or cross-scope parents */
 						stats_t parent_new_stats;
 						watch_t *parent_watch = registry_get(monitor->registry, parent->watchref);
 						if (parent_watch && scanner_scan(parent->node->path, parent_watch, &parent_new_stats)) {
-							if (!parent->node->stability) {
-								parent->node->stability = stability_create();
+							if (!parent->group->stability) {
+								parent->group->stability = stability_create();
 							}
-							if (parent->node->stability) {
-								parent->node->stability->prev_stats = parent->node->stability->stats;
-								parent->node->stability->stats = parent_new_stats;
+							if (parent->group->stability) {
+								parent->group->stability->prev_stats = parent->group->stability->stats;
+								parent->group->stability->stats = parent_new_stats;
 
 								/* Update cumulative changes */
-								scanner_update(parent->node);
+								scanner_update(parent->group, parent->node->path);
 							}
 						}
 					}
@@ -552,30 +552,30 @@ static void scanner_recursive(monitor_t *monitor, entity_t *state, optype_t opty
 	entity_t *root = stability_root(monitor, state);
 	if (root) {
 		/* Update the root's tree activity time and path */
-		if (!root->node->scanner) {
-			root->node->scanner = scanner_create(root->node->path);
+		if (!root->group->scanner) {
+			root->group->scanner = scanner_create(root->node->path);
 		}
-		if (root->node->scanner) {
-			root->node->scanner->latest_time = state->node->last_time;
-			free(root->node->scanner->active_path);
-			root->node->scanner->active_path = strdup(state->node->path);
-			root->node->scanner->active = true;
+		if (root->group->scanner) {
+			root->group->scanner->latest_time = state->node->last_time;
+			free(root->group->scanner->active_path);
+			root->group->scanner->active_path = strdup(state->node->path);
+			root->group->scanner->active = true;
 		}
 
 		/* Reset stability_lost flag when activity becomes active to prevent repeated penalties */
-		if (!root->node->stability) {
-			root->node->stability = stability_create();
+		if (!root->group->stability) {
+			root->group->stability = stability_create();
 		}
-		if (root->node->stability) {
-			root->node->stability->stability_lost = false;
-			root->node->stability->checks_count = 0;
+		if (root->group->stability) {
+			root->group->stability->stability_lost = false;
+			root->group->stability->checks_count = 0;
 		}
 
 		/* For directory operations, update directory stats immediately */
 		scanner_stats(monitor, root, optype);
 
 		/* Now propagate activity to all parent directories between this entity and root */
-		stats_t *root_stats = root->node->stability ? &root->node->stability->stats : NULL;
+		stats_t *root_stats = root->group->stability ? &root->group->stability->stats : NULL;
 		scanner_propagate(monitor, state, root, optype, root_stats);
 	}
 }
@@ -583,13 +583,13 @@ static void scanner_recursive(monitor_t *monitor, entity_t *state, optype_t opty
 /* Handle activity when state is the root path itself */
 static void scanner_root(monitor_t *monitor, entity_t *state, optype_t optype) {
 	/* This is the root itself */
-	if (!state->node->scanner) {
-		state->node->scanner = scanner_create(state->node->path);
+	if (!state->group->scanner) {
+		state->group->scanner = scanner_create(state->node->path);
 	}
-	if (state->node->scanner) {
-		state->node->scanner->latest_time = state->node->last_time;
-		free(state->node->scanner->active_path);
-		state->node->scanner->active_path = strdup(state->node->path);
+	if (state->group->scanner) {
+		state->group->scanner->latest_time = state->node->last_time;
+		free(state->group->scanner->active_path);
+		state->group->scanner->active_path = strdup(state->node->path);
 	}
 
 	/* Update directory stats immediately for content changes to root */
@@ -608,7 +608,7 @@ void scanner_track(monitor_t *monitor, entity_t *state, optype_t optype) {
 	}
 
 	/* Record basic activity in circular buffer */
-	scanner_record(state->node, optype);
+	scanner_record(state->group, state->node->last_time, state->node->path, optype);
 
 	/* Get the watch for this state */
 	watch_t *state_watch = registry_get(monitor->registry, state->watchref);
@@ -663,11 +663,11 @@ static long scanner_base(int recent_files, int recent_dirs, int recent_depth, ss
 /* Calculate current activity magnitude (changes from reference state) for responsive adjustments */
 static void scanner_recent(entity_t *state, int *recent_files, int *recent_dirs, int *recent_depth, ssize_t *recent_size) {
 	/* Calculate changes from the previous scan state to measure the current rate of change */
-	if (state->node->stability) {
-		*recent_depth = abs(state->node->stability->stats.max_depth - state->node->stability->prev_stats.max_depth);
-		*recent_files = abs(state->node->stability->stats.tree_files - state->node->stability->prev_stats.tree_files);
-		*recent_dirs = abs(state->node->stability->stats.tree_dirs - state->node->stability->prev_stats.tree_dirs);
-		*recent_size = labs((ssize_t) state->node->stability->stats.tree_size - (ssize_t) state->node->stability->prev_stats.tree_size);
+	if (state->group->stability) {
+		*recent_depth = abs(state->group->stability->stats.max_depth - state->group->stability->prev_stats.max_depth);
+		*recent_files = abs(state->group->stability->stats.tree_files - state->group->stability->prev_stats.tree_files);
+		*recent_dirs = abs(state->group->stability->stats.tree_dirs - state->group->stability->prev_stats.tree_dirs);
+		*recent_size = labs((ssize_t) state->group->stability->stats.tree_size - (ssize_t) state->group->stability->prev_stats.tree_size);
 	} else {
 		*recent_depth = 0;
 		*recent_files = 0;
@@ -682,9 +682,9 @@ static long scanner_adjust(entity_t *state, long base_ms) {
 	int tree_entries = 0;
 	int tree_depth = 0;
 
-	if (state->node->stability) {
-		tree_entries = state->node->stability->stats.tree_files + state->node->stability->stats.tree_dirs;
-		tree_depth = state->node->stability->stats.max_depth > 0 ? state->node->stability->stats.max_depth : state->node->stability->stats.depth;
+	if (state->group->stability) {
+		tree_entries = state->group->stability->stats.tree_files + state->group->stability->stats.tree_dirs;
+		tree_depth = state->group->stability->stats.max_depth > 0 ? state->group->stability->stats.max_depth : state->group->stability->stats.depth;
 	}
 
 	/* Use current activity magnitude for responsiveness */
@@ -707,13 +707,13 @@ static long scanner_adjust(entity_t *state, long base_ms) {
 				state->node->path, recent_files, recent_dirs, recent_depth,
 				format_size(recent_size, true), size_weight, recent_change);
 
-	if (state->node->stability) {
+	if (state->group->stability) {
 		/* Calculate a cumulative magnitude factor to scale the quiet period */
-		ssize_t cumulative_size = state->node->stability->delta_size > 0 ? state->node->stability->delta_size : 0;
+		ssize_t cumulative_size = state->group->stability->delta_size > 0 ? state->group->stability->delta_size : 0;
 		int cumulative_size_weight = (int) (cumulative_size / (100 * 1024 * 1024)); /* 1 point per 100MB */
 
-		int cumulative_magnitude = abs(state->node->stability->delta_files) + abs(state->node->stability->delta_dirs) +
-								   abs(state->node->stability->delta_depth) + cumulative_size_weight;
+		int cumulative_magnitude = abs(state->group->stability->delta_files) + abs(state->group->stability->delta_dirs) +
+								   abs(state->group->stability->delta_depth) + cumulative_size_weight;
 
 		/* Only apply the multiplier if the cumulative change is significant */
 		if (cumulative_magnitude > 100) {
@@ -732,7 +732,7 @@ static long scanner_adjust(entity_t *state, long base_ms) {
 	}
 
 	/* If stability was previously achieved and then lost, increase quiet period */
-	if (state->node->stability && state->node->stability->stability_lost) {
+	if (state->group->stability && state->group->stability->stability_lost) {
 		/* We need a more careful check for resumed activity */
 		long pre_stability = required_ms;
 		required_ms = (long) (required_ms * 1.25); /* 25% increase */
@@ -761,7 +761,7 @@ static long scanner_adjust(entity_t *state, long base_ms) {
 
 /* Apply exponential backoff for consecutive instability */
 static long scanner_backoff(entity_t *state, long required_ms) {
-	int unstable_count = state->node->stability ? state->node->stability->unstable_count : 0;
+	int unstable_count = state->group->stability ? state->group->stability->unstable_count : 0;
 
 	if (unstable_count < 3) {
 		/* Only apply backoff after 3 consecutive unstable counts */
@@ -826,14 +826,14 @@ long scanner_delay(monitor_t *monitor, entity_t *state) {
 		required_ms = DIR_QUIET_PERIOD_MS; /* Default 1000ms */
 
 		/* For active directories, use adaptive complexity measurement */
-		bool active = state->node->scanner ? state->node->scanner->active : false;
+		bool active = state->group->scanner ? state->group->scanner->active : false;
 		if (active) {
 			/* Extract complexity indicators */
 			int tree_entries = 0;
 			int tree_depth = 0;
-			if (state->node->stability) {
-				tree_entries = state->node->stability->stats.tree_files + state->node->stability->stats.tree_dirs;
-				tree_depth = state->node->stability->stats.max_depth > 0 ? state->node->stability->stats.max_depth : state->node->stability->stats.depth;
+			if (state->group->stability) {
+				tree_entries = state->group->stability->stats.tree_files + state->group->stability->stats.tree_dirs;
+				tree_depth = state->group->stability->stats.max_depth > 0 ? state->group->stability->stats.max_depth : state->group->stability->stats.depth;
 			}
 
 			/* Get recent activity to drive the base period calculation */
@@ -850,10 +850,10 @@ long scanner_delay(monitor_t *monitor, entity_t *state) {
 			/* Apply exponential backoff for consecutive instability */
 			required_ms = scanner_backoff(state, required_ms);
 
-			int delta_files = state->node->stability ? state->node->stability->delta_files : 0;
-			int delta_dirs = state->node->stability ? state->node->stability->delta_dirs : 0;
-			int delta_depth = state->node->stability ? state->node->stability->delta_depth : 0;
-			ssize_t delta_size = state->node->stability ? state->node->stability->delta_size : 0;
+			int delta_files = state->group->stability ? state->group->stability->delta_files : 0;
+			int delta_dirs = state->group->stability ? state->group->stability->delta_dirs : 0;
+			int delta_depth = state->group->stability ? state->group->stability->delta_depth : 0;
+			ssize_t delta_size = state->group->stability ? state->group->stability->delta_size : 0;
 
 			log_message(DEBUG, "Quiet period for %s: %ld ms (cumulative: %+d files, %+d dirs, %+d depth, %s size) (total: %d entries, %d depth)",
 						state->node->path, required_ms, delta_files, delta_dirs, delta_depth,
@@ -863,10 +863,10 @@ long scanner_delay(monitor_t *monitor, entity_t *state) {
 			int tree_entries = 0;
 			int tree_depth = 0;
 			int num_subdir = 0;
-			if (state->node->stability) {
-				tree_entries = state->node->stability->stats.tree_files + state->node->stability->stats.tree_dirs;
-				tree_depth = state->node->stability->stats.max_depth > 0 ? state->node->stability->stats.max_depth : state->node->stability->stats.depth;
-				num_subdir = state->node->stability->stats.tree_dirs;
+			if (state->group->stability) {
+				tree_entries = state->group->stability->stats.tree_files + state->group->stability->stats.tree_dirs;
+				tree_depth = state->group->stability->stats.max_depth > 0 ? state->group->stability->stats.max_depth : state->group->stability->stats.depth;
+				num_subdir = state->group->stability->stats.tree_dirs;
 			}
 
 			log_message(DEBUG, "Using base quiet period for %s: %ld ms (recursive entries: %d, depth: %d, subdirs: %d)",
@@ -893,20 +893,20 @@ bool scanner_ready(monitor_t *monitor, entity_t *state, struct timespec *current
 		/* For recursive directory watches, always check the root's tree time */
 		entity_t *root = stability_root(monitor, state);
 		if (root) {
-			scanner_time = root->node->scanner ? &root->node->scanner->latest_time : &root->node->last_time;
+			scanner_time = root->group->scanner ? &root->group->scanner->latest_time : &root->node->last_time;
 			source_path = root->node->path;
 		} else {
 			log_message(WARNING, "Cannot find root state for %s, falling back to local activity", state->node->path);
 			/* Fallback: use local activity if root not found */
-			if (!state->node->scanner || state->node->scanner->sample_count == 0) return true;
-			int latest_idx = (state->node->scanner->sample_index + MAX_SAMPLES - 1) % MAX_SAMPLES;
-			scanner_time = &state->node->scanner->samples[latest_idx].timestamp;
+			if (!state->group->scanner || state->group->scanner->sample_count == 0) return true;
+			int latest_idx = (state->group->scanner->sample_index + MAX_SAMPLES - 1) % MAX_SAMPLES;
+			scanner_time = &state->group->scanner->samples[latest_idx].timestamp;
 		}
 	} else {
 		/* For files or non-recursive dirs, use local activity time */
-		if (!state->node->scanner || state->node->scanner->sample_count == 0) return true;
-		int latest_idx = (state->node->scanner->sample_index + MAX_SAMPLES - 1) % MAX_SAMPLES;
-		scanner_time = &state->node->scanner->samples[latest_idx].timestamp;
+		if (!state->group->scanner || state->group->scanner->sample_count == 0) return true;
+		int latest_idx = (state->group->scanner->sample_index + MAX_SAMPLES - 1) % MAX_SAMPLES;
+		scanner_time = &state->group->scanner->samples[latest_idx].timestamp;
 	}
 
 	/* Check for valid timestamp */
