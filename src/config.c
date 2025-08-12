@@ -754,8 +754,30 @@ bool config_exclude_match(const watch_t *watch, const char *path) {
 				return true;
 			}
 
-			/* Check for recursive pattern ending with suffix */
+			/* Handle trailing slash patterns for directories */
 			size_t pattern_len = strlen(pattern);
+			if (pattern_len > 0 && pattern[pattern_len - 1] == '/') {
+				/* Create pattern without trailing slash */
+				char dir_pattern[PATH_MAX];
+				strncpy(dir_pattern, pattern, pattern_len - 1);
+				dir_pattern[pattern_len - 1] = '\0';
+
+				/* Check if it matches the directory itself */
+				if (fnmatch(dir_pattern, relative_path, FNM_PATHNAME) == 0) {
+					return true;
+				}
+
+				/* Check if relative_path is within this directory */
+				size_t dir_len = strlen(dir_pattern);
+				if (strncmp(relative_path, dir_pattern, dir_len) == 0) {
+					/* Path starts with directory name */
+					if (relative_path[dir_len] == '/') {
+						return true;
+					}
+				}
+			}
+
+			/* Check for recursive pattern ending with suffix */
 			if (pattern_len >= 3 && strcmp(pattern + pattern_len - 3, "/**") == 0) {
 				/* Create base pattern without suffix */
 				char base_pattern[PATH_MAX];
