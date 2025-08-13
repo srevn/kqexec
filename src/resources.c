@@ -560,6 +560,30 @@ subscription_t *resources_get_subscription(resources_t *resources, registry_t *r
 
 	/* If no matching profile found, create a new one */
 	if (!profile) {
+		/* For directories, pre-scan before creating profile to avoid holding lock during I/O */
+		stats_t initial_stats;
+		bool scan_success = false;
+		
+		if (resource->kind == ENTITY_DIRECTORY && resource->exists) {
+			/* Release resource lock before scanning to prevent blocking other threads */
+			resource_unlock(resource);
+			
+			/* Perform initial scan without holding the lock */
+			scan_success = scanner_scan(path, watch, &initial_stats);
+			
+			/* Re-acquire lock and check if another thread created the profile */
+			resource_lock(resource);
+			
+			/* Check again if profile was created while we were scanning */
+			profile = resource_get_profile(resource, watch_hash);
+			if (profile) {
+				/* Another thread created the profile - use the existing one and discard our scan */
+				log_message(DEBUG, "Profile created by another thread during scan for %s", path);
+				goto create_subscription;
+			}
+		}
+		
+		/* Create the profile now */
 		profile = resource_create_profile(resource, watch_hash);
 		if (!profile) {
 			log_message(ERROR, "Failed to create scanning profile for %s", path);
@@ -567,7 +591,7 @@ subscription_t *resources_get_subscription(resources_t *resources, registry_t *r
 			return NULL;
 		}
 
-		/* Initialize the profile for directories */
+		/* Initialize the profile for directories with pre-scanned data */
 		if (resource->kind == ENTITY_DIRECTORY && resource->exists) {
 			/* Create stability state for this configuration */
 			profile->stability = stability_create();
@@ -577,10 +601,11 @@ subscription_t *resources_get_subscription(resources_t *resources, registry_t *r
 				return NULL;
 			}
 
-			/* Perform initial scan with this watch's configuration */
-			if (scanner_scan(path, watch, &profile->stability->stats)) {
-				profile->stability->prev_stats = profile->stability->stats;
-				profile->stability->ref_stats = profile->stability->stats;
+			/* Use pre-scanned data if scan was successful */
+			if (scan_success) {
+				profile->stability->stats = initial_stats;
+				profile->stability->prev_stats = initial_stats;
+				profile->stability->ref_stats = initial_stats;
 				profile->stability->reference_init = true;
 
 				log_message(DEBUG, "Initial baseline established for %s: files=%d, dirs=%d, depth=%d, size=%s",
@@ -592,12 +617,15 @@ subscription_t *resources_get_subscription(resources_t *resources, registry_t *r
 		}
 	}
 
+create_subscription:
 	/* Create subscription linking this watch to the profile */
-	subscription_t *subscription = profile_subscribe(profile, resource, watchref);
-	if (!subscription) {
-		log_message(ERROR, "Failed to create subscription for %s", path);
-	}
+	{
+		subscription_t *subscription = profile_subscribe(profile, resource, watchref);
+		if (!subscription) {
+			log_message(ERROR, "Failed to create subscription for %s", path);
+		}
 
-	resource_unlock(resource);
-	return subscription;
+		resource_unlock(resource);
+		return subscription;
+	}
 }
