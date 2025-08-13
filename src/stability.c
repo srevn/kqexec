@@ -11,8 +11,8 @@
 #include "monitor.h"
 #include "queue.h"
 #include "registry.h"
+#include "resources.h"
 #include "scanner.h"
-#include "states.h"
 
 /* Create a stability state */
 stability_t *stability_create(void) {
@@ -43,70 +43,70 @@ void stability_destroy(stability_t *stability) {
 	}
 }
 
-/* Find the root state for a given entity state */
-entity_t *stability_root(monitor_t *monitor, entity_t *state) {
-	if (!monitor || !state || !state->node) {
+/* Find the root subscription for a given subscription */
+subscription_t *stability_root(monitor_t *monitor, subscription_t *subscription) {
+	if (!monitor || !subscription || !subscription->resource) {
 		return NULL;
 	}
 
-	/* Get the watch for this state */
-	watch_t *watch = registry_get(monitor->registry, state->watchref);
+	/* Get the watch for this subscription */
+	watch_t *watch = registry_get(monitor->registry, subscription->watchref);
 	if (!watch || !watch->path) {
-		if (state->node) {
-			log_message(WARNING, "Invalid watch info for state %s", state->node->path);
+		if (subscription->resource) {
+			log_message(WARNING, "Invalid watch info for subscription %s", subscription->resource->path);
 		}
 		return NULL;
 	}
 
-	/* If current state is already the root, return it */
-	if (strcmp(state->node->path, watch->path) == 0) {
-		return state;
+	/* If current subscription is already the root, return it */
+	if (strcmp(subscription->resource->path, watch->path) == 0) {
+		return subscription;
 	}
 
-	/* Otherwise, get the state for the watch path */
-	return states_get(monitor->states, monitor->registry, watch->path, state->watchref, ENTITY_DIRECTORY);
+	/* Otherwise, get the subscription for the watch path */
+	return resources_get_subscription(monitor->resources, monitor->registry, watch->path, subscription->watchref, ENTITY_DIRECTORY);
 }
 
 /* Determine if a command should be executed based on operation type and debouncing */
-bool stability_ready(monitor_t *monitor, entity_t *state, optype_t optype, int base_debounce_ms) {
-	if (!state) return false;
+bool stability_ready(monitor_t *monitor, subscription_t *subscription, optype_t optype, int base_debounce_ms) {
+	if (!subscription) return false;
 
 	struct timespec current_time;
 	clock_gettime(CLOCK_MONOTONIC, &current_time);
 
 	/* Record activity (updates timestamps and root tree time) */
-	scanner_track(monitor, state, optype);
+	scanner_track(monitor, subscription, optype);
 
 	/* Defer all directory-related operations to the stability system */
-	if (state->node->kind == ENTITY_DIRECTORY) {
-		entity_t *root = stability_root(monitor, state);
+	if (subscription->resource->kind == ENTITY_DIRECTORY) {
+		subscription_t *root = stability_root(monitor, subscription);
 		if (!root || !monitor) {
 			return false;
 		}
 
-		/* Ensure scanner is created for this group */
-		if (!root->group->scanner) {
-			root->group->scanner = scanner_create(root->node->path);
-			if (!root->group->scanner) {
-				log_message(ERROR, "Failed to create scanner for directory: %s", root->node->path);
+		/* Ensure scanner is created for this profile */
+		if (!root->profile->scanner) {
+			root->profile->scanner = scanner_create(root->resource->path);
+			if (!root->profile->scanner) {
+				log_message(ERROR, "Failed to create scanner for directory: %s", root->resource->path);
 				return false;
 			}
 		}
 
 		/* Always trigger a deferred check; queue deduplicates */
-		root->group->scanner->active = true;
-		root->group->stability->stability_lost = false;
+		root->profile->scanner->active = true;
+		root->profile->stability->stability_lost = false;
 
 		log_message(DEBUG, "Directory content change for %s, marked root %s as active, command deferred",
-					state->node->path, root->node->path);
+					subscription->resource->path, root->resource->path);
 
 		stability_defer(monitor, root);
-		log_message(DEBUG, "Added directory %s to deferred check queue", root->node->path);
+		log_message(DEBUG, "Added directory %s to deferred check queue", root->resource->path);
 		return false; /* Decision happens later */
 	}
 
 	/* Standard time-based debounce for non-directory-content operations */
-	long elapsed_command = (current_time.tv_sec - state->command_time) * 1000;
+	long elapsed_command = (current_time.tv_sec - subscription->command_time) * 1000;
 
 	/* Adjust debounce based on operation type */
 	int effective_debounce_ms = base_debounce_ms;
@@ -126,64 +126,64 @@ bool stability_ready(monitor_t *monitor, entity_t *state, optype_t optype, int b
 	if (effective_debounce_ms < 0) effective_debounce_ms = 0;
 
 	log_message(DEBUG, "Debounce check for %s: %ld ms elapsed, %d ms required",
-				state->node->path, elapsed_command, effective_debounce_ms);
+				subscription->resource->path, elapsed_command, effective_debounce_ms);
 
 	/* Check if enough time has passed or if it's the first command */
-	if (elapsed_command >= effective_debounce_ms || state->command_time == 0) {
-		log_message(DEBUG, "Debounce check passed for %s, command allowed", state->node->path);
+	if (elapsed_command >= effective_debounce_ms || subscription->command_time == 0) {
+		log_message(DEBUG, "Debounce check passed for %s, command allowed", subscription->resource->path);
 		return true;
 	}
 
-	log_message(DEBUG, "Command execution debounced for %s", state->node->path);
+	log_message(DEBUG, "Command execution debounced for %s", subscription->resource->path);
 	return false;
 }
 
 /* Schedule a deferred stability check for a directory */
-void stability_defer(monitor_t *monitor, entity_t *state) {
-	if (!monitor || !state) {
-		log_message(WARNING, "Cannot schedule deferred check - invalid monitor or state");
+void stability_defer(monitor_t *monitor, subscription_t *subscription) {
+	if (!monitor || !subscription) {
+		log_message(WARNING, "Cannot schedule deferred check - invalid monitor or subscription");
 		return;
 	}
 
-	watch_t *state_watch = registry_get(monitor->registry, state->watchref);
-	if (!state->node || !state_watch) {
-		log_message(WARNING, "Cannot schedule deferred check - state has null node or watch");
+	watch_t *subscription_watch = registry_get(monitor->registry, subscription->watchref);
+	if (!subscription->resource || !subscription_watch) {
+		log_message(WARNING, "Cannot schedule deferred check - subscription has null resource or watch");
 		return;
 	}
 
-	/* Find the root state for this entity */
-	entity_t *root = stability_root(monitor, state);
+	/* Find the root subscription for this entity */
+	subscription_t *root = stability_root(monitor, subscription);
 	if (!root) {
-		/* If no root found, use the provided state if it's a directory */
-		if (state->node->kind == ENTITY_DIRECTORY) {
-			root = state;
+		/* If no root found, use the provided subscription if it's a directory */
+		if (subscription->resource->kind == ENTITY_DIRECTORY) {
+			root = subscription;
 		} else {
-			log_message(WARNING, "Cannot schedule check for %s: no root state found", state->node->path);
+			log_message(WARNING, "Cannot schedule check for %s: no root subscription found", subscription->resource->path);
 			return;
 		}
 	}
 
-	/* Ensure the root state has a scanner before we use it */
-	if (!root->group->scanner) {
-		root->group->scanner = scanner_create(root->node->path);
-		if (!root->group->scanner) {
-			log_message(ERROR, "Failed to create scanner for root %s in stability_defer", root->node->path);
+	/* Ensure the root subscription has a scanner before we use it */
+	if (!root->profile->scanner) {
+		root->profile->scanner = scanner_create(root->resource->path);
+		if (!root->profile->scanner) {
+			log_message(ERROR, "Failed to create scanner for root %s in stability_defer", root->resource->path);
 			return;
 		}
 	}
 
-	/* Force root state to be active and update its activity time to now */
-	root->group->scanner->active = true;
-	root->group->stability->stability_lost = false;
-	clock_gettime(CLOCK_MONOTONIC, &root->group->scanner->latest_time);
+	/* Force root subscription to be active and update its activity time to now */
+	root->profile->scanner->active = true;
+	root->profile->stability->stability_lost = false;
+	clock_gettime(CLOCK_MONOTONIC, &root->profile->scanner->latest_time);
 
 	/* Initialize reference stats if needed */
-	if (!root->group->stability->reference_init) {
-		root->group->stability->ref_stats = root->group->stability->stats;
-		root->group->stability->reference_init = true;
+	if (!root->profile->stability->reference_init) {
+		root->profile->stability->ref_stats = root->profile->stability->stats;
+		root->profile->stability->reference_init = true;
 		log_message(DEBUG, "Initialized reference stats for %s: files=%d, dirs=%d, depth=%d",
-					root->node->path, root->group->stability->stats.local_files,
-					root->group->stability->stats.local_dirs, root->group->stability->stats.depth);
+					root->resource->path, root->profile->stability->stats.local_files,
+					root->profile->stability->stats.local_dirs, root->profile->stability->stats.depth);
 	}
 
 	/* Calculate check time based on quiet period */
@@ -191,13 +191,13 @@ void stability_defer(monitor_t *monitor, entity_t *state) {
 	clock_gettime(CLOCK_MONOTONIC, &current_time);
 
 	/* Ensure we don't use a timestamp in the past */
-	if (root->group->scanner->latest_time.tv_sec < current_time.tv_sec - 10) {
-		log_message(DEBUG, "Last activity timestamp for %s is too old, using current time", root->node->path);
-		root->group->scanner->latest_time = current_time;
+	if (root->profile->scanner->latest_time.tv_sec < current_time.tv_sec - 10) {
+		log_message(DEBUG, "Last activity timestamp for %s is too old, using current time", root->resource->path);
+		root->profile->scanner->latest_time = current_time;
 	}
 
 	/* Check if there's already a pending check to implement lock-in behavior */
-	int existing_index = queue_find(monitor->check_queue, root->node->path);
+	int existing_index = queue_find(monitor->check_queue, root->resource->path);
 
 	if (existing_index >= 0) {
 		/* A check is already pending. Use maximum of locked-in period and new calculation */
@@ -207,10 +207,10 @@ void stability_defer(monitor_t *monitor, entity_t *state) {
 		watch_t *root_watch = registry_get(monitor->registry, root->watchref);
 		if (!queue_add(check, root->watchref)) {
 			log_message(WARNING, "Failed to merge watch %s into existing check for %s",
-						root_watch ? root_watch->name : "unknown", root->node->path);
+						root_watch ? root_watch->name : "unknown", root->resource->path);
 		} else {
 			log_message(DEBUG, "Merged watch %s into existing deferred check for %s",
-						root_watch ? root_watch->name : "unknown", root->node->path);
+						root_watch ? root_watch->name : "unknown", root->resource->path);
 		}
 
 		long locked_quiet = check->scheduled_quiet;
@@ -235,24 +235,24 @@ void stability_defer(monitor_t *monitor, entity_t *state) {
 		}
 
 		/* Update activity time for true timer refresh */
-		clock_gettime(CLOCK_MONOTONIC, &root->group->scanner->latest_time);
+		clock_gettime(CLOCK_MONOTONIC, &root->profile->scanner->latest_time);
 
 		/* Use existing scheduling logic with effective period */
-		stability_delay(monitor, check, root, &root->group->scanner->latest_time, effective_quiet);
+		stability_delay(monitor, check, root, &root->profile->scanner->latest_time, effective_quiet);
 
 		log_message(DEBUG, "Event received, using quiet period of %ld ms for %s (locked: %ld ms, calculated: %ld ms)",
-					effective_quiet, root->node->path, locked_quiet, current_complexity);
+					effective_quiet, root->resource->path, locked_quiet, current_complexity);
 		return;
 	}
 
 	/* Calculate quiet period for first event of this burst */
 	long required_quiet = scanner_delay(monitor, root);
 	log_message(DEBUG, "Calculated new quiet period for %s: %ld ms (first event of burst)",
-				root->node->path, required_quiet);
+				root->resource->path, required_quiet);
 
 	struct timespec next_check;
-	next_check.tv_sec = root->group->scanner->latest_time.tv_sec + (required_quiet / 1000);
-	next_check.tv_nsec = root->group->scanner->latest_time.tv_nsec + ((required_quiet % 1000) * 1000000);
+	next_check.tv_sec = root->profile->scanner->latest_time.tv_sec + (required_quiet / 1000);
+	next_check.tv_nsec = root->profile->scanner->latest_time.tv_nsec + ((required_quiet % 1000) * 1000000);
 
 	/* Normalize nsec */
 	if (next_check.tv_nsec >= 1000000000) {
@@ -261,32 +261,32 @@ void stability_defer(monitor_t *monitor, entity_t *state) {
 	}
 
 	/* Add to queue */
-	queue_upsert(monitor->check_queue, root->node->path, root->watchref, next_check);
+	queue_upsert(monitor->check_queue, root->resource->path, root->watchref, next_check);
 
 	/* Store the calculated quiet period for consistent use */
-	int queue_index = queue_find(monitor->check_queue, root->node->path);
+	int queue_index = queue_find(monitor->check_queue, root->resource->path);
 	if (queue_index >= 0) {
 		monitor->check_queue->items[queue_index].scheduled_quiet = required_quiet;
 	}
 
 	log_message(DEBUG, "Scheduled deferred check for %s: in %ld ms (directory with %d files, %d dirs)",
-				root->node->path, required_quiet, root->group->stability->stats.local_files,
-				root->group->stability->stats.local_dirs);
+				root->resource->path, required_quiet, root->profile->stability->stats.local_files,
+				root->profile->stability->stats.local_dirs);
 }
 
-/* Get the root entity state for a deferred check */
-entity_t *stability_entry(monitor_t *monitor, check_t *check) {
+/* Get the root subscription for a deferred check */
+subscription_t *stability_entry(monitor_t *monitor, check_t *check) {
 	if (!monitor || !check || check->num_watches <= 0) {
 		log_message(ERROR, "Invalid parameters for stability_entry");
 		return NULL;
 	}
 
-	/* Use the first watch reference to find the state. All watches for a check share the same path */
+	/* Use the first watch reference to find the subscription. All watches for a check share the same path */
 	watchref_t primary_watchref = check->watchrefs[0];
 
-	entity_t *root = states_get(monitor->states, monitor->registry, check->path, primary_watchref, ENTITY_DIRECTORY);
+	subscription_t *root = resources_get_subscription(monitor->resources, monitor->registry, check->path, primary_watchref, ENTITY_DIRECTORY);
 	if (!root) {
-		log_message(WARNING, "Cannot find state for %s", check->path);
+		log_message(WARNING, "Cannot find subscription for %s", check->path);
 		return NULL;
 	}
 
@@ -294,12 +294,12 @@ entity_t *stability_entry(monitor_t *monitor, check_t *check) {
 }
 
 /* Check if quiet period has elapsed for a directory */
-bool stability_quiet(monitor_t *monitor, entity_t *root, struct timespec *current_time, long required_quiet) {
+bool stability_quiet(monitor_t *monitor, subscription_t *root, struct timespec *current_time, long required_quiet) {
 	if (!monitor || !root || !current_time) {
 		return false;
 	}
 
-	struct timespec scanner_time = root->group->scanner->latest_time;
+	struct timespec scanner_time = root->profile->scanner->latest_time;
 	long elapsed_ms;
 
 	/* Robustly calculate elapsed time in milliseconds */
@@ -319,23 +319,23 @@ bool stability_quiet(monitor_t *monitor, entity_t *root, struct timespec *curren
 	}
 
 	log_message(DEBUG, "Path %s: %ld ms elapsed of %ld ms quiet period, direct_entries=%d+%d, recursive_entries=%d+%d, depth=%d",
-				root->node->path, elapsed_ms, required_quiet, root->group->stability->stats.local_files,
-				root->group->stability->stats.local_dirs, root->group->stability->stats.tree_files, root->group->stability->stats.tree_dirs,
-				root->group->stability->stats.depth);
+				root->resource->path, elapsed_ms, required_quiet, root->profile->stability->stats.local_files,
+				root->profile->stability->stats.local_dirs, root->profile->stability->stats.tree_files, root->profile->stability->stats.tree_dirs,
+				root->profile->stability->stats.depth);
 
 	return scanner_ready(monitor, root, current_time, required_quiet);
 }
 
 /* Reschedule a deferred check */
-void stability_delay(monitor_t *monitor, check_t *check, entity_t *root, struct timespec *current_time, long required_quiet) {
+void stability_delay(monitor_t *monitor, check_t *check, subscription_t *root, struct timespec *current_time, long required_quiet) {
 	if (!monitor || !check || !root || !current_time) {
 		return;
 	}
 
 	/* Update next check time based on latest activity */
 	struct timespec next_check;
-	next_check.tv_sec = root->group->scanner->latest_time.tv_sec + (required_quiet / 1000);
-	next_check.tv_nsec = root->group->scanner->latest_time.tv_nsec + ((required_quiet % 1000) * 1000000);
+	next_check.tv_sec = root->profile->scanner->latest_time.tv_sec + (required_quiet / 1000);
+	next_check.tv_nsec = root->profile->scanner->latest_time.tv_nsec + ((required_quiet % 1000) * 1000000);
 
 	/* Normalize timestamp */
 	if (next_check.tv_nsec >= 1000000000) {
@@ -369,25 +369,25 @@ bool stability_new(monitor_t *monitor, check_t *check) {
 }
 
 /* Perform directory stability verification */
-bool stability_scan(monitor_t *monitor, entity_t *root, const char *path, stats_t *stats_out) {
+bool stability_scan(monitor_t *monitor, subscription_t *root, const char *path, stats_t *stats_out) {
 	if (!monitor || !root || !path || !stats_out) {
 		return false;
 	}
 
 	/* Perform recursive stability verification */
 	watch_t *watch = registry_get(monitor->registry, root->watchref);
-	bool is_stable = scanner_stable(monitor, root->node, watch, path, stats_out);
+	bool is_stable = scanner_stable(monitor, watch, path, stats_out);
 
 	/* Always update stats and cumulative changes, even if unstable, to track progress */
-	root->group->stability->checks_failed = is_stable ? 0 : root->group->stability->checks_failed;
+	root->profile->stability->checks_failed = is_stable ? 0 : root->profile->stability->checks_failed;
 
 	/* Save previous stats for comparison before overwriting */
-	stats_t temp_stats = root->group->stability->stats;
-	root->group->stability->stats = *stats_out;
+	stats_t temp_stats = root->profile->stability->stats;
+	root->profile->stability->stats = *stats_out;
 
 	/* Update cumulative changes based on the difference */
-	root->group->stability->prev_stats = temp_stats;
-	scanner_update(root->group, root->node->path);
+	root->profile->stability->prev_stats = temp_stats;
+	scanner_update(root->profile, root->resource->path);
 
 	log_message(DEBUG, "Stability scan for %s: files=%d, dirs=%d, size=%s, recursive_files=%d, recursive_dirs=%d, max_depth=%d",
 				path, stats_out->local_files, stats_out->local_dirs, format_size((ssize_t) stats_out->tree_size, false),
@@ -397,7 +397,7 @@ bool stability_scan(monitor_t *monitor, entity_t *root, const char *path, stats_
 }
 
 /* Handle scan failure cases */
-failure_t stability_fail(monitor_t *monitor, check_t *check, entity_t *root, struct timespec *current_time) {
+failure_t stability_fail(monitor_t *monitor, check_t *check, subscription_t *root, struct timespec *current_time) {
 	if (!monitor || !check || !root || !current_time) {
 		return SCAN_FAILURE_TEMPORARY_ERROR;
 	}
@@ -405,18 +405,18 @@ failure_t stability_fail(monitor_t *monitor, check_t *check, entity_t *root, str
 	/* Check if the directory still exists */
 	struct stat info;
 	if (stat(check->path, &info) != 0 || !S_ISDIR(info.st_mode)) {
-		root->group->stability->checks_failed++;
+		root->profile->stability->checks_failed++;
 		log_message(DEBUG, "Directory %s not found (attempt %d/%d)", check->path,
-					root->group->stability->checks_failed, MAX_CHECKS_FAILED);
+					root->profile->stability->checks_failed, MAX_CHECKS_FAILED);
 
 		/* After multiple consecutive failures, consider it permanently deleted */
-		if (root->group->stability->checks_failed >= MAX_CHECKS_FAILED) {
+		if (root->profile->stability->checks_failed >= MAX_CHECKS_FAILED) {
 			log_message(INFO, "Directory %s confirmed deleted after %d failed checks, cleaning up",
-						check->path, root->group->stability->checks_failed);
+						check->path, root->profile->stability->checks_failed);
 
 			/* Mark as not active for all watches */
-			root->group->scanner->active = false;
-			root->node->exists = false;
+			root->profile->scanner->active = false;
+			root->resource->exists = false;
 
 			return SCAN_FAILURE_MAX_ATTEMPTS_REACHED;
 		}
@@ -424,13 +424,13 @@ failure_t stability_fail(monitor_t *monitor, check_t *check, entity_t *root, str
 		return SCAN_FAILURE_DIRECTORY_DELETED;
 	} else {
 		/* Scan failed for other reasons */
-		root->group->stability->checks_failed = 0; /* Reset counter */
+		root->profile->stability->checks_failed = 0; /* Reset counter */
 		return SCAN_FAILURE_TEMPORARY_ERROR;
 	}
 }
 
 /* Calculate required stability checks based on complexity */
-int stability_require(entity_t *root, const stats_t *current_stats) {
+int stability_require(subscription_t *root, const stats_t *current_stats) {
 	if (!root || !current_stats) {
 		return 1;
 	}
@@ -439,9 +439,9 @@ int stability_require(entity_t *root, const stats_t *current_stats) {
 	int tree_depth = current_stats->max_depth > 0 ? current_stats->max_depth : current_stats->depth;
 
 	/* Use cumulative changes for adapting stability requirements */
-	int abs_file_change = abs(root->group->stability->delta_files);
-	int abs_dir_change = abs(root->group->stability->delta_dirs);
-	int abs_depth_change = abs(root->group->stability->delta_depth);
+	int abs_file_change = abs(root->profile->stability->delta_files);
+	int abs_dir_change = abs(root->profile->stability->delta_dirs);
+	int abs_depth_change = abs(root->profile->stability->delta_depth);
 	int abs_change = abs_file_change + abs_dir_change;
 
 	int checks_required;
@@ -464,7 +464,7 @@ int stability_require(entity_t *root, const stats_t *current_stats) {
 	}
 
 	/* Consider previous stability for check reduction */
-	if (root->group->stability->stability_lost && checks_required > 1) {
+	if (root->profile->stability->stability_lost && checks_required > 1) {
 		log_message(DEBUG, "Stability was lost, maintaining required checks at %d", checks_required);
 	}
 
@@ -475,13 +475,13 @@ int stability_require(entity_t *root, const stats_t *current_stats) {
 }
 
 /* Determine if directory is stable */
-bool stability_stable(entity_t *root, const stats_t *current_stats, bool scan_completed) {
+bool stability_stable(subscription_t *root, const stats_t *current_stats, bool scan_completed) {
 	if (!root || !current_stats || !scan_completed) {
 		return false;
 	}
 
-	bool has_prev_stats = (root->group->stability->prev_stats.local_files > 0 || root->group->stability->prev_stats.local_dirs > 0);
-	if (has_prev_stats && !scanner_compare(&root->group->stability->prev_stats, (stats_t *) current_stats)) {
+	bool has_prev_stats = (root->profile->stability->prev_stats.local_files > 0 || root->profile->stability->prev_stats.local_dirs > 0);
+	if (has_prev_stats && !scanner_compare(&root->profile->stability->prev_stats, (stats_t *) current_stats)) {
 		return false;
 	}
 
@@ -489,14 +489,14 @@ bool stability_stable(entity_t *root, const stats_t *current_stats, bool scan_co
 }
 
 /* Reset stability tracking after successful command execution */
-void stability_reset(monitor_t *monitor, entity_t *root) {
+void stability_reset(monitor_t *monitor, subscription_t *root) {
 	if (!monitor || !root) {
 		return;
 	}
 
 	/* Only process directories with stability tracking */
-	if (root->node->kind != ENTITY_DIRECTORY || !root->group->stability) {
-		log_message(DEBUG, "Skipping baseline reset for non-directory or non-tracked entity: %s", root->node->path);
+	if (root->resource->kind != ENTITY_DIRECTORY || !root->profile->stability) {
+		log_message(DEBUG, "Skipping baseline reset for non-directory or non-tracked entity: %s", root->resource->path);
 		return;
 	}
 
@@ -504,47 +504,47 @@ void stability_reset(monitor_t *monitor, entity_t *root) {
 	stats_t new_baseline;
 	memset(&new_baseline, 0, sizeof(new_baseline));
 	watch_t *watch = registry_get(monitor->registry, root->watchref);
-	if (watch && !scanner_scan(root->node->path, watch, &new_baseline)) {
-		log_message(WARNING, "Failed to scan directory %s for baseline reset", root->node->path);
+	if (watch && !scanner_scan(root->resource->path, watch, &new_baseline)) {
+		log_message(WARNING, "Failed to scan directory %s for baseline reset", root->resource->path);
 		return;
 	}
 
 	log_message(INFO, "Resetting baseline for %s after command: %d files, %d dirs, depth %d",
-				root->node->path, new_baseline.tree_files, new_baseline.tree_dirs, new_baseline.max_depth);
+				root->resource->path, new_baseline.tree_files, new_baseline.tree_dirs, new_baseline.max_depth);
 
 	/* Reset stability state to reflect new baseline as authoritative */
-	root->group->stability->stats = new_baseline;
-	root->group->stability->prev_stats = new_baseline;
-	root->group->stability->ref_stats = new_baseline;
+	root->profile->stability->stats = new_baseline;
+	root->profile->stability->prev_stats = new_baseline;
+	root->profile->stability->ref_stats = new_baseline;
 
 	/* Clear all tracking deltas */
-	root->group->stability->delta_files = 0;
-	root->group->stability->delta_dirs = 0;
-	root->group->stability->delta_depth = 0;
-	root->group->stability->delta_size = 0;
+	root->profile->stability->delta_files = 0;
+	root->profile->stability->delta_dirs = 0;
+	root->profile->stability->delta_depth = 0;
+	root->profile->stability->delta_size = 0;
 
 	/* Reset stability verification tracking */
-	root->group->stability->checks_count = 0;
-	root->group->stability->checks_failed = 0;
-	root->group->stability->checks_required = 1;
-	root->group->stability->unstable_count = 0;
-	root->group->stability->stability_lost = false;
-	root->group->stability->reference_init = true;
+	root->profile->stability->checks_count = 0;
+	root->profile->stability->checks_failed = 0;
+	root->profile->stability->checks_required = 1;
+	root->profile->stability->unstable_count = 0;
+	root->profile->stability->stability_lost = false;
+	root->profile->stability->reference_init = true;
 
 	/* Clear activity tracking flag to mark the directory as idle */
-	if (root->group->scanner) {
-		root->group->scanner->active = false;
+	if (root->profile->scanner) {
+		root->profile->scanner->active = false;
 	}
 }
 
 /* Execute commands for all watches of a stable directory */
-bool stability_execute(monitor_t *monitor, check_t *check, entity_t *root, struct timespec *current_time, int *commands_executed) {
+bool stability_execute(monitor_t *monitor, check_t *check, subscription_t *root, struct timespec *current_time, int *commands_executed) {
 	if (!monitor || !check || !root || !current_time) {
 		return false;
 	}
 
 	int executed_count = 0;
-	const char *active_path = root->group->scanner->active_path ? root->group->scanner->active_path : check->path;
+	const char *active_path = root->profile->scanner->active_path ? root->profile->scanner->active_path : check->path;
 
 	/* Determine if any command needs the trigger file path (%f or %F) */
 	bool needs_trigger = false;
@@ -579,12 +579,12 @@ bool stability_execute(monitor_t *monitor, check_t *check, entity_t *root, struc
 	event_t synthetic_event = {
 		.path = (char *) active_path,
 		.type = EVENT_STRUCTURE,
-		.time = root->node->last_time,
-		.wall_time = root->node->wall_time,
+		.time = root->resource->last_time,
+		.wall_time = root->resource->wall_time,
 		.user_id = getuid()};
 
-	/* Set the executing flag for the root node before starting any commands */
-	root->node->executing = true;
+	/* Set the executing flag for the root resource before starting any commands */
+	root->resource->executing = true;
 
 	/* Execute commands for all watches associated with the stability check */
 	for (int i = 0; i < check->num_watches; i++) {
@@ -597,9 +597,9 @@ bool stability_execute(monitor_t *monitor, check_t *check, entity_t *root, struc
 		}
 
 		/* Get or create state for this specific watch to update its command time */
-		entity_t *state = states_get(monitor->states, monitor->registry, check->path, check->watchrefs[i], ENTITY_DIRECTORY);
-		if (!state) {
-			log_message(WARNING, "Unable to get state for %s with watch %s", check->path, watch->name);
+		subscription_t *subscription = resources_get_subscription(monitor->resources, monitor->registry, check->path, check->watchrefs[i], ENTITY_DIRECTORY);
+		if (!subscription) {
+			log_message(WARNING, "Unable to get subscription for %s with watch %s", check->path, watch->name);
 			continue;
 		}
 
@@ -607,8 +607,8 @@ bool stability_execute(monitor_t *monitor, check_t *check, entity_t *root, struc
 		log_message(INFO, "Executing deferred command for %s (watch: %s)", check->path, watch->name);
 		if (command_execute(monitor, check->watchrefs[i], &synthetic_event, true)) {
 			executed_count++;
-			/* Update the specific state's command time for debouncing purposes */
-			state->command_time = current_time->tv_sec;
+			/* Update the specific subscription's command time for debouncing purposes */
+			subscription->command_time = current_time->tv_sec;
 		} else {
 			log_message(WARNING, "Command execution failed for %s (watch: %s)", check->path, watch->name);
 		}
@@ -654,20 +654,20 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 
 		log_message(DEBUG, "Processing deferred check for %s with %d watches", check->path, check->num_watches);
 
-		/* Get the root entity state */
-		entity_t *root = stability_entry(monitor, check);
+		/* Get the root subscription state */
+		subscription_t *root = stability_entry(monitor, check);
 		if (!root) {
 			queue_remove(monitor->check_queue, check->path);
 			return;
 		}
 
-		/* Lock the group mutex to protect shared state during stability processing */
-		pthread_mutex_lock(&root->group->mutex);
+		/* Lock the resource mutex to protect shared state during stability processing */
+		pthread_mutex_lock(&root->resource->mutex);
 
 		/* If the entity is no longer active, just remove from queue */
-		if (!root->group->scanner->active) {
+		if (!root->profile->scanner->active) {
 			log_message(DEBUG, "Directory %s no longer active, removing from queue", check->path);
-			pthread_mutex_unlock(&root->group->mutex);
+			pthread_mutex_unlock(&root->resource->mutex);
 			queue_remove(monitor->check_queue, check->path);
 			return;
 		}
@@ -690,10 +690,10 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 				/* Quiet period not yet elapsed, reschedule */
 				watch_t *primary_watch = registry_get(monitor->registry, check->watchrefs[0]);
 				log_message(DEBUG, "Quiet period not yet elapsed for %s (watch: %s), rescheduling",
-							root->node->path, primary_watch ? primary_watch->name : "unknown");
+							root->resource->path, primary_watch ? primary_watch->name : "unknown");
 
 				stability_delay(monitor, check, root, current_time, required_quiet);
-				pthread_mutex_unlock(&root->group->mutex);
+				pthread_mutex_unlock(&root->resource->mutex);
 				return;
 			}
 
@@ -709,20 +709,20 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 			log_message(DEBUG, "Found new directories during scan, scheduling quick follow-up");
 
 			/* This is activity, but we don't need a full quiet period reset */
-			root->group->scanner->latest_time = *current_time;
+			root->profile->scanner->latest_time = *current_time;
 
 			/* Update directory stats to reflect new directory structure */
 			stats_t new_stats;
 			watch_t *watch = registry_get(monitor->registry, root->watchref);
-			if (watch && scanner_scan(root->node->path, watch, &new_stats)) {
-				root->group->stability->prev_stats = root->group->stability->stats;
-				root->group->stability->stats = new_stats;
-				scanner_update(root->group, root->node->path);
+			if (watch && scanner_scan(root->resource->path, watch, &new_stats)) {
+				root->profile->stability->prev_stats = root->profile->stability->stats;
+				root->profile->stability->stats = new_stats;
+				scanner_update(root->profile, root->resource->path);
 			}
 
 			/* We stay in verification mode, but reset the check count since the scope has changed */
-			root->group->stability->checks_count = 0;
-			root->group->stability->checks_required = 0; /* Recalculate required checks */
+			root->profile->stability->checks_count = 0;
+			root->profile->stability->checks_required = 0; /* Recalculate required checks */
 
 			/* Schedule a short follow-up check instead of a full quiet period */
 			struct timespec next_check;
@@ -734,7 +734,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 			}
 			check->next_check = next_check;
 			heap_down(monitor->check_queue->items, monitor->check_queue->size, 0);
-			pthread_mutex_unlock(&root->group->mutex);
+			pthread_mutex_unlock(&root->resource->mutex);
 			return;
 		}
 
@@ -748,7 +748,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 
 			if (failure_type == SCAN_FAILURE_MAX_ATTEMPTS_REACHED) {
 				/* Remove from queue */
-				pthread_mutex_unlock(&root->group->mutex);
+				pthread_mutex_unlock(&root->resource->mutex);
 				queue_remove(monitor->check_queue, check->path);
 				return;
 			} else if (failure_type == SCAN_FAILURE_DIRECTORY_DELETED) {
@@ -760,7 +760,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 				/* Update check */
 				check->next_check = next_check;
 				heap_down(monitor->check_queue->items, monitor->check_queue->size, 0);
-				pthread_mutex_unlock(&root->group->mutex);
+				pthread_mutex_unlock(&root->resource->mutex);
 				return;
 			}
 		}
@@ -770,41 +770,41 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 
 		if (!is_stable) {
 			/* Directory is unstable - reset counter and reschedule */
-			root->group->stability->checks_count = 0;
-			root->group->stability->checks_required = 0; /* Reset required checks */
-			root->group->stability->unstable_count++;	 /* Increment instability counter */
+			root->profile->stability->checks_count = 0;
+			root->profile->stability->checks_required = 0; /* Reset required checks */
+			root->profile->stability->unstable_count++;	   /* Increment instability counter */
 
 			/* Update activity timestamp and reset verification flag*/
-			root->group->scanner->latest_time = *current_time;
+			root->profile->scanner->latest_time = *current_time;
 			check->verifying = false;
 
 			log_message(DEBUG, "Directory %s failed stability scan (instability count: %d), rescheduling",
-						check->path, root->group->stability->unstable_count);
+						check->path, root->profile->stability->unstable_count);
 
 			/* Recalculate quiet period based on new instability */
 			required_quiet = scanner_delay(monitor, root);
 			log_message(DEBUG, "Recalculated quiet period for instability: %ld ms", required_quiet);
 			stability_delay(monitor, check, root, current_time, required_quiet);
-			pthread_mutex_unlock(&root->group->mutex);
+			pthread_mutex_unlock(&root->resource->mutex);
 			return;
 		}
 
 		/* Directory is stable - determine if enough checks have been completed */
-		root->group->stability->checks_count++;
+		root->profile->stability->checks_count++;
 
 		/* Calculate required checks based on complexity factors (only if not already set) */
-		if (root->group->stability->checks_required == 0) {
-			root->group->stability->checks_required = stability_require(root, &current_stats);
+		if (root->profile->stability->checks_required == 0) {
+			root->profile->stability->checks_required = stability_require(root, &current_stats);
 		}
-		int checks_required = root->group->stability->checks_required;
+		int checks_required = root->profile->stability->checks_required;
 
 		log_message(DEBUG, "Stability check %d/%d for %s: changes (%+d files, %+d dirs, %+d depth) total (%d entries, depth %d)",
-					root->group->stability->checks_count, checks_required, root->node->path, root->group->stability->delta_files,
-					root->group->stability->delta_dirs, root->group->stability->delta_depth, current_stats.tree_files + current_stats.tree_dirs,
+					root->profile->stability->checks_count, checks_required, root->resource->path, root->profile->stability->delta_files,
+					root->profile->stability->delta_dirs, root->profile->stability->delta_depth, current_stats.tree_files + current_stats.tree_dirs,
 					current_stats.max_depth > 0 ? current_stats.max_depth : current_stats.depth);
 
 		/* Check if we have enough consecutive stable checks */
-		if (root->group->stability->checks_count < checks_required) {
+		if (root->profile->stability->checks_count < checks_required) {
 			/* Not enough checks yet, schedule quick follow-up check */
 			struct timespec next_check;
 			next_check.tv_sec = current_time->tv_sec;
@@ -820,14 +820,14 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 			check->next_check = next_check;
 			heap_down(monitor->check_queue->items, monitor->check_queue->size, 0);
 
-			pthread_mutex_unlock(&root->group->mutex);
+			pthread_mutex_unlock(&root->resource->mutex);
 			return;
 		}
 
 		/* Directory is stable with sufficient consecutive checks - execute commands */
 		commands_attempted++;
 		log_message(INFO, "Directory %s stability confirmed (%d/%d checks), proceeding to command execution",
-					root->node->path, root->group->stability->checks_count, checks_required);
+					root->resource->path, root->profile->stability->checks_count, checks_required);
 
 		/* Execute commands */
 		int executed_now = 0;
@@ -835,7 +835,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 		commands_executed += executed_now;
 
 		/* Unlock the group mutex before queue operations */
-		pthread_mutex_unlock(&root->group->mutex);
+		pthread_mutex_unlock(&root->resource->mutex);
 
 		/* Remove check from queue after processing all watches */
 		queue_remove(monitor->check_queue, check->path);

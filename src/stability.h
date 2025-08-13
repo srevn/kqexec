@@ -5,7 +5,7 @@
 
 #include "queue.h"
 #include "scanner.h"
-#include "states.h"
+#include "resources.h"
 
 /* Maximum allowed failures before giving up */
 #define MAX_CHECKS_FAILED 3
@@ -45,26 +45,26 @@ void stability_destroy(stability_t *stability);
 
 /* Main stability processing function */
 void stability_process(monitor_t *monitor, struct timespec *current_time);
-entity_t* stability_root(monitor_t *monitor, entity_t *state);
-entity_t *stability_entry(monitor_t *monitor, check_t *check);
+subscription_t* stability_root(monitor_t *monitor, subscription_t *subscription);
+subscription_t *stability_entry(monitor_t *monitor, check_t *check);
 
 /* Quiet period checking */
-void stability_defer(monitor_t *monitor, entity_t *state);
-void stability_delay(monitor_t *monitor, check_t *check, entity_t *root, struct timespec *current_time, long required_quiet);
-bool stability_quiet(monitor_t *monitor, entity_t *root, struct timespec *current_time, long required_quiet);
-bool stability_ready(monitor_t *monitor, entity_t *state, optype_t optype, int base_debounce_ms);
+void stability_defer(monitor_t *monitor, subscription_t *subscription);
+void stability_delay(monitor_t *monitor, check_t *check, subscription_t *root, struct timespec *current_time, long required_quiet);
+bool stability_quiet(monitor_t *monitor, subscription_t *root, struct timespec *current_time, long required_quiet);
+bool stability_ready(monitor_t *monitor, subscription_t *subscription, optype_t optype, int base_debounce_ms);
 
 /* Directory stability verification */
-bool stability_scan(monitor_t *monitor, entity_t *root, const char *path, stats_t *stats_out);
+bool stability_scan(monitor_t *monitor, subscription_t *root, const char *path, stats_t *stats_out);
 bool stability_new(monitor_t *monitor, check_t *check);
-failure_t stability_fail(monitor_t *monitor, check_t *check, entity_t *root, struct timespec *current_time);
+failure_t stability_fail(monitor_t *monitor, check_t *check, subscription_t *root, struct timespec *current_time);
 
 /* Stability calculation */
-int stability_require(entity_t *root, const stats_t *current_stats);
-bool stability_stable(entity_t *root, const stats_t *current_stats, bool scan_completed);
+int stability_require(subscription_t *root, const stats_t *current_stats);
+bool stability_stable(subscription_t *root, const stats_t *current_stats, bool scan_completed);
 
 /* Command execution */
-bool stability_execute(monitor_t *monitor, check_t *check, entity_t *root, struct timespec *current_time, int *commands_executed);
-void stability_reset(monitor_t *monitor, entity_t *root);
+bool stability_execute(monitor_t *monitor, check_t *check, subscription_t *root, struct timespec *current_time, int *commands_executed);
+void stability_reset(monitor_t *monitor, subscription_t *root);
 
 #endif /* STABILITY_H */

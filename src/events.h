@@ -10,7 +10,7 @@
 
 /* Forward declarations */
 typedef struct monitor monitor_t;
-typedef struct entity entity_t;
+typedef struct subscription subscription_t;
 
 /* Logical operation types */
 typedef enum optype {
@@ -70,7 +70,7 @@ bool events_sync_add(sync_t *sync, const char *path);
 void events_sync_cleanup(sync_t *sync);
 
 /* Event to operation translation */
-optype_t events_operation(monitor_t *monitor, entity_t *state, filter_t filter);
+optype_t events_operation(monitor_t *monitor, subscription_t *subscription, filter_t filter);
 filter_t operation_to_filter(optype_t optype);
 
 #endif /* EVENTS_H */

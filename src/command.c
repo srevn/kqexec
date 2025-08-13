@@ -16,9 +16,9 @@
 
 #include "events.h"
 #include "logger.h"
+#include "resources.h"
 #include "scanner.h"
 #include "stability.h"
-#include "states.h"
 #include "threads.h"
 
 /* Module-scoped threads reference */
@@ -154,17 +154,17 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 		command_substitute(result, "%r", relative_path);
 	}
 
-	/* Get entity state for size and trigger file placeholders */
-	entity_t *state = NULL;
+	/* Get subscription for size and trigger file placeholders */
+	subscription_t *subscription = NULL;
 	if (watchref_valid(watchref)) {
-		state = states_get(monitor->states, monitor->registry, event->path, watchref, ENTITY_UNKNOWN);
+		subscription = resources_get_subscription(monitor->resources, monitor->registry, event->path, watchref, ENTITY_UNKNOWN);
 	}
 
 	/* Substitute %f and %F with trigger file path and name */
 	if (strstr(result, "%f") || strstr(result, "%F")) {
 		const char *trigger = event->path; /* Default to event path */
-		if (state) {
-			entity_t *root = stability_root(monitor, state);
+		if (subscription) {
+			subscription_t *root = stability_root(monitor, subscription);
 			if (root && root->trigger) {
 				trigger = root->trigger;
 			}
@@ -210,11 +210,11 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 	/* Handle size placeholders %s and %S */
 	if (strstr(result, "%s") || strstr(result, "%S")) {
 		size_t size = 0;
-		if (state && state->node->kind == ENTITY_DIRECTORY) {
-			entity_t *size_state = stability_root(monitor, state);
-			pthread_mutex_lock(&state->group->mutex);
-			size = size_state ? size_state->group->stability->stats.tree_size : state->group->stability->stats.tree_size;
-			pthread_mutex_unlock(&state->group->mutex);
+		if (subscription && subscription->resource->kind == ENTITY_DIRECTORY) {
+			subscription_t *size_subscription = stability_root(monitor, subscription);
+			pthread_mutex_lock(&subscription->resource->mutex);
+			size = size_subscription ? size_subscription->profile->stability->stats.tree_size : subscription->profile->stability->stats.tree_size;
+			pthread_mutex_unlock(&subscription->resource->mutex);
 		} else if (stat(event->path, &info) == 0) {
 			size = info.st_size;
 		}
@@ -372,10 +372,10 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 		exit(EXIT_FAILURE);
 	}
 
-	/* Parent process - get a reference to the state for post-execution cleanup */
-	entity_t *state = NULL;
+	/* Parent process - get a reference to the subscription for post-execution cleanup */
+	subscription_t *subscription = NULL;
 	if (watchref_valid(watchref)) {
-		state = states_get(monitor->states, monitor->registry, event->path, watchref, ENTITY_UNKNOWN);
+		subscription = resources_get_subscription(monitor->resources, monitor->registry, event->path, watchref, ENTITY_UNKNOWN);
 	}
 
 	/* Read and log output if configured - robust version */
@@ -495,23 +495,23 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 				watch->name, pid, end_time - start, WEXITSTATUS(status));
 
 	/* Clear command executing flag and reset baseline */
-	if (state) {
-		entity_t *root = stability_root(monitor, state);
+	if (subscription) {
+		subscription_t *root = stability_root(monitor, subscription);
 		struct timespec current_time;
 		clock_gettime(CLOCK_MONOTONIC, &current_time);
 
-		/* Update command time on the original state that triggered the event */
-		state->command_time = current_time.tv_sec;
+		/* Update command time on the original subscription that triggered the event */
+		subscription->command_time = current_time.tv_sec;
 
 		if (root) {
 			/* Clear executing flag on the root to allow new events for the entire watch */
-			root->node->executing = false;
+			root->resource->executing = false;
 			/* Reset directory baseline to accept command result as new authoritative state */
 			stability_reset(monitor, root);
 		} else {
 			/* Fallback for non-stability events (e.g., file-only watches) */
-			state->node->executing = false;
-			stability_reset(monitor, state); /* Will do nothing if not a directory */
+			subscription->resource->executing = false;
+			stability_reset(monitor, subscription); /* Will do nothing if not a directory */
 		}
 	}
 
@@ -565,12 +565,12 @@ void command_environment(monitor_t *monitor, watchref_t watchref, const event_t 
 
 	/* KQ_TRIGGER_FILE_PATH - full path of the file that triggered the event */
 	const char *trigger_file = event->path; /* Default to event path */
-	entity_t *state = NULL;
+	subscription_t *subscription = NULL;
 	if (watchref_valid(watchref)) {
-		state = states_get(monitor->states, monitor->registry, event->path, watchref, ENTITY_UNKNOWN);
+		subscription = resources_get_subscription(monitor->resources, monitor->registry, event->path, watchref, ENTITY_UNKNOWN);
 	}
-	if (state) {
-		entity_t *root = stability_root(monitor, state);
+	if (subscription) {
+		subscription_t *root = stability_root(monitor, subscription);
 		if (root && root->trigger) {
 			trigger_file = root->trigger;
 		}

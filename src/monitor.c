@@ -17,8 +17,8 @@
 #include "logger.h"
 #include "pending.h"
 #include "queue.h"
+#include "resources.h"
 #include "stability.h"
-#include "states.h"
 
 /* Check if a path is a hidden file or directory (starts with dot) */
 static bool path_hidden(const char *path) {
@@ -181,10 +181,10 @@ monitor_t *monitor_create(config_t *config, registry_t *registry) {
 	/* Initialize the deferred check queue with registry observer */
 	monitor->check_queue = queue_create(monitor->registry, 16); /* Initial capacity of 16 */
 
-	/* Initialize state table */
-	monitor->states = states_create(PATH_HASH_SIZE, monitor->registry);
-	if (!monitor->states) {
-		log_message(ERROR, "Failed to create state table for monitor");
+	/* Initialize resource table */
+	monitor->resources = resources_create(PATH_HASH_SIZE, monitor->registry);
+	if (!monitor->resources) {
+		log_message(ERROR, "Failed to create resource table for monitor");
 		queue_destroy(monitor->check_queue);
 		free(monitor->config_path);
 		free(monitor);
@@ -205,7 +205,7 @@ monitor_t *monitor_create(config_t *config, registry_t *registry) {
 	if (monitor->registry && !observer_register(monitor->registry, &monitor->monitor_observer)) {
 		log_message(ERROR, "Failed to register monitor observer with registry");
 		observer_unregister(monitor->registry, &monitor->pending_observer);
-		states_destroy(monitor->states);
+		resources_destroy(monitor->resources);
 		queue_destroy(monitor->check_queue);
 		free(monitor->config_path);
 		free(monitor);
@@ -214,7 +214,7 @@ monitor_t *monitor_create(config_t *config, registry_t *registry) {
 
 	if (monitor->registry && !observer_register(monitor->registry, &monitor->pending_observer)) {
 		log_message(ERROR, "Failed to register pending observer with registry");
-		states_destroy(monitor->states);
+		resources_destroy(monitor->resources);
 		queue_destroy(monitor->check_queue);
 		free(monitor->config_path);
 		free(monitor);
@@ -281,8 +281,8 @@ void monitor_destroy(monitor_t *monitor) {
 		free(monitor->delayed_events);
 	}
 
-	/* Clean up state table */
-	states_destroy(monitor->states);
+	/* Clean up resource table */
+	resources_destroy(monitor->resources);
 
 	/* Perform final garbage collection before destroying registry */
 	if (monitor->registry) {
@@ -450,7 +450,7 @@ bool monitor_path(monitor_t *monitor, const char *path, watchref_t watchref) {
 		watch_t *watch = registry_get(monitor->registry, watchref);
 		if (stat(path, &info) == 0 && watch) {
 			kind_t kind = S_ISDIR(info.st_mode) ? ENTITY_DIRECTORY : ENTITY_FILE;
-			states_get(monitor->states, monitor->registry, path, watchref, kind);
+			resources_get_subscription(monitor->resources, monitor->registry, path, watchref, kind);
 		}
 
 		/* Add to kqueue */
@@ -878,10 +878,10 @@ bool monitor_reload(monitor_t *monitor) {
 		}
 	}
 
-	/* Create new state management system */
-	states_t *new_states = states_create(PATH_HASH_SIZE, new_registry);
-	if (!new_states) {
-		log_message(ERROR, "Failed to create new state table during reload");
+	/* Create new resource management system */
+	resources_t *new_resources = resources_create(PATH_HASH_SIZE, new_registry);
+	if (!new_resources) {
+		log_message(ERROR, "Failed to create new resource table during reload");
 		close(new_kq);
 		config_destroy(new_config);
 		registry_destroy(new_registry);
@@ -892,7 +892,7 @@ bool monitor_reload(monitor_t *monitor) {
 	queue_t *new_check_queue = queue_create(new_registry, 16);
 	if (!new_check_queue) {
 		log_message(ERROR, "Failed to create new check queue during reload");
-		states_destroy(new_states);
+		resources_destroy(new_resources);
 		close(new_kq);
 		config_destroy(new_config);
 		registry_destroy(new_registry);
@@ -906,9 +906,9 @@ bool monitor_reload(monitor_t *monitor) {
 	monitor->config = new_config;
 	monitor->registry = new_registry;
 
-	/* Switch state management */
-	states_t *old_states = monitor->states;
-	monitor->states = new_states;
+	/* Switch resource management */
+	resources_t *old_resources = monitor->resources;
+	monitor->resources = new_resources;
 
 	/* Switch check queue */
 	queue_t *old_check_queue = monitor->check_queue;
@@ -961,7 +961,7 @@ bool monitor_reload(monitor_t *monitor) {
 	}
 
 	/* Cleanup old resources */
-	states_destroy(old_states);
+	resources_destroy(old_resources);
 	queue_destroy(old_check_queue);
 
 	/* Retire the old watchers and config to the graveyard */

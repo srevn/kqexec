@@ -12,9 +12,9 @@
 #include "logger.h"
 #include "monitor.h"
 #include "registry.h"
+#include "resources.h"
 #include "scanner.h"
 #include "stability.h"
-#include "states.h"
 
 /* Initialize a sync request structure */
 void events_sync_init(sync_t *sync) {
@@ -426,80 +426,76 @@ filter_t operation_to_filter(optype_t optype) {
 	}
 }
 
-/* Determine operation type based on entity state and event type */
-optype_t events_operation(monitor_t *monitor, entity_t *state, filter_t filter) {
-	if (!state) return OP_NONE;
+/* Determine operation type based on subscription and event type */
+optype_t events_operation(monitor_t *monitor, subscription_t *subscription, filter_t filter) {
+	if (!subscription) return OP_NONE;
 
-	/* Update state change flags based on the new event type */
-	if (filter & EVENT_STRUCTURE) state->node->structure_changed = true;
-	if (filter & EVENT_METADATA) state->node->metadata_changed = true;
-	if (filter & EVENT_CONTENT) state->node->content_changed = true;
+	/* Update resource change flags based on the new event type */
+	if (filter & EVENT_STRUCTURE) subscription->resource->structure_changed = true;
+	if (filter & EVENT_METADATA) subscription->resource->metadata_changed = true;
+	if (filter & EVENT_CONTENT) subscription->resource->content_changed = true;
 
 	/* Check current existence vs tracked existence */
 	struct stat info;
-	bool exists_now = (stat(state->node->path, &info) == 0);
+	bool exists_now = (stat(subscription->resource->path, &info) == 0);
 
 	optype_t determined_op = OP_NONE;
 
-	if (state->node->exists && !exists_now) {
+	if (subscription->resource->exists && !exists_now) {
 		/* Deletion */
-		determined_op = (state->node->kind == ENTITY_FILE) ? OP_FILE_DELETED : OP_DIR_DELETED;
-		log_message(DEBUG, "Entity %s detected as DELETED", state->node->path);
-		state->node->exists = false;
-	} else if (!state->node->exists && exists_now) {
+		determined_op = (subscription->resource->kind == ENTITY_FILE) ? OP_FILE_DELETED : OP_DIR_DELETED;
+		log_message(DEBUG, "Entity %s detected as DELETED", subscription->resource->path);
+		subscription->resource->exists = false;
+	} else if (!subscription->resource->exists && exists_now) {
 		/* Creation */
-		determined_op = (state->node->kind == ENTITY_FILE) ? OP_FILE_CREATED : OP_DIR_CREATED;
-		log_message(DEBUG, "Entity %s detected as CREATED", state->node->path);
-		state->node->exists = true;
+		determined_op = (subscription->resource->kind == ENTITY_FILE) ? OP_FILE_CREATED : OP_DIR_CREATED;
+		log_message(DEBUG, "Entity %s detected as CREATED", subscription->resource->path);
+		subscription->resource->exists = true;
 
 		/* Update type if it was unknown */
-		if (state->node->kind == ENTITY_UNKNOWN) {
-			if (S_ISDIR(info.st_mode)) state->node->kind = ENTITY_DIRECTORY;
-			else if (S_ISREG(info.st_mode)) state->node->kind = ENTITY_FILE;
+		if (subscription->resource->kind == ENTITY_UNKNOWN) {
+			if (S_ISDIR(info.st_mode)) subscription->resource->kind = ENTITY_DIRECTORY;
+			else if (S_ISREG(info.st_mode)) subscription->resource->kind = ENTITY_FILE;
 		}
 
 		/* For directory creation, gather initial stats */
-		if (state->node->kind == ENTITY_DIRECTORY) {
-			/* Lock the group mutex to protect shared state */
-			pthread_mutex_lock(&state->group->mutex);
+		if (subscription->resource->kind == ENTITY_DIRECTORY) {
+			/* Profile stability state should already be created by resources_get_subscription() */
 
-			/* Stability state should already be created by states_get() in the appropriate group */
-			if (!state->group->stability) {
-				state->group->stability = stability_create();
+			if (!subscription->profile->stability) {
+				subscription->profile->stability = stability_create();
 			}
-			if (state->group->stability) {
-				watch_t *watch = registry_get(monitor->registry, state->watchref);
+			if (subscription->profile->stability) {
+				watch_t *watch = registry_get(monitor->registry, subscription->watchref);
 				if (watch) {
-					scanner_scan(state->node->path, watch, &state->group->stability->stats);
-					state->group->stability->prev_stats = state->group->stability->stats;
+					scanner_scan(subscription->resource->path, watch, &subscription->profile->stability->stats);
+					subscription->profile->stability->prev_stats = subscription->profile->stability->stats;
 				}
 			}
-
-			pthread_mutex_unlock(&state->group->mutex);
 		}
 	} else if (exists_now) {
 		/* Existed before and exists now - check for other changes */
-		state->node->exists = true;
+		subscription->resource->exists = true;
 
 		/* Prioritize which operation to report if multiple flags are set */
-		if (state->node->kind == ENTITY_DIRECTORY && (state->node->content_changed || state->node->structure_changed)) {
+		if (subscription->resource->kind == ENTITY_DIRECTORY && (subscription->resource->content_changed || subscription->resource->structure_changed)) {
 			determined_op = OP_DIR_CONTENT_CHANGED;
-			log_message(DEBUG, "Directory %s structure changed", state->node->path);
-		} else if (state->node->kind == ENTITY_FILE && state->node->structure_changed) {
+			log_message(DEBUG, "Directory %s structure changed", subscription->resource->path);
+		} else if (subscription->resource->kind == ENTITY_FILE && subscription->resource->structure_changed) {
 			determined_op = OP_FILE_CONTENT_CHANGED;
-			log_message(DEBUG, "File %s content changed", state->node->path);
-		} else if (state->node->kind == ENTITY_FILE && state->node->content_changed) {
+			log_message(DEBUG, "File %s content changed", subscription->resource->path);
+		} else if (subscription->resource->kind == ENTITY_FILE && subscription->resource->content_changed) {
 			determined_op = OP_FILE_RENAMED;
-			log_message(DEBUG, "File %s renamed or replaced", state->node->path);
-		} else if (state->node->metadata_changed) {
-			determined_op = (state->node->kind == ENTITY_FILE) ? OP_FILE_METADATA_CHANGED : OP_DIR_METADATA_CHANGED;
-			log_message(DEBUG, "Entity %s metadata changed", state->node->path);
+			log_message(DEBUG, "File %s renamed or replaced", subscription->resource->path);
+		} else if (subscription->resource->metadata_changed) {
+			determined_op = (subscription->resource->kind == ENTITY_FILE) ? OP_FILE_METADATA_CHANGED : OP_DIR_METADATA_CHANGED;
+			log_message(DEBUG, "Entity %s metadata changed", subscription->resource->path);
 		} else {
-			log_message(DEBUG, "Entity %s exists but no relevant changes detected", state->node->path);
+			log_message(DEBUG, "Entity %s exists but no relevant changes detected", subscription->resource->path);
 			determined_op = OP_NONE;
 		}
 	} else {
-		log_message(DEBUG, "Entity %s still does not exist", state->node->path);
+		log_message(DEBUG, "Entity %s still does not exist", subscription->resource->path);
 		determined_op = OP_NONE;
 	}
 
@@ -572,37 +568,37 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 		return true;
 	}
 
-	/* Get state using the event path and watch reference */
-	entity_t *state = states_get(monitor->states, monitor->registry, event->path, watchref, kind);
-	if (state == NULL) {
-		return false; /* Error already logged by states_get */
+	/* Get subscription using the event path and watch reference */
+	subscription_t *subscription = resources_get_subscription(monitor->resources, monitor->registry, event->path, watchref, kind);
+	if (subscription == NULL) {
+		return false; /* Error already logged by resources_get_subscription */
 	}
 
 	/* Check if command is executing for this path or its root - defer events during execution */
-	entity_t *root = stability_root(monitor, state);
-	if (state->node->executing || (root && root->node->executing)) {
+	subscription_t *root = stability_root(monitor, subscription);
+	if (subscription->resource->executing || (root && root->resource->executing)) {
 		log_message(DEBUG, "Deferring event for %s, command is currently executing %s", event->path,
-					root ? root->node->path : "N/A");
+					root ? root->resource->path : "N/A");
 		/* Schedule event for reprocessing after a short delay */
 		events_schedule(monitor, watchref, event, kind);
 		return false;
 	}
 
 	/* Update timestamps before determining operation */
-	state->node->last_time = event->time;
-	state->node->wall_time = event->wall_time;
+	subscription->resource->last_time = event->time;
+	subscription->resource->wall_time = event->wall_time;
 
 	/* Determine the logical operation */
-	optype_t optype = events_operation(monitor, state, event->type);
+	optype_t optype = events_operation(monitor, subscription, event->type);
 	if (optype == OP_NONE) {
 		return false; /* No relevant change detected */
 	}
 
-	log_message(DEBUG, "Determined operation type %d for %s", optype, state->node->path);
+	log_message(DEBUG, "Determined operation type %d for %s", optype, subscription->resource->path);
 
 	/* Handle directory content changes - check for deleted child directories */
 	if (optype == OP_DIR_CONTENT_CHANGED && monitor->num_pending > 0) {
-		log_message(DEBUG, "Directory content changed, checking for deleted child directories: %s", state->node->path);
+		log_message(DEBUG, "Directory content changed, checking for deleted child directories: %s", subscription->resource->path);
 
 		/* Check all pending watches to see if any are waiting for children of this directory */
 		for (int i = monitor->num_pending - 1; i >= 0; i--) {
@@ -610,9 +606,9 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 			if (!pending || !pending->current_parent) continue;
 
 			/* Check if this pending watch's current_parent is a child of the changed directory */
-			size_t parent_len = strlen(state->node->path);
+			size_t parent_len = strlen(subscription->resource->path);
 			if (strlen(pending->current_parent) > parent_len &&
-				strncmp(pending->current_parent, state->node->path, parent_len) == 0 &&
+				strncmp(pending->current_parent, subscription->resource->path, parent_len) == 0 &&
 				pending->current_parent[parent_len] == '/') {
 				/* Check if the current_parent still exists */
 				struct stat info;
@@ -633,49 +629,49 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 	}
 
 	/* Check debounce/deferral logic */
-	if (stability_ready(monitor, state, optype, command_get_debounce_time())) {
+	if (stability_ready(monitor, subscription, optype, command_get_debounce_time())) {
 		/* Execute command immediately (only for non-directory-content changes) */
 		event_t synthetic_event = {
-			.path = state->node->path,
+			.path = subscription->resource->path,
 			.type = filter_for_mask,
-			.time = state->node->last_time,
-			.wall_time = state->node->wall_time,
+			.time = subscription->resource->last_time,
+			.wall_time = subscription->resource->wall_time,
 			.user_id = event->user_id};
 
 		log_message(INFO, "Executing command for %s (watch: %s, operation: %d)",
-					state->node->path, watch->name, optype);
+					subscription->resource->path, watch->name, optype);
 
 		/* Set executing flag to prevent race condition for async commands */
-		entity_t *root = stability_root(monitor, state);
+		subscription_t *root = stability_root(monitor, subscription);
 		if (root) {
-			root->node->executing = true;
+			root->resource->executing = true;
 		} else {
-			state->node->executing = true;
+			subscription->resource->executing = true;
 		}
 
 		if (command_execute(monitor, watchref, &synthetic_event, true)) {
-			log_message(INFO, "Command execution successful for %s", state->node->path);
+			log_message(INFO, "Command execution successful for %s", subscription->resource->path);
 
 			/* Update last command time and reset change flags */
-			state->command_time = state->node->last_time.tv_sec;
-			state->node->structure_changed = false;
-			state->node->metadata_changed = false;
-			state->node->content_changed = false;
+			subscription->command_time = subscription->resource->last_time.tv_sec;
+			subscription->resource->structure_changed = false;
+			subscription->resource->metadata_changed = false;
+			subscription->resource->content_changed = false;
 
 			return true;
 		} else {
-			log_message(WARNING, "Command execution failed for %s", state->node->path);
+			log_message(WARNING, "Command execution failed for %s", subscription->resource->path);
 
 			/* Clear executing flag on failure since command won't run */
 			if (root) {
-				root->node->executing = false;
+				root->resource->executing = false;
 			} else {
-				state->node->executing = false;
+				subscription->resource->executing = false;
 			}
 			return false;
 		}
 	} else {
-		log_message(DEBUG, "Command for %s (optype %d) deferred or debounced", state->node->path, optype);
+		log_message(DEBUG, "Command for %s (optype %d) deferred or debounced", subscription->resource->path, optype);
 		return false;
 	}
 }

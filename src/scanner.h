@@ -8,9 +8,8 @@
 #include "events.h"
 
 /* Forward declarations */
-typedef struct entity entity_t;
-typedef struct node node_t;
-typedef struct group group_t;
+typedef struct subscription subscription_t;
+typedef struct profile profile_t;
 
 /* Activity window size for detecting quiet periods (in milliseconds) */
 #define MAX_SAMPLES 5                      /* Number of recent events to track for activity analysis */
@@ -56,15 +55,15 @@ void scanner_destroy(scanner_t *scanner);
 
 /* Directory statistics and scanning */
 bool scanner_scan(const char *dir_path, const watch_t *watch, stats_t *stats);
-bool scanner_stable(monitor_t *monitor, node_t *node, const watch_t *watch, const char *dir_path, stats_t *stats);
+bool scanner_stable(monitor_t *monitor, const watch_t *watch, const char *dir_path, stats_t *stats);
 bool scanner_compare(stats_t *prev_stats, stats_t *current_stats);
 char *scanner_newest(const char *dir_path, const watch_t *watch);
 char *scanner_modified(const char *base_path, const watch_t *watch, time_t since_time, bool recursive, bool basename);
-void scanner_update(group_t *group, const char *path);
+void scanner_update(profile_t *profile, const char *path);
 
 /* Activity tracking and timing */
-void scanner_track(monitor_t *monitor, entity_t *state, optype_t optype);
-long scanner_delay(monitor_t *monitor, entity_t *state);
-bool scanner_ready(monitor_t *monitor, entity_t *state, struct timespec *current_time, long required_quiet);
+void scanner_track(monitor_t *monitor, subscription_t *subscription, optype_t optype);
+long scanner_delay(monitor_t *monitor, subscription_t *subscription);
+bool scanner_ready(monitor_t *monitor, subscription_t *subscription, struct timespec *current_time, long required_quiet);
 
 #endif /* SCANNER_H */

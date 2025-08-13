@@ -15,8 +15,8 @@
 #include "events.h"
 #include "logger.h"
 #include "monitor.h"
+#include "resources.h"
 #include "stability.h"
-#include "states.h"
 
 /* Create a scanner state */
 scanner_t *scanner_create(const char *path) {
@@ -44,36 +44,36 @@ void scanner_destroy(scanner_t *scanner) {
 }
 
 /* Update cumulative changes based on current vs. previous stats */
-void scanner_update(group_t *group, const char *path) {
-	if (!group || !group->stability) return;
+void scanner_update(profile_t *profile, const char *path) {
+	if (!profile || !profile->stability) return;
 
 	/* Calculate incremental changes */
 	int new_files, new_dirs, new_depth;
 	ssize_t new_size;
 
 	/* Calculate the difference from previous stats */
-	new_files = group->stability->stats.tree_files - group->stability->prev_stats.tree_files;
-	new_dirs = group->stability->stats.tree_dirs - group->stability->prev_stats.tree_dirs;
-	new_depth = group->stability->stats.max_depth - group->stability->prev_stats.max_depth;
-	new_size = (ssize_t) group->stability->stats.tree_size - (ssize_t) group->stability->prev_stats.tree_size;
+	new_files = profile->stability->stats.tree_files - profile->stability->prev_stats.tree_files;
+	new_dirs = profile->stability->stats.tree_dirs - profile->stability->prev_stats.tree_dirs;
+	new_depth = profile->stability->stats.max_depth - profile->stability->prev_stats.max_depth;
+	new_size = (ssize_t) profile->stability->stats.tree_size - (ssize_t) profile->stability->prev_stats.tree_size;
 
 	/* Accumulate changes */
-	group->stability->delta_files += new_files;
-	group->stability->delta_dirs += new_dirs;
-	group->stability->delta_depth += new_depth;
-	group->stability->delta_size += new_size;
+	profile->stability->delta_files += new_files;
+	profile->stability->delta_dirs += new_dirs;
+	profile->stability->delta_depth += new_depth;
+	profile->stability->delta_size += new_size;
 
 	/* Set flag indicating stability was lost if we're detecting new changes */
-	bool active = group->scanner ? group->scanner->active : false;
+	bool active = profile->scanner ? profile->scanner->active : false;
 	if (!active && (new_files != 0 || new_dirs != 0 || new_depth != 0 || new_size != 0)) {
-		group->stability->stability_lost = true;
+		profile->stability->stability_lost = true;
 	}
 
 	/* Log significant cumulative changes */
 	if (new_files != 0 || new_dirs != 0 || new_depth != 0 || new_size != 0) {
 		log_message(DEBUG, "Updated cumulative changes for %s: files=%+d (%+d), dirs=%+d (%+d), depth=%+d (%+d), size=%s (%s)",
-					path, group->stability->delta_files, new_files, group->stability->delta_dirs, new_dirs,
-					group->stability->delta_depth, new_depth, format_size(group->stability->delta_size, true),
+					path, profile->stability->delta_files, new_files, profile->stability->delta_dirs, new_dirs,
+					profile->stability->delta_depth, new_depth, format_size(profile->stability->delta_size, true),
 					format_size(new_size, true));
 	}
 }
@@ -263,14 +263,14 @@ bool scanner_compare(stats_t *prev_stats, stats_t *current_stats) {
 }
 
 /* Collect statistics about a directory and its contents, and determine stability */
-bool scanner_stable(monitor_t *monitor, node_t *node, const watch_t *watch, const char *dir_path, stats_t *stats) {
+bool scanner_stable(monitor_t *monitor, const watch_t *watch, const char *dir_path, stats_t *stats) {
 	DIR *dir;
 	struct dirent *dirent;
 	struct stat info;
 	char path[PATH_MAX];
 	bool is_stable = true; /* Assume stable until proven otherwise */
 
-	if (!dir_path || !stats || !node) {
+	if (!dir_path || !stats) {
 		return false;
 	}
 
@@ -341,7 +341,7 @@ bool scanner_stable(monitor_t *monitor, node_t *node, const watch_t *watch, cons
 			/* If recursive, check subdirectories */
 			if (recursive) {
 				stats_t sub_stats;
-				if (!scanner_stable(monitor, node, watch, path, &sub_stats)) {
+				if (!scanner_stable(monitor, watch, path, &sub_stats)) {
 					is_stable = false; /* Propagate instability from subdirectories */
 				}
 
@@ -385,75 +385,76 @@ bool scanner_stable(monitor_t *monitor, node_t *node, const watch_t *watch, cons
 }
 
 /* Record basic activity in circular buffer and update state */
-static void scanner_record(group_t *group, struct timespec timestamp, const char *path, optype_t optype) {
+static void scanner_record(profile_t *profile, struct timespec timestamp, const char *path, optype_t optype) {
 	/* Create activity state if needed */
-	if (!group->scanner) {
-		group->scanner = scanner_create(path);
-		if (!group->scanner) return;
+	if (!profile->scanner) {
+		profile->scanner = scanner_create(path);
+		if (!profile->scanner) return;
 	}
 
 	/* Store in circular buffer */
-	group->scanner->samples[group->scanner->sample_index].timestamp = timestamp;
-	group->scanner->samples[group->scanner->sample_index].operation = optype;
-	group->scanner->sample_index = (group->scanner->sample_index + 1) % MAX_SAMPLES;
-	if (group->scanner->sample_count < MAX_SAMPLES) {
-		group->scanner->sample_count++;
+	profile->scanner->samples[profile->scanner->sample_index].timestamp = timestamp;
+	profile->scanner->samples[profile->scanner->sample_index].operation = optype;
+	profile->scanner->sample_index = (profile->scanner->sample_index + 1) % MAX_SAMPLES;
+	if (profile->scanner->sample_count < MAX_SAMPLES) {
+		profile->scanner->sample_count++;
 	}
 
 	/* Reset stability check counter when new activity occurs */
-	if (group->stability) {
-		group->stability->checks_count = 0;
+	if (profile->stability) {
+		profile->stability->checks_count = 0;
 	}
 
-	/* Update activity timestamp for this group, which is the basis for tree activity time */
-	group->scanner->latest_time = timestamp;
+	/* Update activity timestamp for this profile, which is the basis for tree activity time */
+	profile->scanner->latest_time = timestamp;
 
 	/* Update the last activity path */
-	free(group->scanner->active_path);
-	group->scanner->active_path = strdup(path);
+	free(profile->scanner->active_path);
+	profile->scanner->active_path = strdup(path);
 }
 
 /* Update directory stats when content changes */
-static void scanner_stats(monitor_t *monitor, entity_t *state, optype_t optype) {
-	if (optype == OP_DIR_CONTENT_CHANGED && state->node->kind == ENTITY_DIRECTORY) {
+static void scanner_stats(monitor_t *monitor, subscription_t *subscription, optype_t optype) {
+	if (optype == OP_DIR_CONTENT_CHANGED && subscription->resource->kind == ENTITY_DIRECTORY) {
 		/* Update directory stats immediately to reflect the change */
 		stats_t new_stats;
-		watch_t *watch = registry_get(monitor->registry, state->watchref);
-		if (watch && scanner_scan(state->node->path, watch, &new_stats)) {
+		watch_t *watch = registry_get(monitor->registry, subscription->watchref);
+		if (watch && scanner_scan(subscription->resource->path, watch, &new_stats)) {
 			/* Create stability state if needed */
-			if (!state->group->stability) {
-				state->group->stability = stability_create();
-				if (!state->group->stability) return;
+			if (!subscription->profile->stability) {
+				subscription->profile->stability = stability_create();
+				if (!subscription->profile->stability) return;
 			}
 
 			/* Save previous stats for comparison */
-			state->group->stability->prev_stats = state->group->stability->stats;
+			subscription->profile->stability->prev_stats = subscription->profile->stability->stats;
 			/* Update with new stats */
-			state->group->stability->stats = new_stats;
+			subscription->profile->stability->stats = new_stats;
 
 			/* Update cumulative changes */
-			scanner_update(state->group, state->node->path);
+			scanner_update(subscription->profile, subscription->resource->path);
 		}
 
-		if (state->group->stability) {
+		if (subscription->profile->stability) {
 			log_message(DEBUG, "Directory stats for %s: files=%d, dirs=%d, max_depth=%d (was: files=%d, dirs=%d, max_depth=%d)",
-						state->node->path, state->group->stability->stats.tree_files, state->group->stability->stats.tree_dirs,
-						state->group->stability->stats.max_depth, state->group->stability->prev_stats.tree_files,
-						state->group->stability->prev_stats.tree_dirs, state->group->stability->prev_stats.max_depth);
+						subscription->resource->path, subscription->profile->stability->stats.tree_files,
+						subscription->profile->stability->stats.tree_dirs, subscription->profile->stability->stats.max_depth,
+						subscription->profile->stability->prev_stats.tree_files, subscription->profile->stability->prev_stats.tree_dirs,
+						subscription->profile->stability->prev_stats.max_depth);
 		}
 	}
 }
 
 /* Propagate activity to all parent directories between entity and root */
-static void scanner_propagate(monitor_t *monitor, entity_t *state, entity_t *root, optype_t optype, stats_t *root_stats) {
-	/* Get watches for state and root */
+static void scanner_propagate(monitor_t *monitor, subscription_t *subscription, subscription_t *root, optype_t optype, stats_t *root_stats) {
+	/* Get watches for subscription and root */
 	watch_t *root_watch = registry_get(monitor->registry, root->watchref);
 	if (!root_watch) {
 		log_message(WARNING, "Cannot get root watch for scanner propagation");
 		return;
 	}
 
-	char *path_copy = strdup(state->node->path);
+	char *path_copy = strdup(subscription->resource->path);
 	if (path_copy) {
 		/* Get parent directory path */
 		char *last_slash = strrchr(path_copy, '/');
@@ -465,35 +466,35 @@ static void scanner_propagate(monitor_t *monitor, entity_t *state, entity_t *roo
 				break;
 			}
 
-			/* Update state for this parent directory */
-			entity_t *parent = states_get(monitor->states, monitor->registry, path_copy, state->watchref, ENTITY_DIRECTORY);
+			/* Update subscription for this parent directory */
+			subscription_t *parent = resources_get_subscription(monitor->resources, monitor->registry, path_copy, subscription->watchref, ENTITY_DIRECTORY);
 			if (parent) {
 				/* Create activity state if needed */
-				if (!parent->group->scanner) {
-					parent->group->scanner = scanner_create(parent->node->path);
+				if (!parent->profile->scanner) {
+					parent->profile->scanner = scanner_create(parent->resource->path);
 				}
-				if (parent->group->scanner) {
-					parent->group->scanner->latest_time = state->node->last_time;
-					free(parent->group->scanner->active_path);
-					parent->group->scanner->active_path = strdup(state->node->path);
-					parent->group->scanner->active = true;
+				if (parent->profile->scanner) {
+					parent->profile->scanner->latest_time = subscription->resource->last_time;
+					free(parent->profile->scanner->active_path);
+					parent->profile->scanner->active_path = strdup(subscription->resource->path);
+					parent->profile->scanner->active = true;
 				}
 
 				/* Create stability state if needed */
-				if (!parent->group->stability) {
-					parent->group->stability = stability_create();
+				if (!parent->profile->stability) {
+					parent->profile->stability = stability_create();
 				}
-				if (parent->group->stability) {
-					parent->group->stability->checks_count = 0;
+				if (parent->profile->stability) {
+					parent->profile->stability->checks_count = 0;
 				}
 
 				/* Reset stability_lost flag when activity becomes active to prevent repeated penalties */
-				if (parent->group->stability) {
-					parent->group->stability->stability_lost = false;
+				if (parent->profile->stability) {
+					parent->profile->stability->stability_lost = false;
 				}
 
 				/* Update directory stats for parent if this is a content change */
-				if (optype == OP_DIR_CONTENT_CHANGED && parent->node->kind == ENTITY_DIRECTORY) {
+				if (optype == OP_DIR_CONTENT_CHANGED && parent->resource->kind == ENTITY_DIRECTORY) {
 					/* For recursive watches within the same scope, propagate incremental changes */
 					watch_t *parent_watch = registry_get(monitor->registry, parent->watchref);
 					watch_t *root_watch_for_scope = registry_get(monitor->registry, root->watchref);
@@ -501,38 +502,38 @@ static void scanner_propagate(monitor_t *monitor, entity_t *state, entity_t *roo
 									 parent_watch->recursive && parent_watch == root_watch_for_scope &&
 									 strlen(path_copy) >= strlen(root_watch_for_scope->path));
 
-					if (in_scope && root->group->stability && parent->group->stability) {
+					if (in_scope && root->profile->stability && parent->profile->stability) {
 						if (parent != root) {
 							/* Calculate incremental changes from root's current update */
-							int root_files = root->group->stability->stats.tree_files - root->group->stability->prev_stats.tree_files;
-							int root_dirs = root->group->stability->stats.tree_dirs - root->group->stability->prev_stats.tree_dirs;
-							int root_depth = root->group->stability->stats.max_depth - root->group->stability->prev_stats.max_depth;
-							ssize_t root_size = (ssize_t) root->group->stability->stats.tree_size - (ssize_t) root->group->stability->prev_stats.tree_size;
+							int root_files = root->profile->stability->stats.tree_files - root->profile->stability->prev_stats.tree_files;
+							int root_dirs = root->profile->stability->stats.tree_dirs - root->profile->stability->prev_stats.tree_dirs;
+							int root_depth = root->profile->stability->stats.max_depth - root->profile->stability->prev_stats.max_depth;
+							ssize_t root_size = (ssize_t) root->profile->stability->stats.tree_size - (ssize_t) root->profile->stability->prev_stats.tree_size;
 
 							/* Apply incremental changes to parent while preserving its absolute state */
-							parent->group->stability->prev_stats = parent->group->stability->stats;
-							parent->group->stability->stats.tree_files += root_files;
-							parent->group->stability->stats.tree_dirs += root_dirs;
-							parent->group->stability->stats.max_depth = (root_depth > 0) ? parent->group->stability->stats.max_depth + root_depth : parent->group->stability->stats.max_depth;
-							parent->group->stability->stats.tree_size += root_size;
+							parent->profile->stability->prev_stats = parent->profile->stability->stats;
+							parent->profile->stability->stats.tree_files += root_files;
+							parent->profile->stability->stats.tree_dirs += root_dirs;
+							parent->profile->stability->stats.max_depth = (root_depth > 0) ? parent->profile->stability->stats.max_depth + root_depth : parent->profile->stability->stats.max_depth;
+							parent->profile->stability->stats.tree_size += root_size;
 
 							/* Update cumulative changes */
-							scanner_update(parent->group, parent->node->path);
+							scanner_update(parent->profile, parent->resource->path);
 						}
 					} else {
 						/* Fall back to scanning for non-recursive or cross-scope parents */
 						stats_t parent_new_stats;
 						watch_t *parent_watch = registry_get(monitor->registry, parent->watchref);
-						if (parent_watch && scanner_scan(parent->node->path, parent_watch, &parent_new_stats)) {
-							if (!parent->group->stability) {
-								parent->group->stability = stability_create();
+						if (parent_watch && scanner_scan(parent->resource->path, parent_watch, &parent_new_stats)) {
+							if (!parent->profile->stability) {
+								parent->profile->stability = stability_create();
 							}
-							if (parent->group->stability) {
-								parent->group->stability->prev_stats = parent->group->stability->stats;
-								parent->group->stability->stats = parent_new_stats;
+							if (parent->profile->stability) {
+								parent->profile->stability->prev_stats = parent->profile->stability->stats;
+								parent->profile->stability->stats = parent_new_stats;
 
 								/* Update cumulative changes */
-								scanner_update(parent->group, parent->node->path);
+								scanner_update(parent->profile, parent->resource->path);
 							}
 						}
 					}
@@ -547,94 +548,94 @@ static void scanner_propagate(monitor_t *monitor, entity_t *state, entity_t *roo
 }
 
 /* Handle activity recording for recursive watches */
-static void scanner_recursive(monitor_t *monitor, entity_t *state, optype_t optype) {
-	/* First, find the root state */
-	entity_t *root = stability_root(monitor, state);
+static void scanner_recursive(monitor_t *monitor, subscription_t *subscription, optype_t optype) {
+	/* First, find the root subscription */
+	subscription_t *root = stability_root(monitor, subscription);
 	if (root) {
 		/* Update the root's tree activity time and path */
-		if (!root->group->scanner) {
-			root->group->scanner = scanner_create(root->node->path);
+		if (!root->profile->scanner) {
+			root->profile->scanner = scanner_create(root->resource->path);
 		}
-		if (root->group->scanner) {
-			root->group->scanner->latest_time = state->node->last_time;
-			free(root->group->scanner->active_path);
-			root->group->scanner->active_path = strdup(state->node->path);
-			root->group->scanner->active = true;
+		if (root->profile->scanner) {
+			root->profile->scanner->latest_time = subscription->resource->last_time;
+			free(root->profile->scanner->active_path);
+			root->profile->scanner->active_path = strdup(subscription->resource->path);
+			root->profile->scanner->active = true;
 		}
 
 		/* Reset stability_lost flag when activity becomes active to prevent repeated penalties */
-		if (!root->group->stability) {
-			root->group->stability = stability_create();
+		if (!root->profile->stability) {
+			root->profile->stability = stability_create();
 		}
-		if (root->group->stability) {
-			root->group->stability->stability_lost = false;
-			root->group->stability->checks_count = 0;
+		if (root->profile->stability) {
+			root->profile->stability->stability_lost = false;
+			root->profile->stability->checks_count = 0;
 		}
 
 		/* For directory operations, update directory stats immediately */
 		scanner_stats(monitor, root, optype);
 
-		/* Now propagate activity to all parent directories between this entity and root */
-		stats_t *root_stats = root->group->stability ? &root->group->stability->stats : NULL;
-		scanner_propagate(monitor, state, root, optype, root_stats);
+		/* Now propagate activity to all parent directories between this subscription and root */
+		stats_t *root_stats = root->profile->stability ? &root->profile->stability->stats : NULL;
+		scanner_propagate(monitor, subscription, root, optype, root_stats);
 	}
 }
 
-/* Handle activity when state is the root path itself */
-static void scanner_root(monitor_t *monitor, entity_t *state, optype_t optype) {
+/* Handle activity when subscription is the root path itself */
+static void scanner_root(monitor_t *monitor, subscription_t *subscription, optype_t optype) {
 	/* This is the root itself */
-	if (!state->group->scanner) {
-		state->group->scanner = scanner_create(state->node->path);
+	if (!subscription->profile->scanner) {
+		subscription->profile->scanner = scanner_create(subscription->resource->path);
 	}
-	if (state->group->scanner) {
-		state->group->scanner->latest_time = state->node->last_time;
-		free(state->group->scanner->active_path);
-		state->group->scanner->active_path = strdup(state->node->path);
+	if (subscription->profile->scanner) {
+		subscription->profile->scanner->latest_time = subscription->resource->last_time;
+		free(subscription->profile->scanner->active_path);
+		subscription->profile->scanner->active_path = strdup(subscription->resource->path);
 	}
 
 	/* Update directory stats immediately for content changes to root */
-	scanner_stats(monitor, state, optype);
+	scanner_stats(monitor, subscription, optype);
 }
 
-/* Record a new activity event in the entity's history */
-void scanner_track(monitor_t *monitor, entity_t *state, optype_t optype) {
-	if (!state || !state->group) return;
+/* Record a new activity event in the subscription's history */
+void scanner_track(monitor_t *monitor, subscription_t *subscription, optype_t optype) {
+	if (!subscription || !subscription->profile) return;
 
 	/* Check for duplicate tracking to avoid re-processing the same event */
-	if (state->node->op_time.tv_sec == state->node->last_time.tv_sec && state->node->op_time.tv_nsec == state->node->last_time.tv_nsec) {
+	if (subscription->resource->op_time.tv_sec == subscription->resource->last_time.tv_sec && subscription->resource->op_time.tv_nsec == subscription->resource->last_time.tv_nsec) {
 		log_message(DEBUG, "Skipping duplicate track for %s (optype=%d)",
-					state->node ? state->node->path : "NULL", optype);
+					subscription->resource ? subscription->resource->path : "NULL", optype);
 		return;
 	}
 
-	/* Lock the group mutex to protect shared state */
-	pthread_mutex_lock(&state->group->mutex);
+	/* Lock the resource mutex to protect shared state */
+	pthread_mutex_lock(&subscription->resource->mutex);
 
 	/* Record basic activity in circular buffer */
-	scanner_record(state->group, state->node->last_time, state->node->path, optype);
+	scanner_record(subscription->profile, subscription->resource->last_time, subscription->resource->path, optype);
 
-	/* Get the watch for this state */
-	watch_t *state_watch = registry_get(monitor->registry, state->watchref);
-	if (!state_watch) {
-		log_message(WARNING, "Cannot get watch for state %s in scanner_track", state->node->path);
-		pthread_mutex_unlock(&state->group->mutex);
+	/* Get the watch for this subscription */
+	watch_t *subscription_watch = registry_get(monitor->registry, subscription->watchref);
+	if (!subscription_watch) {
+		log_message(WARNING, "Cannot get watch for subscription %s in scanner_track", subscription->resource->path);
+		pthread_mutex_unlock(&subscription->resource->mutex);
 		return;
 	}
 
 	/* If the event is on a directory that is the root of any watch, handle it */
-	if (state->node->kind == ENTITY_DIRECTORY && strcmp(state->node->path, state_watch->path) == 0) {
-		scanner_root(monitor, state, optype);
+	if (subscription->resource->kind == ENTITY_DIRECTORY && strcmp(subscription->resource->path, subscription_watch->path) == 0) {
+		scanner_root(monitor, subscription, optype);
 	}
 	/* Otherwise, if it's a recursive watch, it must be a sub-path event */
-	else if (state_watch->recursive) {
-		scanner_recursive(monitor, state, optype);
+	else if (subscription_watch->recursive) {
+		scanner_recursive(monitor, subscription, optype);
 	}
 
 	/* Record the timestamp of this operation to prevent duplicates */
-	state->node->op_time = state->node->last_time;
+	subscription->resource->op_time = subscription->resource->last_time;
 
-	/* Unlock the group mutex */
-	pthread_mutex_unlock(&state->group->mutex);
+	/* Unlock the profile mutex */
+	pthread_mutex_unlock(&subscription->resource->mutex);
 }
 
 /* Calculate base quiet period based on recent change magnitude */
@@ -668,13 +669,13 @@ static long scanner_base(int recent_files, int recent_dirs, int recent_depth, ss
 }
 
 /* Calculate current activity magnitude (changes from reference state) for responsive adjustments */
-static void scanner_recent(entity_t *state, int *recent_files, int *recent_dirs, int *recent_depth, ssize_t *recent_size) {
+static void scanner_recent(subscription_t *subscription, int *recent_files, int *recent_dirs, int *recent_depth, ssize_t *recent_size) {
 	/* Calculate changes from the previous scan state to measure the current rate of change */
-	if (state->group->stability) {
-		*recent_depth = abs(state->group->stability->stats.max_depth - state->group->stability->prev_stats.max_depth);
-		*recent_files = abs(state->group->stability->stats.tree_files - state->group->stability->prev_stats.tree_files);
-		*recent_dirs = abs(state->group->stability->stats.tree_dirs - state->group->stability->prev_stats.tree_dirs);
-		*recent_size = labs((ssize_t) state->group->stability->stats.tree_size - (ssize_t) state->group->stability->prev_stats.tree_size);
+	if (subscription->profile->stability) {
+		*recent_depth = abs(subscription->profile->stability->stats.max_depth - subscription->profile->stability->prev_stats.max_depth);
+		*recent_files = abs(subscription->profile->stability->stats.tree_files - subscription->profile->stability->prev_stats.tree_files);
+		*recent_dirs = abs(subscription->profile->stability->stats.tree_dirs - subscription->profile->stability->prev_stats.tree_dirs);
+		*recent_size = labs((ssize_t) subscription->profile->stability->stats.tree_size - (ssize_t) subscription->profile->stability->prev_stats.tree_size);
 	} else {
 		*recent_depth = 0;
 		*recent_files = 0;
@@ -684,20 +685,20 @@ static void scanner_recent(entity_t *state, int *recent_files, int *recent_dirs,
 }
 
 /* Apply stability, depth, and size adjustments to quiet period */
-static long scanner_adjust(entity_t *state, long base_ms) {
+static long scanner_adjust(subscription_t *subscription, long base_ms) {
 	long required_ms = base_ms;
 	int tree_entries = 0;
 	int tree_depth = 0;
 
-	if (state->group->stability) {
-		tree_entries = state->group->stability->stats.tree_files + state->group->stability->stats.tree_dirs;
-		tree_depth = state->group->stability->stats.max_depth > 0 ? state->group->stability->stats.max_depth : state->group->stability->stats.depth;
+	if (subscription->profile->stability) {
+		tree_entries = subscription->profile->stability->stats.tree_files + subscription->profile->stability->stats.tree_dirs;
+		tree_depth = subscription->profile->stability->stats.max_depth > 0 ? subscription->profile->stability->stats.max_depth : subscription->profile->stability->stats.depth;
 	}
 
 	/* Use current activity magnitude for responsiveness */
 	int recent_files, recent_dirs, recent_depth;
 	ssize_t recent_size;
-	scanner_recent(state, &recent_files, &recent_dirs, &recent_depth, &recent_size);
+	scanner_recent(subscription, &recent_files, &recent_dirs, &recent_depth, &recent_size);
 	/* Calculate comprehensive activity magnitude including depth and size changes */
 	int size_weight = 0;
 	if (recent_size > 100 * 1024 * 1024) {
@@ -711,16 +712,16 @@ static long scanner_adjust(entity_t *state, long base_ms) {
 
 	/* Log recent activity calculation */
 	log_message(DEBUG, "Recent activity for %s: files=%d, dirs=%d, depth=%d, size=%s, size_weight=%d (total_change=%d)",
-				state->node->path, recent_files, recent_dirs, recent_depth,
+				subscription->resource->path, recent_files, recent_dirs, recent_depth,
 				format_size(recent_size, true), size_weight, recent_change);
 
-	if (state->group->stability) {
+	if (subscription->profile->stability) {
 		/* Calculate a cumulative magnitude factor to scale the quiet period */
-		ssize_t cumulative_size = state->group->stability->delta_size > 0 ? state->group->stability->delta_size : 0;
+		ssize_t cumulative_size = subscription->profile->stability->delta_size > 0 ? subscription->profile->stability->delta_size : 0;
 		int cumulative_size_weight = (int) (cumulative_size / (100 * 1024 * 1024)); /* 1 point per 100MB */
 
-		int cumulative_magnitude = abs(state->group->stability->delta_files) + abs(state->group->stability->delta_dirs) +
-								   abs(state->group->stability->delta_depth) + cumulative_size_weight;
+		int cumulative_magnitude = abs(subscription->profile->stability->delta_files) + abs(subscription->profile->stability->delta_dirs) +
+								   abs(subscription->profile->stability->delta_depth) + cumulative_size_weight;
 
 		/* Only apply the multiplier if the cumulative change is significant */
 		if (cumulative_magnitude > 100) {
@@ -739,7 +740,7 @@ static long scanner_adjust(entity_t *state, long base_ms) {
 	}
 
 	/* If stability was previously achieved and then lost, increase quiet period */
-	if (state->group->stability && state->group->stability->stability_lost) {
+	if (subscription->profile->stability && subscription->profile->stability->stability_lost) {
 		/* We need a more careful check for resumed activity */
 		long pre_stability = required_ms;
 		required_ms = (long) (required_ms * 1.25); /* 25% increase */
@@ -767,8 +768,8 @@ static long scanner_adjust(entity_t *state, long base_ms) {
 }
 
 /* Apply exponential backoff for consecutive instability */
-static long scanner_backoff(entity_t *state, long required_ms) {
-	int unstable_count = state->group->stability ? state->group->stability->unstable_count : 0;
+static long scanner_backoff(subscription_t *subscription, long required_ms) {
+	int unstable_count = subscription->profile->stability ? subscription->profile->stability->unstable_count : 0;
 
 	if (unstable_count < 3) {
 		/* Only apply backoff after 3 consecutive unstable counts */
@@ -796,7 +797,7 @@ static long scanner_backoff(entity_t *state, long required_ms) {
 }
 
 /* Apply final limits and complexity multiplier */
-static long scanner_limit(monitor_t *monitor, entity_t *state, long required_ms) {
+static long scanner_limit(monitor_t *monitor, subscription_t *subscription, long required_ms) {
 	/* Set reasonable limits */
 	if (required_ms < 100) required_ms = 100;
 
@@ -805,120 +806,120 @@ static long scanner_limit(monitor_t *monitor, entity_t *state, long required_ms)
 
 	if (required_ms > maximum_ms) {
 		log_message(DEBUG, "Capping quiet period for %s from %ld ms to %ld ms",
-					state->node->path, required_ms, maximum_ms);
+					subscription->resource->path, required_ms, maximum_ms);
 		required_ms = maximum_ms;
 	}
 
 	/* Apply complexity multiplier from watch config */
-	watch_t *state_watch = registry_get(monitor->registry, state->watchref);
-	if (state_watch && state_watch->complexity > 0) {
+	watch_t *subscription_watch = registry_get(monitor->registry, subscription->watchref);
+	if (subscription_watch && subscription_watch->complexity > 0) {
 		long pre_multiplier = required_ms;
-		required_ms = (long) (required_ms * state_watch->complexity);
+		required_ms = (long) (required_ms * subscription_watch->complexity);
 		log_message(DEBUG, "Applied complexity multiplier %.2f to %s: %ld ms -> %ld ms",
-					state_watch->complexity, state->node->path, pre_multiplier, required_ms);
+					subscription_watch->complexity, subscription->resource->path, pre_multiplier, required_ms);
 	}
 
 	return required_ms;
 }
 
 /* Determine the required quiet period based on state type and activity */
-long scanner_delay(monitor_t *monitor, entity_t *state) {
-	if (!state) return QUIET_PERIOD_MS;
+long scanner_delay(monitor_t *monitor, subscription_t *subscription) {
+	if (!subscription) return QUIET_PERIOD_MS;
 
 	long required_ms = QUIET_PERIOD_MS;
 
 	/* Use a longer base period for directories */
-	if (state->node->kind == ENTITY_DIRECTORY) {
+	if (subscription->resource->kind == ENTITY_DIRECTORY) {
 		/* Default quiet period */
 		required_ms = DIR_QUIET_PERIOD_MS; /* Default 1000ms */
 
 		/* For active directories, use adaptive complexity measurement */
-		bool active = state->group->scanner ? state->group->scanner->active : false;
+		bool active = subscription->profile->scanner ? subscription->profile->scanner->active : false;
 		if (active) {
 			/* Extract complexity indicators */
 			int tree_entries = 0;
 			int tree_depth = 0;
-			if (state->group->stability) {
-				tree_entries = state->group->stability->stats.tree_files + state->group->stability->stats.tree_dirs;
-				tree_depth = state->group->stability->stats.max_depth > 0 ? state->group->stability->stats.max_depth : state->group->stability->stats.depth;
+			if (subscription->profile->stability) {
+				tree_entries = subscription->profile->stability->stats.tree_files + subscription->profile->stability->stats.tree_dirs;
+				tree_depth = subscription->profile->stability->stats.max_depth > 0 ? subscription->profile->stability->stats.max_depth : subscription->profile->stability->stats.depth;
 			}
 
 			/* Get recent activity to drive the base period calculation */
 			int recent_files, recent_dirs, recent_depth;
 			ssize_t recent_size;
-			scanner_recent(state, &recent_files, &recent_dirs, &recent_depth, &recent_size);
+			scanner_recent(subscription, &recent_files, &recent_dirs, &recent_depth, &recent_size);
 
 			/* Calculate base period from recent change magnitude */
 			required_ms = scanner_base(recent_files, recent_dirs, recent_depth, recent_size);
 
 			/* Apply stability adjustments (depth, size, stability loss) */
-			required_ms = scanner_adjust(state, required_ms);
+			required_ms = scanner_adjust(subscription, required_ms);
 
 			/* Apply exponential backoff for consecutive instability */
-			required_ms = scanner_backoff(state, required_ms);
+			required_ms = scanner_backoff(subscription, required_ms);
 
-			int delta_files = state->group->stability ? state->group->stability->delta_files : 0;
-			int delta_dirs = state->group->stability ? state->group->stability->delta_dirs : 0;
-			int delta_depth = state->group->stability ? state->group->stability->delta_depth : 0;
-			ssize_t delta_size = state->group->stability ? state->group->stability->delta_size : 0;
+			int delta_files = subscription->profile->stability ? subscription->profile->stability->delta_files : 0;
+			int delta_dirs = subscription->profile->stability ? subscription->profile->stability->delta_dirs : 0;
+			int delta_depth = subscription->profile->stability ? subscription->profile->stability->delta_depth : 0;
+			ssize_t delta_size = subscription->profile->stability ? subscription->profile->stability->delta_size : 0;
 
 			log_message(DEBUG, "Quiet period for %s: %ld ms (cumulative: %+d files, %+d dirs, %+d depth, %s size) (total: %d entries, %d depth)",
-						state->node->path, required_ms, delta_files, delta_dirs, delta_depth,
+						subscription->resource->path, required_ms, delta_files, delta_dirs, delta_depth,
 						format_size(delta_size, true), tree_entries, tree_depth);
 		} else {
 			/* For inactive directories, just log the base period with recursive stats */
 			int tree_entries = 0;
 			int tree_depth = 0;
 			int num_subdir = 0;
-			if (state->group->stability) {
-				tree_entries = state->group->stability->stats.tree_files + state->group->stability->stats.tree_dirs;
-				tree_depth = state->group->stability->stats.max_depth > 0 ? state->group->stability->stats.max_depth : state->group->stability->stats.depth;
-				num_subdir = state->group->stability->stats.tree_dirs;
+			if (subscription->profile->stability) {
+				tree_entries = subscription->profile->stability->stats.tree_files + subscription->profile->stability->stats.tree_dirs;
+				tree_depth = subscription->profile->stability->stats.max_depth > 0 ? subscription->profile->stability->stats.max_depth : subscription->profile->stability->stats.depth;
+				num_subdir = subscription->profile->stability->stats.tree_dirs;
 			}
 
 			log_message(DEBUG, "Using base quiet period for %s: %ld ms (recursive entries: %d, depth: %d, subdirs: %d)",
-						state->node->path, required_ms, tree_entries, tree_depth, num_subdir);
+						subscription->resource->path, required_ms, tree_entries, tree_depth, num_subdir);
 		}
 	}
 
 	/* Apply final limits and complexity multiplier */
-	return scanner_limit(monitor, state, required_ms);
+	return scanner_limit(monitor, subscription, required_ms);
 }
 
 /* Check if enough quiet time has passed since the last activity */
-bool scanner_ready(monitor_t *monitor, entity_t *state, struct timespec *current_time, long required_quiet) {
-	if (!state || !current_time) return true; /* Cannot check, assume elapsed */
+bool scanner_ready(monitor_t *monitor, subscription_t *subscription, struct timespec *current_time, long required_quiet) {
+	if (!subscription || !current_time) return true; /* Cannot check, assume elapsed */
 
 	struct timespec *scanner_time = NULL;
-	const char *source_path = state->node->path;
+	const char *source_path = subscription->resource->path;
 
 	/* Get the watch for timestamp checking */
-	watch_t *state_watch = registry_get(monitor->registry, state->watchref);
+	watch_t *subscription_watch = registry_get(monitor->registry, subscription->watchref);
 
 	/* Determine which timestamp to check against */
-	if (state->node->kind == ENTITY_DIRECTORY && state_watch && state_watch->recursive) {
+	if (subscription->resource->kind == ENTITY_DIRECTORY && subscription_watch && subscription_watch->recursive) {
 		/* For recursive directory watches, always check the root's tree time */
-		entity_t *root = stability_root(monitor, state);
+		subscription_t *root = stability_root(monitor, subscription);
 		if (root) {
-			scanner_time = root->group->scanner ? &root->group->scanner->latest_time : &root->node->last_time;
-			source_path = root->node->path;
+			scanner_time = root->profile->scanner ? &root->profile->scanner->latest_time : &root->resource->last_time;
+			source_path = root->resource->path;
 		} else {
-			log_message(WARNING, "Cannot find root state for %s, falling back to local activity", state->node->path);
+			log_message(WARNING, "Cannot find root subscription for %s, falling back to local activity", subscription->resource->path);
 			/* Fallback: use local activity if root not found */
-			if (!state->group->scanner || state->group->scanner->sample_count == 0) return true;
-			int latest_idx = (state->group->scanner->sample_index + MAX_SAMPLES - 1) % MAX_SAMPLES;
-			scanner_time = &state->group->scanner->samples[latest_idx].timestamp;
+			if (!subscription->profile->scanner || subscription->profile->scanner->sample_count == 0) return true;
+			int latest_idx = (subscription->profile->scanner->sample_index + MAX_SAMPLES - 1) % MAX_SAMPLES;
+			scanner_time = &subscription->profile->scanner->samples[latest_idx].timestamp;
 		}
 	} else {
 		/* For files or non-recursive dirs, use local activity time */
-		if (!state->group->scanner || state->group->scanner->sample_count == 0) return true;
-		int latest_idx = (state->group->scanner->sample_index + MAX_SAMPLES - 1) % MAX_SAMPLES;
-		scanner_time = &state->group->scanner->samples[latest_idx].timestamp;
+		if (!subscription->profile->scanner || subscription->profile->scanner->sample_count == 0) return true;
+		int latest_idx = (subscription->profile->scanner->sample_index + MAX_SAMPLES - 1) % MAX_SAMPLES;
+		scanner_time = &subscription->profile->scanner->samples[latest_idx].timestamp;
 	}
 
 	/* Check for valid timestamp */
 	if (!scanner_time || (scanner_time->tv_sec == 0 && scanner_time->tv_nsec == 0)) {
-		log_message(DEBUG, "No valid activity timestamp for %s, quiet period assumed elapsed", state->node->path);
+		log_message(DEBUG, "No valid activity timestamp for %s, quiet period assumed elapsed", subscription->resource->path);
 		return true;
 	}
 
@@ -941,7 +942,7 @@ bool scanner_ready(monitor_t *monitor, entity_t *state, struct timespec *current
 
 	if (elapsed_ms < 0) {
 		log_message(WARNING, "Clock appears to have moved backwards for %s, assuming quiet period elapsed",
-					state->node->path);
+					subscription->resource->path);
 		return true;
 	}
 
@@ -949,10 +950,10 @@ bool scanner_ready(monitor_t *monitor, entity_t *state, struct timespec *current
 
 	if (!elapsed) {
 		log_message(DEBUG, "Quiet period check for %s: %ld ms elapsed < %ld ms required (using time from %s)",
-					state->node->path, elapsed_ms, required_quiet, source_path);
+					subscription->resource->path, elapsed_ms, required_quiet, source_path);
 	} else {
 		log_message(DEBUG, "Quiet period elapsed for %s: %ld ms >= %ld ms required",
-					state->node->path, elapsed_ms, required_quiet);
+					subscription->resource->path, elapsed_ms, required_quiet);
 	}
 
 	return elapsed;

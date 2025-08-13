@@ -41,10 +41,10 @@ SRCS = src/main.c \
 	   src/pending.c \
 	   src/scanner.c \
 	   src/registry.c \
+	   src/resources.c \
 	   src/stability.c \
 	   src/command.c \
 	   src/threads.c \
-	   src/states.c \
 	   src/daemon.c \
 	   src/logger.c
 
