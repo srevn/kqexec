@@ -218,7 +218,6 @@ bool observer_register(registry_t *registry, observer_t *observer) {
 
 	pthread_rwlock_unlock(&registry->lock);
 
-	log_message(DEBUG, "Registered watch observer");
 	return true;
 }
 

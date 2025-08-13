@@ -328,12 +328,12 @@ entity_t *states_get(states_t *states, registry_t *registry, const char *path, w
 	}
 
 	/* Calculate configuration hash for this watch */
-	uint64_t watch_config_hash = config_hash(watch);
+	uint64_t watch_hash = config_hash(watch);
 
 	/* Find existing stability group with matching configuration */
 	group_t *group = node->groups;
 	while (group) {
-		if (group->config_hash == watch_config_hash) {
+		if (group->config_hash == watch_hash) {
 			break;
 		}
 		group = group->next;
@@ -341,7 +341,7 @@ entity_t *states_get(states_t *states, registry_t *registry, const char *path, w
 
 	/* If no matching group found, create a new one */
 	if (!group) {
-		group = group_create(watch_config_hash);
+		group = group_create(watch_hash);
 		if (!group) {
 			log_message(ERROR, "Failed to create stability group for %s", path);
 			/* If the node was newly created, clean it up */
@@ -374,9 +374,8 @@ entity_t *states_get(states_t *states, registry_t *registry, const char *path, w
 				group->stability->ref_stats = group->stability->stats;
 				group->stability->reference_init = true;
 
-				log_message(DEBUG, "Initial baseline established for %s (config_hash=%llu): files=%d, dirs=%d, depth=%d, size=%s",
-							path, (unsigned long long) watch_config_hash,
-							group->stability->stats.tree_files, group->stability->stats.tree_dirs,
+				log_message(DEBUG, "Initial baseline established for %s: files=%d, dirs=%d, depth=%d, size=%s",
+							path, group->stability->stats.tree_files, group->stability->stats.tree_dirs,
 							group->stability->stats.max_depth, format_size((ssize_t) group->stability->stats.tree_size, false));
 			} else {
 				log_message(WARNING, "Failed to gather initial stats for directory: %s", path);
