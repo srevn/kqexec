@@ -15,7 +15,7 @@
 #include "events.h"
 #include "logger.h"
 #include "monitor.h"
-#include "resources.h"
+#include "resource.h"
 #include "stability.h"
 
 /* Create a scanner state */
@@ -467,7 +467,7 @@ static void scanner_propagate(monitor_t *monitor, subscription_t *subscription, 
 			}
 
 			/* Update subscription for this parent directory */
-			subscription_t *parent = resources_get_subscription(monitor->resources, monitor->registry, path_copy, subscription->watchref, ENTITY_DIRECTORY);
+			subscription_t *parent = resources_subscription(monitor->resources, monitor->registry, path_copy, subscription->watchref, ENTITY_DIRECTORY);
 			if (parent) {
 				/* Create activity state if needed */
 				if (!parent->profile->scanner) {
@@ -498,9 +498,8 @@ static void scanner_propagate(monitor_t *monitor, subscription_t *subscription, 
 					/* For recursive watches within the same scope, propagate incremental changes */
 					watch_t *parent_watch = registry_get(monitor->registry, parent->watchref);
 					watch_t *root_watch_for_scope = registry_get(monitor->registry, root->watchref);
-					bool in_scope = (root_stats && parent_watch && root_watch_for_scope &&
-									 parent_watch->recursive && parent_watch == root_watch_for_scope &&
-									 strlen(path_copy) >= strlen(root_watch_for_scope->path));
+					bool in_scope = (root_stats && parent_watch && root_watch_for_scope && parent_watch->recursive &&
+									 parent_watch == root_watch_for_scope && strlen(path_copy) >= strlen(root_watch_for_scope->path));
 
 					if (in_scope && root->profile->stability && parent->profile->stability) {
 						if (parent != root) {
@@ -508,13 +507,16 @@ static void scanner_propagate(monitor_t *monitor, subscription_t *subscription, 
 							int root_files = root->profile->stability->stats.tree_files - root->profile->stability->prev_stats.tree_files;
 							int root_dirs = root->profile->stability->stats.tree_dirs - root->profile->stability->prev_stats.tree_dirs;
 							int root_depth = root->profile->stability->stats.max_depth - root->profile->stability->prev_stats.max_depth;
-							ssize_t root_size = (ssize_t) root->profile->stability->stats.tree_size - (ssize_t) root->profile->stability->prev_stats.tree_size;
+							ssize_t root_size = (ssize_t) root->profile->stability->stats.tree_size -
+												(ssize_t) root->profile->stability->prev_stats.tree_size;
 
 							/* Apply incremental changes to parent while preserving its absolute state */
 							parent->profile->stability->prev_stats = parent->profile->stability->stats;
 							parent->profile->stability->stats.tree_files += root_files;
 							parent->profile->stability->stats.tree_dirs += root_dirs;
-							parent->profile->stability->stats.max_depth = (root_depth > 0) ? parent->profile->stability->stats.max_depth + root_depth : parent->profile->stability->stats.max_depth;
+							parent->profile->stability->stats.max_depth = (root_depth > 0) ?
+																			  parent->profile->stability->stats.max_depth + root_depth :
+																			  parent->profile->stability->stats.max_depth;
 							parent->profile->stability->stats.tree_size += root_size;
 
 							/* Update cumulative changes */
@@ -602,7 +604,8 @@ void scanner_track(monitor_t *monitor, subscription_t *subscription, optype_t op
 	if (!subscription || !subscription->profile) return;
 
 	/* Check for duplicate tracking to avoid re-processing the same event */
-	if (subscription->resource->op_time.tv_sec == subscription->resource->last_time.tv_sec && subscription->resource->op_time.tv_nsec == subscription->resource->last_time.tv_nsec) {
+	if (subscription->resource->op_time.tv_sec == subscription->resource->last_time.tv_sec &&
+		subscription->resource->op_time.tv_nsec == subscription->resource->last_time.tv_nsec) {
 		log_message(DEBUG, "Skipping duplicate track for %s (optype=%d)",
 					subscription->resource ? subscription->resource->path : "NULL", optype);
 		return;
@@ -675,7 +678,8 @@ static void scanner_recent(subscription_t *subscription, int *recent_files, int 
 		*recent_depth = abs(subscription->profile->stability->stats.max_depth - subscription->profile->stability->prev_stats.max_depth);
 		*recent_files = abs(subscription->profile->stability->stats.tree_files - subscription->profile->stability->prev_stats.tree_files);
 		*recent_dirs = abs(subscription->profile->stability->stats.tree_dirs - subscription->profile->stability->prev_stats.tree_dirs);
-		*recent_size = labs((ssize_t) subscription->profile->stability->stats.tree_size - (ssize_t) subscription->profile->stability->prev_stats.tree_size);
+		*recent_size = labs((ssize_t) subscription->profile->stability->stats.tree_size -
+							(ssize_t) subscription->profile->stability->prev_stats.tree_size);
 	} else {
 		*recent_depth = 0;
 		*recent_files = 0;
@@ -692,7 +696,8 @@ static long scanner_adjust(subscription_t *subscription, long base_ms) {
 
 	if (subscription->profile->stability) {
 		tree_entries = subscription->profile->stability->stats.tree_files + subscription->profile->stability->stats.tree_dirs;
-		tree_depth = subscription->profile->stability->stats.max_depth > 0 ? subscription->profile->stability->stats.max_depth : subscription->profile->stability->stats.depth;
+		tree_depth = subscription->profile->stability->stats.max_depth > 0 ? subscription->profile->stability->stats.max_depth :
+																			 subscription->profile->stability->stats.depth;
 	}
 
 	/* Use current activity magnitude for responsiveness */
@@ -734,8 +739,7 @@ static long scanner_adjust(subscription_t *subscription, long base_ms) {
 
 			long pre_magnitude = required_ms;
 			required_ms = (long) (required_ms * magnitude_factor);
-			log_message(DEBUG, "Applied magnitude factor %.2f: %ld ms -> %ld ms",
-						magnitude_factor, pre_magnitude, required_ms);
+			log_message(DEBUG, "Applied magnitude factor %.2f: %ld ms -> %ld ms", magnitude_factor, pre_magnitude, required_ms);
 		}
 	}
 
@@ -744,8 +748,7 @@ static long scanner_adjust(subscription_t *subscription, long base_ms) {
 		/* We need a more careful check for resumed activity */
 		long pre_stability = required_ms;
 		required_ms = (long) (required_ms * 1.25); /* 25% increase */
-		log_message(DEBUG, "Applied stability loss penalty: %ld ms -> %ld ms",
-					pre_stability, required_ms);
+		log_message(DEBUG, "Applied stability loss penalty: %ld ms -> %ld ms", pre_stability, required_ms);
 	}
 
 	/* Tree depth multiplier - based on recent activity rate */
@@ -790,8 +793,7 @@ static long scanner_backoff(subscription_t *subscription, long required_ms) {
 	}
 
 	long adjusted_ms = (long) (required_ms * backoff_factor);
-	log_message(DEBUG, "Applied backoff factor %.2f: %ld ms -> %ld ms",
-				backoff_factor, required_ms, adjusted_ms);
+	log_message(DEBUG, "Applied backoff factor %.2f: %ld ms -> %ld ms", backoff_factor, required_ms, adjusted_ms);
 
 	return adjusted_ms;
 }
@@ -805,8 +807,7 @@ static long scanner_limit(monitor_t *monitor, subscription_t *subscription, long
 	long maximum_ms = 90000; /* Default 90 seconds */
 
 	if (required_ms > maximum_ms) {
-		log_message(DEBUG, "Capping quiet period for %s from %ld ms to %ld ms",
-					subscription->resource->path, required_ms, maximum_ms);
+		log_message(DEBUG, "Capping quiet period for %s from %ld ms to %ld ms", subscription->resource->path, required_ms, maximum_ms);
 		required_ms = maximum_ms;
 	}
 
@@ -815,8 +816,8 @@ static long scanner_limit(monitor_t *monitor, subscription_t *subscription, long
 	if (subscription_watch && subscription_watch->complexity > 0) {
 		long pre_multiplier = required_ms;
 		required_ms = (long) (required_ms * subscription_watch->complexity);
-		log_message(DEBUG, "Applied complexity multiplier %.2f to %s: %ld ms -> %ld ms",
-					subscription_watch->complexity, subscription->resource->path, pre_multiplier, required_ms);
+		log_message(DEBUG, "Applied complexity multiplier %.2f to %s: %ld ms -> %ld ms", subscription_watch->complexity,
+					subscription->resource->path, pre_multiplier, required_ms);
 	}
 
 	return required_ms;
@@ -841,7 +842,8 @@ long scanner_delay(monitor_t *monitor, subscription_t *subscription) {
 			int tree_depth = 0;
 			if (subscription->profile->stability) {
 				tree_entries = subscription->profile->stability->stats.tree_files + subscription->profile->stability->stats.tree_dirs;
-				tree_depth = subscription->profile->stability->stats.max_depth > 0 ? subscription->profile->stability->stats.max_depth : subscription->profile->stability->stats.depth;
+				tree_depth = subscription->profile->stability->stats.max_depth > 0 ? subscription->profile->stability->stats.max_depth :
+																					 subscription->profile->stability->stats.depth;
 			}
 
 			/* Get recent activity to drive the base period calculation */
@@ -863,7 +865,7 @@ long scanner_delay(monitor_t *monitor, subscription_t *subscription) {
 			int delta_depth = subscription->profile->stability ? subscription->profile->stability->delta_depth : 0;
 			ssize_t delta_size = subscription->profile->stability ? subscription->profile->stability->delta_size : 0;
 
-			log_message(DEBUG, "Quiet period for %s: %ld ms (cumulative: %+d files, %+d dirs, %+d depth, %s size) (total: %d entries, %d depth)",
+			log_message(DEBUG, "Quiet for %s: %ld ms (cumulative: %+d files, %+d dirs, %+d depth, %s size) (total: %d entries, %d depth)",
 						subscription->resource->path, required_ms, delta_files, delta_dirs, delta_depth,
 						format_size(delta_size, true), tree_entries, tree_depth);
 		} else {
@@ -873,7 +875,8 @@ long scanner_delay(monitor_t *monitor, subscription_t *subscription) {
 			int num_subdir = 0;
 			if (subscription->profile->stability) {
 				tree_entries = subscription->profile->stability->stats.tree_files + subscription->profile->stability->stats.tree_dirs;
-				tree_depth = subscription->profile->stability->stats.max_depth > 0 ? subscription->profile->stability->stats.max_depth : subscription->profile->stability->stats.depth;
+				tree_depth = subscription->profile->stability->stats.max_depth > 0 ? subscription->profile->stability->stats.max_depth :
+																					 subscription->profile->stability->stats.depth;
 				num_subdir = subscription->profile->stability->stats.tree_dirs;
 			}
 

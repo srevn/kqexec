@@ -12,7 +12,7 @@
 #include "logger.h"
 #include "monitor.h"
 #include "registry.h"
-#include "resources.h"
+#include "resource.h"
 #include "scanner.h"
 #include "stability.h"
 
@@ -460,7 +460,7 @@ optype_t events_operation(monitor_t *monitor, subscription_t *subscription, filt
 
 		/* For directory creation, gather initial stats */
 		if (subscription->resource->kind == ENTITY_DIRECTORY) {
-			/* Profile stability state should already be created by resources_get_subscription() */
+			/* Profile stability state should already be created by resources_subscription() */
 
 			if (!subscription->profile->stability) {
 				subscription->profile->stability = stability_create();
@@ -569,9 +569,9 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 	}
 
 	/* Get subscription using the event path and watch reference */
-	subscription_t *subscription = resources_get_subscription(monitor->resources, monitor->registry, event->path, watchref, kind);
+	subscription_t *subscription = resources_subscription(monitor->resources, monitor->registry, event->path, watchref, kind);
 	if (subscription == NULL) {
-		return false; /* Error already logged by resources_get_subscription */
+		return false; /* Error already logged by resources_subscription */
 	}
 
 	/* Check if command is executing for this path or its root - defer events during execution */

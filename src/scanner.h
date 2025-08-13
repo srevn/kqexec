@@ -8,7 +8,6 @@
 #include "events.h"
 
 /* Forward declarations */
-typedef struct subscription subscription_t;
 typedef struct profile profile_t;
 
 /* Activity window size for detecting quiet periods (in milliseconds) */

@@ -16,7 +16,7 @@
 
 #include "events.h"
 #include "logger.h"
-#include "resources.h"
+#include "resource.h"
 #include "scanner.h"
 #include "stability.h"
 #include "threads.h"
@@ -157,7 +157,7 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 	/* Get subscription for size and trigger file placeholders */
 	subscription_t *subscription = NULL;
 	if (watchref_valid(watchref)) {
-		subscription = resources_get_subscription(monitor->resources, monitor->registry, event->path, watchref, ENTITY_UNKNOWN);
+		subscription = resources_subscription(monitor->resources, monitor->registry, event->path, watchref, ENTITY_UNKNOWN);
 	}
 
 	/* Substitute %f and %F with trigger file path and name */
@@ -375,7 +375,7 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 	/* Parent process - get a reference to the subscription for post-execution cleanup */
 	subscription_t *subscription = NULL;
 	if (watchref_valid(watchref)) {
-		subscription = resources_get_subscription(monitor->resources, monitor->registry, event->path, watchref, ENTITY_UNKNOWN);
+		subscription = resources_subscription(monitor->resources, monitor->registry, event->path, watchref, ENTITY_UNKNOWN);
 	}
 
 	/* Read and log output if configured - robust version */
@@ -567,7 +567,7 @@ void command_environment(monitor_t *monitor, watchref_t watchref, const event_t 
 	const char *trigger_file = event->path; /* Default to event path */
 	subscription_t *subscription = NULL;
 	if (watchref_valid(watchref)) {
-		subscription = resources_get_subscription(monitor->resources, monitor->registry, event->path, watchref, ENTITY_UNKNOWN);
+		subscription = resources_subscription(monitor->resources, monitor->registry, event->path, watchref, ENTITY_UNKNOWN);
 	}
 	if (subscription) {
 		subscription_t *root = stability_root(monitor, subscription);

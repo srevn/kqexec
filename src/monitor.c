@@ -17,7 +17,7 @@
 #include "logger.h"
 #include "pending.h"
 #include "queue.h"
-#include "resources.h"
+#include "resource.h"
 #include "stability.h"
 
 /* Check if a path is a hidden file or directory (starts with dot) */
@@ -450,7 +450,7 @@ bool monitor_path(monitor_t *monitor, const char *path, watchref_t watchref) {
 		watch_t *watch = registry_get(monitor->registry, watchref);
 		if (stat(path, &info) == 0 && watch) {
 			kind_t kind = S_ISDIR(info.st_mode) ? ENTITY_DIRECTORY : ENTITY_FILE;
-			resources_get_subscription(monitor->resources, monitor->registry, path, watchref, kind);
+			resources_subscription(monitor->resources, monitor->registry, path, watchref, kind);
 		}
 
 		/* Add to kqueue */

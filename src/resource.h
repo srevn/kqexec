@@ -1,5 +1,5 @@
-#ifndef RESOURCES_H
-#define RESOURCES_H
+#ifndef RESOURCE_H
+#define RESOURCE_H
 
 #include <pthread.h>
 #include <stdint.h>
@@ -11,8 +11,6 @@
 
 /* Forward declarations */
 typedef struct stability stability_t;
-typedef struct profile profile_t;
-typedef struct subscription subscription_t;
 
 /* Resource table configuration */
 #define PATH_HASH_SIZE 1024
@@ -20,7 +18,7 @@ typedef struct subscription subscription_t;
 
 /* Scanning profile for watches with compatible scan configurations */
 typedef struct profile {
-	uint64_t config_hash;                  /* Hash of the scan configuration (recursive, hidden, excludes) */
+	uint64_t configuration_hash;           /* Hash of the scan configuration (recursive, hidden, excludes) */
 	
 	/* Configuration-specific state */
 	stability_t *stability;                /* Shared stability state for this profile */
@@ -86,8 +84,6 @@ typedef struct subscription {
 	struct subscription *next;             /* Next subscription for the same profile */
 } subscription_t;
 
-/* Function prototypes */
-
 /* Resource table management */
 resources_t *resources_create(size_t bucket_count, registry_t *registry);
 void resources_destroy(resources_t *resources);
@@ -99,20 +95,20 @@ void resource_lock(resource_t *resource);
 void resource_unlock(resource_t *resource);
 
 /* Configuration utilities */
-uint64_t config_hash(const watch_t *watch);
+uint64_t configuration_hash(const watch_t *watch);
 
 /* Profile management */
-profile_t *resource_get_profile(resource_t *resource, uint64_t config_hash);
-profile_t *resource_create_profile(resource_t *resource, uint64_t config_hash);
+profile_t *profile_get(resource_t *resource, uint64_t configuration_hash);
+profile_t *profile_create(resource_t *resource, uint64_t configuration_hash);
 void profile_destroy(profile_t *profile);
 
 /* Subscription management */
 subscription_t *profile_subscribe(profile_t *profile, resource_t *resource, watchref_t watchref);
 bool profile_unsubscribe(profile_t *profile, watchref_t watchref);
-subscription_t *profile_find_subscription(profile_t *profile, watchref_t watchref);
+subscription_t *profile_subscription(profile_t *profile, watchref_t watchref);
 bool subscription_corrupted(const subscription_t *subscription);
 
-/* Main entry point - equivalent to current states_get() */
-subscription_t *resources_get_subscription(resources_t *resources, registry_t *registry, const char *path, watchref_t watchref, kind_t kind);
+/* Main entry point */
+subscription_t *resources_subscription(resources_t *resources, registry_t *registry, const char *path, watchref_t watchref, kind_t kind);
 
-#endif /* RESOURCES_H */
+#endif /* RESOURCE_H */

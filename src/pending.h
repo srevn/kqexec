@@ -11,8 +11,6 @@
 /* Forward declarations */
 typedef struct monitor monitor_t;
 typedef struct watcher watcher_t;
-typedef struct watch watch_t;
-typedef struct watchref watchref_t;
 
 /* Pending watch for non-existent paths */
 typedef struct pending {

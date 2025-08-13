@@ -8,7 +8,7 @@
 #include "pending.h"
 #include "queue.h"
 #include "registry.h"
-#include "resources.h"
+#include "resource.h"
 
 /* Monitor configuration */
 #define MAX_WATCHES 128

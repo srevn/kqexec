@@ -5,7 +5,7 @@
 
 #include "queue.h"
 #include "scanner.h"
-#include "resources.h"
+#include "resource.h"
 
 /* Maximum allowed failures before giving up */
 #define MAX_CHECKS_FAILED 3

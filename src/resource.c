@@ -1,4 +1,4 @@
-#include "resources.h"
+#include "resource.h"
 
 #include <dirent.h>
 #include <pthread.h>
@@ -25,6 +25,25 @@ static void subscription_free(subscription_t *subscription) {
 	}
 }
 
+/* Check if subscription is corrupted by verifying magic number and pointer validity */
+bool subscription_corrupted(const subscription_t *subscription) {
+	if (!subscription) return true;
+
+	/* Address validation - prevents crashes from invalid pointers */
+	if ((uintptr_t) subscription < 0x1000 || ((uintptr_t) subscription & 0x7) != 0) {
+		log_message(WARNING, "Subscription appears to be invalid pointer: %p", subscription);
+		return true;
+	}
+
+	/* Magic validation with detailed logging for debugging */
+	if (subscription->magic != SUBSCRIPTION_MAGIC) {
+		log_message(WARNING, "Subscription corruption detected: magic=0x%x, expected=0x%x",
+					subscription->magic, SUBSCRIPTION_MAGIC);
+		return true;
+	}
+	return false;
+}
+
 /* Observer callback for watch deactivation */
 static void resources_handle_deactivation(watchref_t watchref, void *context) {
 	resources_t *resources = (resources_t *) context;
@@ -32,7 +51,8 @@ static void resources_handle_deactivation(watchref_t watchref, void *context) {
 		return;
 	}
 
-	log_message(DEBUG, "Watch ID %u (gen %u) deactivated, cleaning up resources", watchref.watch_id, watchref.generation);
+	log_message(DEBUG, "Watch ID %u (gen %u) deactivated, cleaning up resources",
+				watchref.watch_id, watchref.generation);
 
 	int subscriptions_removed = 0;
 	int profiles_removed = 0;
@@ -59,7 +79,8 @@ static void resources_handle_deactivation(watchref_t watchref, void *context) {
 				while (*subscription_ptr) {
 					subscription_t *subscription = *subscription_ptr;
 					if (watchref_equal(subscription->watchref, watchref)) {
-						log_message(DEBUG, "Removing deactivated subscription for path: %s", resource->path ? resource->path : "<null>");
+						log_message(DEBUG, "Removing deactivated subscription for path: %s",
+									resource->path ? resource->path : "<null>");
 						*subscription_ptr = subscription->next;
 						subscription_free(subscription);
 						profile->subscription_count--;
@@ -72,7 +93,8 @@ static void resources_handle_deactivation(watchref_t watchref, void *context) {
 
 				/* If profile has no subscriptions left, remove the profile */
 				if (!profile_has_subscriptions) {
-					log_message(DEBUG, "Removing empty scanning profile for path: %s", resource->path ? resource->path : "<null>");
+					log_message(DEBUG, "Removing empty scanning profile for path: %s",
+								resource->path ? resource->path : "<null>");
 					*profile_ptr = profile->next;
 					profile_destroy(profile);
 					profiles_removed++;
@@ -85,7 +107,8 @@ static void resources_handle_deactivation(watchref_t watchref, void *context) {
 
 			/* If resource has no profiles left, remove entire resource */
 			if (!resource->profiles) {
-				log_message(DEBUG, "Removing empty resource after cleanup: %s", resource->path ? resource->path : "<null>");
+				log_message(DEBUG, "Removing empty resource after cleanup: %s",
+							resource->path ? resource->path : "<null>");
 				*resource_ptr = resource->next;
 				pthread_mutex_destroy(&resource->mutex);
 				free(resource->path);
@@ -322,13 +345,6 @@ resource_t *resource_get(resources_t *resources, const char *path, kind_t kind) 
 		/* Add to hash bucket */
 		resource->next = resources->buckets[hash];
 		resources->buckets[hash] = resource;
-
-		log_message(DEBUG, "Resource created for path: %s (kind=%s, exists=%s)",
-					path,
-					resource->kind == ENTITY_FILE	   ? "file" :
-					resource->kind == ENTITY_DIRECTORY ? "directory" :
-														 "unknown",
-					resource->exists ? "yes" : "no");
 	}
 
 	pthread_mutex_unlock(&resources->bucket_mutexes[hash]);
@@ -349,7 +365,7 @@ void resource_unlock(resource_t *resource) {
 }
 
 /* Hash watch configuration using FNV-1a algorithm */
-uint64_t config_hash(const watch_t *watch) {
+uint64_t configuration_hash(const watch_t *watch) {
 	if (!watch) return 0;
 
 	/* Use FNV-1a hash algorithm */
@@ -380,12 +396,12 @@ uint64_t config_hash(const watch_t *watch) {
 }
 
 /* Find existing scanning profile with matching configuration hash */
-profile_t *resource_get_profile(resource_t *resource, uint64_t config_hash) {
+profile_t *profile_get(resource_t *resource, uint64_t configuration_hash) {
 	if (!resource) return NULL;
 
 	profile_t *profile = resource->profiles;
 	while (profile) {
-		if (profile->config_hash == config_hash) {
+		if (profile->configuration_hash == configuration_hash) {
 			return profile;
 		}
 		profile = profile->next;
@@ -394,7 +410,7 @@ profile_t *resource_get_profile(resource_t *resource, uint64_t config_hash) {
 }
 
 /* Create a new scanning profile */
-profile_t *resource_create_profile(resource_t *resource, uint64_t config_hash) {
+profile_t *profile_create(resource_t *resource, uint64_t configuration_hash) {
 	if (!resource) return NULL;
 
 	profile_t *profile = calloc(1, sizeof(profile_t));
@@ -403,7 +419,7 @@ profile_t *resource_create_profile(resource_t *resource, uint64_t config_hash) {
 		return NULL;
 	}
 
-	profile->config_hash = config_hash;
+	profile->configuration_hash = configuration_hash;
 	profile->stability = NULL;
 	profile->scanner = NULL;
 	profile->subscriptions = NULL;
@@ -413,9 +429,6 @@ profile_t *resource_create_profile(resource_t *resource, uint64_t config_hash) {
 	/* Add the new profile to the resource */
 	profile->next = resource->profiles;
 	resource->profiles = profile;
-
-	log_message(DEBUG, "Scanning profile created for resource: %s (hash=0x%lx)",
-				resource->path ? resource->path : "<unknown>", config_hash);
 
 	return profile;
 }
@@ -436,7 +449,7 @@ subscription_t *profile_subscribe(profile_t *profile, resource_t *resource, watc
 	}
 
 	/* Check if subscription already exists */
-	subscription_t *existing = profile_find_subscription(profile, watchref);
+	subscription_t *existing = profile_subscription(profile, watchref);
 	if (existing) {
 		return existing;
 	}
@@ -489,7 +502,7 @@ bool profile_unsubscribe(profile_t *profile, watchref_t watchref) {
 }
 
 /* Find a subscription within a profile */
-subscription_t *profile_find_subscription(profile_t *profile, watchref_t watchref) {
+subscription_t *profile_subscription(profile_t *profile, watchref_t watchref) {
 	if (!profile || !watchref_valid(watchref)) {
 		return NULL;
 	}
@@ -504,29 +517,10 @@ subscription_t *profile_find_subscription(profile_t *profile, watchref_t watchre
 	return NULL;
 }
 
-/* Check if subscription is corrupted by verifying magic number and pointer validity */
-bool subscription_corrupted(const subscription_t *subscription) {
-	if (!subscription) return true;
-
-	/* Address validation - prevents crashes from invalid pointers */
-	if ((uintptr_t) subscription < 0x1000 || ((uintptr_t) subscription & 0x7) != 0) {
-		log_message(WARNING, "Subscription appears to be invalid pointer: %p", subscription);
-		return true;
-	}
-
-	/* Magic validation with detailed logging for debugging */
-	if (subscription->magic != SUBSCRIPTION_MAGIC) {
-		log_message(WARNING, "Subscription corruption detected: magic=0x%x, expected=0x%x",
-					subscription->magic, SUBSCRIPTION_MAGIC);
-		return true;
-	}
-	return false;
-}
-
 /* Finds or creates a complete subscription chain for a given path and watch */
-subscription_t *resources_get_subscription(resources_t *resources, registry_t *registry, const char *path, watchref_t watchref, kind_t kind) {
+subscription_t *resources_subscription(resources_t *resources, registry_t *registry, const char *path, watchref_t watchref, kind_t kind) {
 	if (!resources || !path || !watchref_valid(watchref) || !registry) {
-		log_message(ERROR, "Invalid arguments to resources_get_subscription");
+		log_message(ERROR, "Invalid arguments to resources_subscription");
 		return NULL;
 	}
 
@@ -553,38 +547,38 @@ subscription_t *resources_get_subscription(resources_t *resources, registry_t *r
 	resource_lock(resource);
 
 	/* Calculate configuration hash for this watch */
-	uint64_t watch_hash = config_hash(watch);
+	uint64_t watch_hash = configuration_hash(watch);
 
 	/* Find existing scanning profile with matching configuration */
-	profile_t *profile = resource_get_profile(resource, watch_hash);
+	profile_t *profile = profile_get(resource, watch_hash);
 
 	/* If no matching profile found, create a new one */
 	if (!profile) {
 		/* For directories, pre-scan before creating profile to avoid holding lock during I/O */
 		stats_t initial_stats;
 		bool scan_success = false;
-		
+
 		if (resource->kind == ENTITY_DIRECTORY && resource->exists) {
 			/* Release resource lock before scanning to prevent blocking other threads */
 			resource_unlock(resource);
-			
+
 			/* Perform initial scan without holding the lock */
 			scan_success = scanner_scan(path, watch, &initial_stats);
-			
+
 			/* Re-acquire lock and check if another thread created the profile */
 			resource_lock(resource);
-			
+
 			/* Check again if profile was created while we were scanning */
-			profile = resource_get_profile(resource, watch_hash);
+			profile = profile_get(resource, watch_hash);
 			if (profile) {
 				/* Another thread created the profile - use the existing one and discard our scan */
 				log_message(DEBUG, "Profile created by another thread during scan for %s", path);
 				goto create_subscription;
 			}
 		}
-		
+
 		/* Create the profile now */
-		profile = resource_create_profile(resource, watch_hash);
+		profile = profile_create(resource, watch_hash);
 		if (!profile) {
 			log_message(ERROR, "Failed to create scanning profile for %s", path);
 			resource_unlock(resource);

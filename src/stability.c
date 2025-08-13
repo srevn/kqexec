@@ -11,7 +11,7 @@
 #include "monitor.h"
 #include "queue.h"
 #include "registry.h"
-#include "resources.h"
+#include "resource.h"
 #include "scanner.h"
 
 /* Create a stability state */
@@ -64,7 +64,7 @@ subscription_t *stability_root(monitor_t *monitor, subscription_t *subscription)
 	}
 
 	/* Otherwise, get the subscription for the watch path */
-	return resources_get_subscription(monitor->resources, monitor->registry, watch->path, subscription->watchref, ENTITY_DIRECTORY);
+	return resources_subscription(monitor->resources, monitor->registry, watch->path, subscription->watchref, ENTITY_DIRECTORY);
 }
 
 /* Determine if a command should be executed based on operation type and debouncing */
@@ -284,7 +284,7 @@ subscription_t *stability_entry(monitor_t *monitor, check_t *check) {
 	/* Use the first watch reference to find the subscription. All watches for a check share the same path */
 	watchref_t primary_watchref = check->watchrefs[0];
 
-	subscription_t *root = resources_get_subscription(monitor->resources, monitor->registry, check->path, primary_watchref, ENTITY_DIRECTORY);
+	subscription_t *root = resources_subscription(monitor->resources, monitor->registry, check->path, primary_watchref, ENTITY_DIRECTORY);
 	if (!root) {
 		log_message(WARNING, "Cannot find subscription for %s", check->path);
 		return NULL;
@@ -320,8 +320,8 @@ bool stability_quiet(monitor_t *monitor, subscription_t *root, struct timespec *
 
 	log_message(DEBUG, "Path %s: %ld ms elapsed of %ld ms quiet period, direct_entries=%d+%d, recursive_entries=%d+%d, depth=%d",
 				root->resource->path, elapsed_ms, required_quiet, root->profile->stability->stats.local_files,
-				root->profile->stability->stats.local_dirs, root->profile->stability->stats.tree_files, root->profile->stability->stats.tree_dirs,
-				root->profile->stability->stats.depth);
+				root->profile->stability->stats.local_dirs, root->profile->stability->stats.tree_files,
+				root->profile->stability->stats.tree_dirs, root->profile->stability->stats.depth);
 
 	return scanner_ready(monitor, root, current_time, required_quiet);
 }
@@ -806,8 +806,9 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 		int checks_required = root->profile->stability->checks_required;
 
 		log_message(DEBUG, "Stability check %d/%d for %s: changes (%+d files, %+d dirs, %+d depth) total (%d entries, depth %d)",
-					root->profile->stability->checks_count, checks_required, root->resource->path, root->profile->stability->delta_files,
-					root->profile->stability->delta_dirs, root->profile->stability->delta_depth, current_stats.tree_files + current_stats.tree_dirs,
+					root->profile->stability->checks_count, checks_required, root->resource->path,
+					root->profile->stability->delta_files, root->profile->stability->delta_dirs,
+					root->profile->stability->delta_depth, current_stats.tree_files + current_stats.tree_dirs,
 					current_stats.max_depth > 0 ? current_stats.max_depth : current_stats.depth);
 
 		/* Check if we have enough consecutive stable checks */
