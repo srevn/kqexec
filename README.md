@@ -14,7 +14,7 @@ A lightweight file and directory monitoring utility for FreeBSD and macOS that u
 - **Glob Pattern Support**: Dynamic file and directory matching using wildcards (`*`, `?`, `[]`) with automatic watch promotion when patterns resolve
 - **File and Directory Exclusion**: Flexible pattern-based exclusion of files and directories from monitoring using glob syntax
 - **Hidden File Support**: Optional monitoring of hidden files and directories (starting with a dot)
-- **State-Based Event Processing**: Tracks the state of files and directories to detect meaningful changes
+- **Resource-Based Event Processing**: Tracks filesystem resources and their scanning profiles to detect meaningful changes
 - **Command Debouncing**: Prevent command execution flooding when many events occur rapidly
 - **Placeholder Substitution**: Dynamic command generation based on event details
 - **Environment Variable Injection**: Event context provided to commands when enabled
@@ -270,7 +270,7 @@ launchctl kill SIGHUP gui/$(id -u)/com.kqexec.daemon
 
 #### Command Debouncing
 
-To prevent flooding when many events occur in rapid succession, kqexec implements command debouncing based on entity state. This ensures the same command won't be executed more frequently than the debounce period.
+To prevent flooding when many events occur in rapid succession, kqexec implements command debouncing based on resource state. This ensures the same command won't be executed more frequently than the debounce period.
 
 Adjust the debounce period with the `-b` option:
 
