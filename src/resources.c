@@ -211,6 +211,13 @@ void resources_destroy(resources_t *resources) {
 		observer_unregister(resources->registry, &resources->observer);
 	}
 
+	/* Lock all bucket mutexes during cleanup to ensure thread safety */
+	if (resources->bucket_mutexes) {
+		for (size_t i = 0; i < resources->bucket_count; i++) {
+			pthread_mutex_lock(&resources->bucket_mutexes[i]);
+		}
+	}
+
 	if (resources->buckets) {
 		/* Free all resources in all buckets */
 		for (size_t bucket = 0; bucket < resources->bucket_count; bucket++) {
@@ -220,19 +227,24 @@ void resources_destroy(resources_t *resources) {
 				resource_free(resource);
 				resource = next;
 			}
+			resources->buckets[bucket] = NULL;
 		}
 		free(resources->buckets);
+		resources->buckets = NULL;
 	}
 
-	/* Destroy all bucket mutexes */
+	/* Unlock and destroy all bucket mutexes */
 	if (resources->bucket_mutexes) {
 		for (size_t i = 0; i < resources->bucket_count; i++) {
+			pthread_mutex_unlock(&resources->bucket_mutexes[i]);
 			pthread_mutex_destroy(&resources->bucket_mutexes[i]);
 		}
 		free(resources->bucket_mutexes);
+		resources->bucket_mutexes = NULL;
 	}
 
 	free(resources);
+	log_message(DEBUG, "Resource table destroyed and observer unregistered");
 }
 
 /* Get or create a resource for a given path */
@@ -310,6 +322,13 @@ resource_t *resource_get(resources_t *resources, const char *path, kind_t kind) 
 		/* Add to hash bucket */
 		resource->next = resources->buckets[hash];
 		resources->buckets[hash] = resource;
+
+		log_message(DEBUG, "Resource created for path: %s (kind=%s, exists=%s)",
+					path,
+					resource->kind == ENTITY_FILE	   ? "file" :
+					resource->kind == ENTITY_DIRECTORY ? "directory" :
+														 "unknown",
+					resource->exists ? "yes" : "no");
 	}
 
 	pthread_mutex_unlock(&resources->bucket_mutexes[hash]);
@@ -395,6 +414,9 @@ profile_t *resource_create_profile(resource_t *resource, uint64_t config_hash) {
 	profile->next = resource->profiles;
 	resource->profiles = profile;
 
+	log_message(DEBUG, "Scanning profile created for resource: %s (hash=0x%lx)",
+				resource->path ? resource->path : "<unknown>", config_hash);
+
 	return profile;
 }
 
@@ -439,6 +461,10 @@ subscription_t *profile_subscribe(profile_t *profile, resource_t *resource, watc
 	profile->subscriptions = subscription;
 	profile->subscription_count++;
 
+	log_message(DEBUG, "Subscription created for resource: %s (watch_id=%u, gen=%u, total_subscriptions=%d)",
+				resource->path ? resource->path : "<unknown>", watchref.watch_id,
+				watchref.generation, profile->subscription_count);
+
 	return subscription;
 }
 
@@ -478,9 +504,23 @@ subscription_t *profile_find_subscription(profile_t *profile, watchref_t watchre
 	return NULL;
 }
 
-/* Check if subscription is corrupted */
+/* Check if subscription is corrupted by verifying magic number and pointer validity */
 bool subscription_corrupted(const subscription_t *subscription) {
-	return !subscription || subscription->magic != SUBSCRIPTION_MAGIC;
+	if (!subscription) return true;
+
+	/* Address validation - prevents crashes from invalid pointers */
+	if ((uintptr_t) subscription < 0x1000 || ((uintptr_t) subscription & 0x7) != 0) {
+		log_message(WARNING, "Subscription appears to be invalid pointer: %p", subscription);
+		return true;
+	}
+
+	/* Magic validation with detailed logging for debugging */
+	if (subscription->magic != SUBSCRIPTION_MAGIC) {
+		log_message(WARNING, "Subscription corruption detected: magic=0x%x, expected=0x%x",
+					subscription->magic, SUBSCRIPTION_MAGIC);
+		return true;
+	}
+	return false;
 }
 
 /* Finds or creates a complete subscription chain for a given path and watch */
