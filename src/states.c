@@ -467,14 +467,14 @@ group_t *group_create(uint64_t hash) {
 	}
 
 	group->config_hash = hash;
-	
+
 	/* Initialize the mutex for protecting shared group state */
 	if (pthread_mutex_init(&group->mutex, NULL) != 0) {
 		log_message(ERROR, "Failed to initialize mutex for stability group");
 		free(group);
 		return NULL;
 	}
-	
+
 	group->stability = NULL;
 	group->scanner = NULL;
 	group->entities = NULL;

@@ -263,7 +263,7 @@ bool scanner_compare(stats_t *prev_stats, stats_t *current_stats) {
 }
 
 /* Collect statistics about a directory and its contents, and determine stability */
-bool scanner_stable(monitor_t *monitor, node_t *node, const char *dir_path, const watch_t *watch, stats_t *stats) {
+bool scanner_stable(monitor_t *monitor, node_t *node, const watch_t *watch, const char *dir_path, stats_t *stats) {
 	DIR *dir;
 	struct dirent *dirent;
 	struct stat info;
@@ -341,7 +341,7 @@ bool scanner_stable(monitor_t *monitor, node_t *node, const char *dir_path, cons
 			/* If recursive, check subdirectories */
 			if (recursive) {
 				stats_t sub_stats;
-				if (!scanner_stable(monitor, node, path, watch, &sub_stats)) {
+				if (!scanner_stable(monitor, node, watch, path, &sub_stats)) {
 					is_stable = false; /* Propagate instability from subdirectories */
 				}
 
