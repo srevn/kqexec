@@ -596,10 +596,17 @@ bool stability_execute(monitor_t *monitor, check_t *check, subscription_t *root,
 			continue;
 		}
 
-		/* Get or create state for this specific watch to update its command time */
-		subscription_t *subscription = resources_get_subscription(monitor->resources, monitor->registry, check->path, check->watchrefs[i], ENTITY_DIRECTORY);
+		/* Find existing subscription in the root profile instead of creating new ones */
+		subscription_t *subscription = NULL;
+		for (subscription_t *sub = root->profile->subscriptions; sub != NULL; sub = sub->next) {
+			if (watchref_equal(sub->watchref, check->watchrefs[i])) {
+				subscription = sub;
+				break;
+			}
+		}
+
 		if (!subscription) {
-			log_message(WARNING, "Unable to get subscription for %s with watch %s", check->path, watch->name);
+			log_message(WARNING, "Unable to find existing subscription for %s with watch %s", check->path, watch->name);
 			continue;
 		}
 
