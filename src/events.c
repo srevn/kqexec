@@ -533,6 +533,12 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 	log_message(DEBUG, "Processing event for %s (watch: %s, type: %s)", event->path, watch->name,
 				filter_to_string(event->type));
 
+	/* Get subscription early to enable structure-aware exclusion checking */
+	subscription_t *subscription = resources_subscription(monitor->resources, monitor->registry, event->path, watchref, kind);
+	if (subscription == NULL) {
+		return false; /* Error already logged by resources_subscription */
+	}
+
 	/* Check if path is excluded by patterns */
 	if (kind == ENTITY_FILE) {
 		/* For file events, check if the file itself is excluded */
@@ -546,13 +552,29 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 		char *modified_files = scanner_modified(event->path, watch, recent_threshold, false, false);
 
 		if (!modified_files || strlen(modified_files) == 0) {
-			/* No non-excluded files were modified recently, ignore this event */
-			log_message(INFO, "Ignoring directory event for %s, all recent changes were to excluded files", event->path);
-			free(modified_files);
-			return false;
+			/* No non-excluded files were modified recently - check if directory structure changed */
+			bool should_ignore = true;
+			
+			/* Check directory structure (stability stats always exist for directory subscriptions) */
+			stats_t current_stats;
+			if (scanner_scan(event->path, watch, &current_stats)) {
+				stats_t *prev_stats = &subscription->profile->stability->prev_stats;
+				
+				/* Check if directory structure changed (file or directory count differences) */
+				if (current_stats.tree_files != prev_stats->tree_files || current_stats.tree_dirs != prev_stats->tree_dirs) {
+					should_ignore = false;
+				}
+			}
+			
+			if (should_ignore) {
+				log_message(INFO, "Ignoring directory event for %s, all recent changes were to excluded files", event->path);
+				free(modified_files);
+				return false;
+			}
+		} else {
+			log_message(DEBUG, "Directory event for %s triggered by non-excluded files: %s", event->path, modified_files);
 		}
-
-		log_message(DEBUG, "Directory event for %s triggered by non-excluded files: %s", event->path, modified_files);
+		
 		free(modified_files);
 	}
 
@@ -566,12 +588,6 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 			log_message(WARNING, "Config file changed but no monitor available for reload");
 		}
 		return true;
-	}
-
-	/* Get subscription using the event path and watch reference */
-	subscription_t *subscription = resources_subscription(monitor->resources, monitor->registry, event->path, watchref, kind);
-	if (subscription == NULL) {
-		return false; /* Error already logged by resources_subscription */
 	}
 
 	/* Check if command is executing for this path or its root - defer events during execution */
