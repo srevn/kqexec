@@ -33,8 +33,8 @@ static bool path_hidden(const char *path) {
 	return basename[0] == '.';
 }
 
-/* Free resources used by a watcher structure */
-static void watcher_destroy(monitor_t *monitor, watcher_t *watcher, bool is_stale) {
+/* Clean up internal resources of a watcher */
+static void watcher_cleanup(monitor_t *monitor, watcher_t *watcher, bool is_stale) {
 	if (watcher == NULL) {
 		return;
 	}
@@ -64,6 +64,14 @@ static void watcher_destroy(monitor_t *monitor, watcher_t *watcher, bool is_stal
 	}
 
 	free(watcher->path);
+}
+
+/* Free resources used by a watcher structure */
+static void watcher_destroy(monitor_t *monitor, watcher_t *watcher, bool is_stale) {
+	if (watcher == NULL) {
+		return;
+	}
+	watcher_cleanup(monitor, watcher, is_stale);
 	free(watcher);
 }
 
@@ -248,7 +256,10 @@ void monitor_destroy(monitor_t *monitor) {
 	if (monitor->graveyard.stale_watches) {
 		log_message(DEBUG, "Cleaning up %d stale watchers from graveyard", monitor->graveyard.num_stale);
 		for (int i = 0; i < monitor->graveyard.num_stale; i++) {
-			watcher_destroy(monitor, monitor->graveyard.stale_watches[i], true);
+			watcher_cleanup(monitor, monitor->graveyard.stale_watches[i], true);
+		}
+		for (int i = 0; i < monitor->graveyard.num_stale; i++) {
+			free(monitor->graveyard.stale_watches[i]);
 		}
 		free(monitor->graveyard.stale_watches);
 	}
@@ -1041,7 +1052,10 @@ void monitor_graveyard(monitor_t *monitor) {
 		if (monitor->graveyard.stale_watches) {
 			log_message(DEBUG, "Cleaning up %d stale watchers from graveyard", monitor->graveyard.num_stale);
 			for (int i = 0; i < monitor->graveyard.num_stale; i++) {
-				watcher_destroy(monitor, monitor->graveyard.stale_watches[i], true);
+				watcher_cleanup(monitor, monitor->graveyard.stale_watches[i], true);
+			}
+			for (int i = 0; i < monitor->graveyard.num_stale; i++) {
+				free(monitor->graveyard.stale_watches[i]);
 			}
 			free(monitor->graveyard.stale_watches);
 			monitor->graveyard.stale_watches = NULL;
@@ -1090,7 +1104,11 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 
 			/* Remove subdirectory watchers if this was a recursive directory */
 			if (target_watch && target_watch->target == WATCH_DIRECTORY && target_watch->recursive) {
-				monitor_prune(monitor, path);
+				if (monitor_prune(monitor, path)) {
+					i = monitor->num_watches;
+					list_modified = true;
+					continue;
+				}
 			}
 
 			/* Remove dynamic watch from config to prevent resurrection during reload */
@@ -1161,6 +1179,9 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 					log_message(DEBUG, "Re-scanning subdirectories for recreated path: %s", path);
 					monitor_prune(monitor, path);
 					monitor_tree(monitor, path, watcher->watchref);
+					i = monitor->num_watches;
+					list_modified = true;
+					continue;
 				}
 				list_modified = true;
 			} else {
