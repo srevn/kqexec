@@ -63,6 +63,78 @@ void command_debounce_time(int milliseconds) {
 /* Get debounce time */
 int command_get_debounce_time(void) { return debounce_ms; }
 
+/* Shell-escape a single path by wrapping in single quotes */
+static char *command_escape(const char *path) {
+	if (!path) return NULL;
+
+	/* Calculate required buffer size */
+	size_t len = strlen(path);
+	size_t quotes = len + 8;
+	for (const char *p = path; *p; p++) {
+		/* Escape internal quotes 'x' becomes '\''x'\'' */
+		if (*p == '\'') quotes += 4;
+	}
+
+	char *escaped = malloc(quotes);
+	if (!escaped) return NULL;
+
+	char *out = escaped;
+	*out++ = '\''; /* Opening quote */
+
+	for (const char *in = path; *in; in++) {
+		if (*in == '\'') {
+			/* Replace ' with '\'' */
+			*out++ = '\'';
+			*out++ = '\\';
+			*out++ = '\'';
+			*out++ = '\'';
+		} else {
+			*out++ = *in;
+		}
+	}
+
+	*out++ = '\''; /* Closing quote */
+	*out = '\0';
+
+	return escaped;
+}
+
+/* Shell-escape a newline-separated list of paths */
+static char *command_escape_list(const char *paths) {
+	if (!paths || !*paths) return strdup("");
+
+	/* Calculate rough buffer size */
+	size_t total_len = strlen(paths) * 2 + 1024;
+	char *result = malloc(total_len);
+	if (!result) return NULL;
+
+	result[0] = '\0';
+	char *paths_copy = strdup(paths);
+	if (!paths_copy) {
+		free(result);
+		return NULL;
+	}
+
+	char *line = strtok(paths_copy, "\n");
+	bool first = true;
+
+	while (line != NULL) {
+		char *escaped = command_escape(line);
+		if (escaped) {
+			if (!first) {
+				strncat(result, "\n", total_len - strlen(result) - 1);
+			}
+			strncat(result, escaped, total_len - strlen(result) - 1);
+			free(escaped);
+			first = false;
+		}
+		line = strtok(NULL, "\n");
+	}
+
+	free(paths_copy);
+	return result;
+}
+
 /* Helper function to substitute a placeholder in a string */
 static void command_substitute(char *result, const char *placeholder, const char *value) {
 	char *current_pos;
@@ -119,13 +191,21 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 	result[MAX_CMD_LEN - 1] = '\0';
 
 	/* Substitute %p with the path */
-	command_substitute(result, "%p", event->path);
+	char *escaped_path = command_escape(event->path);
+	if (escaped_path) {
+		command_substitute(result, "%p", escaped_path);
+		free(escaped_path);
+	}
 
 	/* Substitute %n with the filename/dirname */
 	if (strstr(result, "%n")) {
 		char *path_copy = strdup(event->path);
 		if (path_copy) {
-			command_substitute(result, "%n", basename(path_copy));
+			char *escaped_basename = command_escape(basename(path_copy));
+			if (escaped_basename) {
+				command_substitute(result, "%n", escaped_basename);
+				free(escaped_basename);
+			}
 			free(path_copy);
 		}
 	}
@@ -134,13 +214,21 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 	if (strstr(result, "%d")) {
 		char *path_copy = strdup(event->path);
 		if (path_copy) {
-			command_substitute(result, "%d", dirname(path_copy));
+			char *escaped_dirname = command_escape(dirname(path_copy));
+			if (escaped_dirname) {
+				command_substitute(result, "%d", escaped_dirname);
+				free(escaped_dirname);
+			}
 			free(path_copy);
 		}
 	}
 
 	/* Substitute %b with the base watch path */
-	command_substitute(result, "%b", watch->path);
+	char *escaped_base_path = command_escape(watch->path);
+	if (escaped_base_path) {
+		command_substitute(result, "%b", escaped_base_path);
+		free(escaped_base_path);
+	}
 
 	/* Substitute %w with the watch name */
 	command_substitute(result, "%w", watch->name);
@@ -151,7 +239,11 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 		if (*relative_path == '/') {
 			relative_path++;
 		}
-		command_substitute(result, "%r", relative_path);
+		char *escaped_relative = command_escape(relative_path);
+		if (escaped_relative) {
+			command_substitute(result, "%r", escaped_relative);
+			free(escaped_relative);
+		}
 	}
 
 	/* Get subscription for size and trigger file placeholders */
@@ -170,12 +262,20 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 			}
 		}
 
-		command_substitute(result, "%f", trigger);
+		char *escaped_trigger = command_escape(trigger);
+		if (escaped_trigger) {
+			command_substitute(result, "%f", escaped_trigger);
+			free(escaped_trigger);
+		}
 
 		if (strstr(result, "%F")) {
 			char *path_copy = strdup(trigger);
 			if (path_copy) {
-				command_substitute(result, "%F", basename(path_copy));
+				char *escaped_trigger_basename = command_escape(basename(path_copy));
+				if (escaped_trigger_basename) {
+					command_substitute(result, "%F", escaped_trigger_basename);
+					free(escaped_trigger_basename);
+				}
 				free(path_copy);
 			}
 		}
@@ -187,7 +287,13 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 		time_t since_time = event->wall_time.tv_sec - 1;
 		char *modified_files = scanner_modified(watch->path, since_time, watch->recursive, true);
 		if (modified_files) {
-			command_substitute(result, "%l", modified_files);
+			char *escaped_files = command_escape_list(modified_files);
+			if (escaped_files) {
+				command_substitute(result, "%l", escaped_files);
+				free(escaped_files);
+			} else {
+				command_substitute(result, "%l", "");
+			}
 			free(modified_files);
 		} else {
 			command_substitute(result, "%l", "");
@@ -200,7 +306,13 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 		time_t since_time = event->wall_time.tv_sec - 1;
 		char *modified_files = scanner_modified(watch->path, since_time, watch->recursive, false);
 		if (modified_files) {
-			command_substitute(result, "%L", modified_files);
+			char *escaped_files = command_escape_list(modified_files);
+			if (escaped_files) {
+				command_substitute(result, "%L", escaped_files);
+				free(escaped_files);
+			} else {
+				command_substitute(result, "%L", "");
+			}
 			free(modified_files);
 		} else {
 			command_substitute(result, "%L", "");
