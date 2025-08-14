@@ -531,6 +531,24 @@ void stability_reset(monitor_t *monitor, subscription_t *root) {
 	root->profile->stability->stability_lost = false;
 	root->profile->stability->reference_init = true;
 
+	/* Clear deferred event queue */
+	resource_lock(root->resource);
+	deferred_t *deferred = root->resource->deferred_head;
+	if (deferred) {
+		log_message(DEBUG, "Clearing %d deferred events for %s after command completion", root->resource->deferred_count,
+					root->resource->path);
+		while (deferred) {
+			deferred_t *next_deferred = deferred->next;
+			free(deferred->event.path);
+			free(deferred);
+			deferred = next_deferred;
+		}
+		root->resource->deferred_head = NULL;
+		root->resource->deferred_tail = NULL;
+		root->resource->deferred_count = 0;
+	}
+	resource_unlock(root->resource);
+
 	/* Clear activity tracking flag to mark the directory as idle */
 	if (root->profile->scanner) {
 		root->profile->scanner->active = false;
