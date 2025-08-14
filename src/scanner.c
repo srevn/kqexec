@@ -734,6 +734,7 @@ static long scanner_adjust(subscription_t *subscription, long base_ms) {
 	int recent_files, recent_dirs, recent_depth;
 	ssize_t recent_size;
 	scanner_recent(subscription, &recent_files, &recent_dirs, &recent_depth, &recent_size);
+
 	/* Calculate comprehensive activity magnitude including depth and size changes */
 	int size_weight = 0;
 	if (recent_size > 100 * 1024 * 1024) {

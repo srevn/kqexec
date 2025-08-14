@@ -16,6 +16,78 @@
 #include "scanner.h"
 #include "stability.h"
 
+/* Defer an event on a resource that is currently executing a command */
+static void events_defer(resource_t *resource, watchref_t watchref, const event_t *event, kind_t kind) {
+	if (!resource || !event) return;
+
+	deferred_t *deferred = calloc(1, sizeof(deferred_t));
+	if (!deferred) {
+		log_message(ERROR, "Failed to allocate memory for deferred event on %s", resource->path);
+		return;
+	}
+
+	/* Store event data */
+	deferred->event.path = strdup(event->path);
+	if (!deferred->event.path) {
+		log_message(ERROR, "Failed to duplicate path for deferred event on %s", resource->path);
+		free(deferred);
+		return;
+	}
+
+	deferred->event.type = event->type;
+	deferred->event.time = event->time;
+	deferred->event.wall_time = event->wall_time;
+	deferred->event.user_id = event->user_id;
+	deferred->watchref = watchref;
+	deferred->kind = kind;
+	deferred->next = NULL;
+
+	/* Enqueue the event */
+	resource_lock(resource);
+	if (resource->deferred_tail) {
+		resource->deferred_tail->next = deferred;
+		resource->deferred_tail = deferred;
+	} else {
+		resource->deferred_head = resource->deferred_tail = deferred;
+	}
+
+	resource->deferred_count++;
+	log_message(DEBUG, "Queued deferred event for %s, total deferred: %d", resource->path, resource->deferred_count);
+	resource_unlock(resource);
+}
+
+/* Process the next deferred event from a resource's queue */
+void events_deferred(monitor_t *monitor, resource_t *resource) {
+	if (!monitor || !resource) return;
+
+	deferred_t *deferred = NULL;
+
+	/* Dequeue the next event */
+	resource_lock(resource);
+	if (resource->deferred_head) {
+		deferred = resource->deferred_head;
+		resource->deferred_head = deferred->next;
+		if (!resource->deferred_head) {
+			resource->deferred_tail = NULL;
+		}
+		resource->deferred_count--;
+		log_message(DEBUG, "Dequeued deferred event for %s, remaining: %d", resource->path, resource->deferred_count);
+	}
+	resource_unlock(resource);
+
+	if (deferred) {
+		log_message(DEBUG, "Processing deferred event for %s (watchref %u:%u)",
+					deferred->event.path, deferred->watchref.watch_id, deferred->watchref.generation);
+
+		/* Re-inject the event into the main processing function, bypassing debounce */
+		events_process(monitor, deferred->watchref, &deferred->event, deferred->kind, true);
+
+		/* Clean up */
+		free(deferred->event.path);
+		free(deferred);
+	}
+}
+
 /* Initialize a sync request structure */
 void events_sync_init(sync_t *sync) {
 	if (!sync) return;
@@ -178,7 +250,7 @@ void events_delayed(monitor_t *monitor) {
 						delayed->event.path, watch->name);
 
 			/* Pass the event to the main processing function */
-			events_process(monitor, delayed->watchref, &delayed->event, delayed->kind);
+			events_process(monitor, delayed->watchref, &delayed->event, delayed->kind, false);
 
 			/* The event is now handled, so we can remove it from the delayed queue */
 			free(delayed->event.path);
@@ -321,7 +393,7 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 					events_schedule(monitor, kept_watchref, &event, kind);
 				} else {
 					/* Process the event immediately */
-					events_process(monitor, kept_watchref, &event, kind);
+					events_process(monitor, kept_watchref, &event, kind, false);
 				}
 			}
 		}
@@ -504,7 +576,7 @@ optype_t events_operation(monitor_t *monitor, subscription_t *subscription, filt
 }
 
 /* Process a single filesystem event */
-bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kind_t kind) {
+bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kind_t kind, bool is_deferred) {
 	if (event == NULL || event->path == NULL) {
 		log_message(ERROR, "events_process: Received NULL event or event path");
 		return false;
@@ -563,11 +635,12 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 
 	/* Check if command is executing for this path or its root - defer events during execution */
 	subscription_t *root = stability_root(monitor, subscription);
-	if (subscription->resource->executing || (root && root->resource->executing)) {
-		log_message(DEBUG, "Deferring event for %s, command is currently executing %s", event->path,
-					root ? root->resource->path : "N/A");
-		/* Schedule event for reprocessing after a short delay */
-		events_schedule(monitor, watchref, event, kind);
+	resource_t *executing_resource = root ? root->resource : subscription->resource;
+	if (executing_resource->executing) {
+		log_message(DEBUG, "Deferring event for %s, command is currently executing for %s",
+					event->path, executing_resource->path);
+		/* Defer event on the resource itself until the current command completes */
+		events_defer(executing_resource, watchref, event, kind);
 		return false;
 	}
 
@@ -617,8 +690,8 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 		return false;
 	}
 
-	/* Check debounce/deferral logic */
-	if (stability_ready(monitor, subscription, optype, command_get_debounce_time())) {
+	/* Check debounce/deferral logic, skipping for events that were already deferred */
+	if (is_deferred || stability_ready(monitor, subscription, optype, command_get_debounce_time())) {
 		/* Execute command immediately (only for non-directory-content changes) */
 		event_t synthetic_event = {
 			.path = subscription->resource->path,

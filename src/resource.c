@@ -219,6 +219,15 @@ static void resource_free(resource_t *resource) {
 			profile = next_profile;
 		}
 
+		/* Free any remaining deferred events */
+		deferred_t *deferred = resource->deferred_head;
+		while (deferred) {
+			deferred_t *next_deferred = deferred->next;
+			free(deferred->event.path);
+			free(deferred);
+			deferred = next_deferred;
+		}
+
 		pthread_mutex_destroy(&resource->mutex);
 		free(resource->path);
 		free(resource);
@@ -321,6 +330,11 @@ resource_t *resource_get(resources_t *resources, const char *path, kind_t kind) 
 		resource->executing = false;
 		resource->kind = kind;
 		resource->profiles = NULL;
+
+		/* Initialize deferred event queue */
+		resource->deferred_head = NULL;
+		resource->deferred_tail = NULL;
+		resource->deferred_count = 0;
 
 		/* Determine resource type and existence from filesystem */
 		struct stat info;

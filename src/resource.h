@@ -53,6 +53,11 @@ typedef struct resource {
 	/* Execution state */
 	bool executing;                        /* Flag indicating command is currently executing on this path */
 	pthread_mutex_t mutex;                 /* Resource-level mutex */
+
+	/* Deferred events queue */
+	struct deferred *deferred_head;        /* Head of the deferred event queue */
+	struct deferred *deferred_tail;        /* Tail of the deferred event queue */
+	int deferred_count;                    /* Number of events in the queue */
 	
 	struct resource *next;                 /* Next resource in the hash bucket */
 } resource_t;

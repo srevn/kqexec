@@ -490,7 +490,7 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 		subscription = resources_subscription(monitor->resources, monitor->registry, event->path, watchref, ENTITY_UNKNOWN);
 	}
 
-	/* Read and log output if configured - robust version */
+	/* Read and log output if configured */
 	if (capture_output) {
 		/* Close write ends in parent */
 		close(stdout_pipe[1]);
@@ -609,21 +609,21 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 	/* Clear command executing flag and reset baseline */
 	if (subscription) {
 		subscription_t *root = stability_root(monitor, subscription);
+		resource_t *executing_resource = root ? root->resource : subscription->resource;
 		struct timespec current_time;
 		clock_gettime(CLOCK_MONOTONIC, &current_time);
 
 		/* Update command time on the original subscription that triggered the event */
 		subscription->command_time = current_time.tv_sec;
 
-		if (root) {
+		if (executing_resource) {
 			/* Clear executing flag on the root to allow new events for the entire watch */
-			root->resource->executing = false;
+			executing_resource->executing = false;
 			/* Reset directory baseline to accept command result as new authoritative state */
-			stability_reset(monitor, root);
-		} else {
-			/* Fallback for non-stability events (e.g., file-only watches) */
-			subscription->resource->executing = false;
-			stability_reset(monitor, subscription); /* Will do nothing if not a directory */
+			stability_reset(monitor, root ? root : subscription);
+
+			/* Process next deferred event, if any */
+			events_deferred(monitor, executing_resource);
 		}
 	}
 

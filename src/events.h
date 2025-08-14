@@ -10,6 +10,7 @@
 
 /* Forward declarations */
 typedef struct monitor monitor_t;
+typedef struct resource resource_t;
 typedef struct subscription subscription_t;
 
 /* Logical operation types */
@@ -41,11 +42,19 @@ typedef struct event {
 
 /* Delayed event queue entry */
 typedef struct delayed {
+	kind_t kind;                           /* Type of entity */
 	event_t event;                         /* The event to process */
 	watchref_t watchref;                   /* The watch reference */
-	kind_t kind;                           /* Type of entity */
 	struct timespec process_time;          /* When to process this event */
 } delayed_t;
+
+/* Deferred event queue entry */
+typedef struct deferred {
+	kind_t kind;                           /* Type of entity */
+	event_t event;                         /* The event to process */
+	watchref_t watchref;                   /* The watch reference */
+	struct deferred *next;                 /* Next deferred event in the queue */
+} deferred_t;
 
 /* Sync request structure for collecting paths that need validation */
 typedef struct sync {
@@ -60,8 +69,9 @@ void events_delayed(monitor_t *monitor);
 int events_timeout(monitor_t *monitor, struct timespec *current_time);
 
 /* Event processing */
+void events_deferred(monitor_t *monitor, resource_t *resource);
 bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, struct timespec *time, sync_t *sync);
-bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kind_t kind);
+bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kind_t kind, bool is_deferred);
 struct timespec *timeout_calculate(monitor_t *monitor, struct timespec *timeout, struct timespec *current_time);
 
 /* Sync request management */
