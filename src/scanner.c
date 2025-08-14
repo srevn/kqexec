@@ -993,7 +993,7 @@ bool scanner_ready(monitor_t *monitor, subscription_t *subscription, struct time
 }
 
 /* Find the most recently modified file in a directory */
-char *scanner_newest(const char *dir_path, const watch_t *watch) {
+char *scanner_newest(const char *dir_path) {
 	if (!dir_path) {
 		return NULL;
 	}
@@ -1024,11 +1024,6 @@ char *scanner_newest(const char *dir_path, const watch_t *watch) {
 			continue;
 		}
 
-		/* Perform exclusion check early for clarity */
-		if (watch && config_exclude_match(watch, path)) {
-			continue;
-		}
-
 		struct stat info;
 		if (stat(path, &info) == 0) {
 			/* Use the most recent of modification or status change time */
@@ -1049,7 +1044,7 @@ char *scanner_newest(const char *dir_path, const watch_t *watch) {
 }
 
 /* Find all files modified since a specific time */
-char *scanner_modified(const char *base_path, const watch_t *watch, time_t since_time, bool recursive, bool basename) {
+char *scanner_modified(const char *base_path, time_t since_time, bool recursive, bool basename) {
 	if (!base_path) {
 		return NULL;
 	}
@@ -1087,11 +1082,6 @@ char *scanner_modified(const char *base_path, const watch_t *watch, time_t since
 		/* Check for path truncation */
 		if (path_len >= (int) sizeof(path)) {
 			log_message(WARNING, "Path too long, skipping: %s/%s", base_path, dirent->d_name);
-			continue;
-		}
-
-		/* Perform exclusion check early */
-		if (watch && config_exclude_match(watch, path)) {
 			continue;
 		}
 
@@ -1136,7 +1126,7 @@ char *scanner_modified(const char *base_path, const watch_t *watch, time_t since
 		}
 		/* Handle directories for recursion */
 		else if (S_ISDIR(info.st_mode) && recursive) {
-			char *subdir_result = scanner_modified(path, watch, since_time, recursive, basename);
+			char *subdir_result = scanner_modified(path, since_time, recursive, basename);
 
 			/* If the recursive call found modified files, append them */
 			if (subdir_result && subdir_result[0] != '\0') {

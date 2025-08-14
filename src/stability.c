@@ -564,8 +564,7 @@ bool stability_execute(monitor_t *monitor, check_t *check, subscription_t *root,
 		struct stat info;
 		if (stat(active_path, &info) == 0 && S_ISDIR(info.st_mode)) {
 			/* It's a directory, scan it for the most recent file */
-			watch_t *watch = registry_get(monitor->registry, root->watchref);
-			root->trigger = scanner_newest(active_path, watch);
+			root->trigger = scanner_newest(active_path);
 		} else {
 			/* It's a file, or doesn't exist; use the path directly */
 			root->trigger = strdup(active_path);
