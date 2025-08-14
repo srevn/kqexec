@@ -747,8 +747,8 @@ static long scanner_adjust(subscription_t *subscription, long base_ms) {
 
 	/* Log recent activity calculation */
 	log_message(DEBUG, "Recent activity for %s: files=%d, dirs=%d, depth=%d, size=%s, size_weight=%d (total_change=%d)",
-				subscription->resource->path, recent_files, recent_dirs, recent_depth,
-				format_size(recent_size, true), size_weight, recent_change);
+				subscription->resource->path, recent_files, recent_dirs, recent_depth, format_size(recent_size, true),
+				size_weight, recent_change);
 
 	if (subscription->profile->stability) {
 		/* Calculate a cumulative magnitude factor to scale the quiet period */
@@ -896,8 +896,8 @@ long scanner_delay(monitor_t *monitor, subscription_t *subscription) {
 			ssize_t delta_size = subscription->profile->stability ? subscription->profile->stability->delta_size : 0;
 
 			log_message(DEBUG, "Quiet for %s: %ld ms (cumulative: %+d files, %+d dirs, %+d depth, %s size) (total: %d entries, %d depth)",
-						subscription->resource->path, required_ms, delta_files, delta_dirs, delta_depth,
-						format_size(delta_size, true), tree_entries, tree_depth);
+						subscription->resource->path, required_ms, delta_files, delta_dirs, delta_depth, format_size(delta_size, true),
+						tree_entries, tree_depth);
 		} else {
 			/* For inactive directories, just log the base period with recursive stats */
 			int tree_entries = 0;

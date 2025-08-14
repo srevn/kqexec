@@ -596,11 +596,11 @@ bool stability_execute(monitor_t *monitor, check_t *check, subscription_t *root,
 			continue;
 		}
 
-		/* Find existing subscription in the root profile instead of creating new ones */
+		/* Find existing subscription in the root profile */
 		subscription_t *subscription = NULL;
-		for (subscription_t *sub = root->profile->subscriptions; sub != NULL; sub = sub->next) {
-			if (watchref_equal(sub->watchref, check->watchrefs[i])) {
-				subscription = sub;
+		for (subscription_t *existing = root->profile->subscriptions; existing != NULL; existing = existing->next) {
+			if (watchref_equal(existing->watchref, check->watchrefs[i])) {
+				subscription = existing;
 				break;
 			}
 		}

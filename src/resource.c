@@ -602,8 +602,8 @@ subscription_t *resources_subscription(resources_t *resources, registry_t *regis
 				profile->stability->ref_stats = initial_stats;
 				profile->stability->reference_init = true;
 
-				log_message(DEBUG, "Initial baseline established for %s: files=%d, dirs=%d, depth=%d, size=%s",
-							path, profile->stability->stats.tree_files, profile->stability->stats.tree_dirs,
+				log_message(DEBUG, "Initial baseline established for %s: files=%d, dirs=%d, depth=%d, size=%s", path,
+							profile->stability->stats.tree_files, profile->stability->stats.tree_dirs,
 							profile->stability->stats.max_depth, format_size((ssize_t) profile->stability->stats.tree_size, false));
 			} else {
 				log_message(WARNING, "Failed to gather initial stats for directory: %s", path);

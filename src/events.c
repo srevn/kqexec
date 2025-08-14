@@ -478,7 +478,8 @@ optype_t events_operation(monitor_t *monitor, subscription_t *subscription, filt
 		subscription->resource->exists = true;
 
 		/* Prioritize which operation to report if multiple flags are set */
-		if (subscription->resource->kind == ENTITY_DIRECTORY && (subscription->resource->content_changed || subscription->resource->structure_changed)) {
+		if (subscription->resource->kind == ENTITY_DIRECTORY && (subscription->resource->content_changed ||
+																 subscription->resource->structure_changed)) {
 			determined_op = OP_DIR_CONTENT_CHANGED;
 			log_message(DEBUG, "Directory %s structure changed", subscription->resource->path);
 		} else if (subscription->resource->kind == ENTITY_FILE && subscription->resource->structure_changed) {
@@ -502,7 +503,7 @@ optype_t events_operation(monitor_t *monitor, subscription_t *subscription, filt
 	return determined_op;
 }
 
-/* Process a single file system event */
+/* Process a single filesystem event */
 bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kind_t kind) {
 	if (event == NULL || event->path == NULL) {
 		log_message(ERROR, "events_process: Received NULL event or event path");
@@ -582,9 +583,10 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 
 	log_message(DEBUG, "Determined operation type %d for %s", optype, subscription->resource->path);
 
-	/* Handle directory content changes - check for deleted child directories */
+	/* Handle directory content changes, check for deleted child directories */
 	if (optype == OP_DIR_CONTENT_CHANGED && monitor->num_pending > 0) {
-		log_message(DEBUG, "Directory content changed, checking for deleted child directories: %s", subscription->resource->path);
+		log_message(DEBUG, "Directory content changed, checking for deleted child directories: %s",
+					subscription->resource->path);
 
 		/* Check all pending watches to see if any are waiting for children of this directory */
 		for (int i = monitor->num_pending - 1; i >= 0; i--) {
@@ -599,7 +601,8 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 				/* Check if the current_parent still exists */
 				struct stat info;
 				if (stat(pending->current_parent, &info) != 0) {
-					log_message(DEBUG, "Detected deletion of pending watch parent: %s", pending->current_parent);
+					log_message(DEBUG, "Detected deletion of pending watch parent: %s",
+								pending->current_parent);
 					pending_delete(monitor, pending->current_parent);
 				}
 			}
@@ -657,7 +660,8 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 			return false;
 		}
 	} else {
-		log_message(DEBUG, "Command for %s (optype %d) deferred or debounced", subscription->resource->path, optype);
+		log_message(DEBUG, "Command for %s (optype %d) deferred or debounced",
+					subscription->resource->path, optype);
 		return false;
 	}
 }
