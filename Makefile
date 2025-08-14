@@ -3,14 +3,26 @@ UNAME_S := $(shell uname -s)
 
 # Compiler and flags
 CC = cc
-CFLAGS = -Wall -Wextra -std=c11 -pedantic -g
-LDFLAGS = -lm -lpthread
+CFLAGS = -Wall -Wextra -o2 -std=c11 -pedantic -g
+LDFLAGS = -lm -lpthread -flto
 
 # Debug build with sanitizers
 ifdef DEBUG
     CC = clang
     CFLAGS += -fsanitize=address,undefined -fno-omit-frame-pointer -O1
     LDFLAGS += -fsanitize=address,undefined
+endif
+
+# Release build with symbol stripping
+ifdef RELEASE
+    CFLAGS = -Wall -Wextra -std=c11 -o2 -DNDEBUG -march=native -mtune=native \
+             -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE \
+             -fdata-sections -ffunction-sections -flto
+    ifeq ($(UNAME_S),Darwin)
+        LDFLAGS = -lm -lpthread -Wl,-dead_strip -flto
+    else ifeq ($(UNAME_S),FreeBSD)
+        LDFLAGS = -lm -lpthread -pie -Wl,--gc-sections -Wl,-z,relro,-z,now -flto
+    endif
 endif
 
 # OS-specific settings
@@ -64,6 +76,9 @@ all: $(TARGET)
 # Link object files
 $(TARGET): $(OBJS)
 	$(CC) $(LDFLAGS) $(OBJS) -o $(TARGET)
+	@if [ -n "$(RELEASE)" ]; then \
+		strip $(TARGET); \
+	fi
 
 # Clean up
 clean:
@@ -183,5 +198,9 @@ config: kqexec.conf.sample
 debug: clean
 	$(MAKE) DEBUG=1
 
+# Release target
+release: clean
+	$(MAKE) RELEASE=1
+
 # Phony targets
-.PHONY: all clean install uninstall config debug
+.PHONY: all clean install uninstall config debug release
