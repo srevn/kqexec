@@ -46,6 +46,11 @@ typedef struct stats {
 	int tree_files;                        /* Total number of files in this dir and all subdirs */
 	int tree_dirs;                         /* Total number of dirs in this dir and all subdirs */
 	size_t tree_size;                      /* Total size of all files in tree */
+	
+	/* Stats for excluded files */
+	int excluded_files;                    /* Total number of excluded files in tree */
+	size_t excluded_size;                  /* Checksum of excluded file sizes */
+	time_t excluded_mtime;                 /* Latest modification time of excluded files */
 } stats_t;
 
 /* Scanner state management */

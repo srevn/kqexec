@@ -121,23 +121,30 @@ bool scanner_scan(const char *dir_path, const watch_t *watch, stats_t *stats) {
 			}
 		}
 
-		/* Skip excluded paths */
-		if (watch && config_exclude_match(watch, path)) {
-			continue;
-		}
-
 		if (stat(path, &info) != 0) {
 			/* Skip files that can't be stat'd but continue processing */
 			continue;
 		}
 
 		if (S_ISREG(info.st_mode)) {
-			stats->local_files++;
-			stats->local_size += info.st_size;
+			/* Check if file is excluded and count accordingly */
+			if (watch && config_exclude_match(watch, path)) {
+				/* Excluded file, update the counters and checksums */
+				stats->excluded_files++;
+				stats->excluded_size += info.st_size;
+				/* Track latest mtime of excluded files for change detection */
+				if (info.st_mtime > stats->excluded_mtime) {
+					stats->excluded_mtime = info.st_mtime;
+				}
+			} else {
+				/* Included file, increment the existing counter */
+				stats->local_files++;
+				stats->local_size += info.st_size;
 
-			/* Update latest modification time */
-			if (info.st_mtime > stats->last_mtime) {
-				stats->last_mtime = info.st_mtime;
+				/* Update latest modification time */
+				if (info.st_mtime > stats->last_mtime) {
+					stats->last_mtime = info.st_mtime;
+				}
 			}
 		} else if (S_ISDIR(info.st_mode)) {
 			stats->local_dirs++;
@@ -155,6 +162,14 @@ bool scanner_scan(const char *dir_path, const watch_t *watch, stats_t *stats) {
 					stats->tree_files += sub_stats.tree_files;
 					stats->tree_dirs += sub_stats.tree_dirs;
 					stats->tree_size += sub_stats.tree_size;
+
+					/* Aggregate the excluded file stats from the recursive call */
+					stats->excluded_files += sub_stats.excluded_files;
+					stats->excluded_size += sub_stats.excluded_size;
+					/* Use latest mtime across all excluded files in the tree */
+					if (sub_stats.excluded_mtime > stats->excluded_mtime) {
+						stats->excluded_mtime = sub_stats.excluded_mtime;
+					}
 
 					/* Update max_depth considering subdirectory's max depth */
 					if (sub_stats.max_depth + 1 > stats->max_depth) {
@@ -306,11 +321,6 @@ bool scanner_stable(monitor_t *monitor, const watch_t *watch, const char *dir_pa
 			}
 		}
 
-		/* Skip excluded paths */
-		if (watch && config_exclude_match(watch, path)) {
-			continue;
-		}
-
 		if (stat(path, &info) != 0) {
 			/* If a file disappears during scan, the directory is not stable */
 			log_message(DEBUG, "Directory %s unstable: file disappeared during scan (%s)", dir_path, path);
@@ -320,20 +330,32 @@ bool scanner_stable(monitor_t *monitor, const watch_t *watch, const char *dir_pa
 
 		/* Look for temporary files or recent changes */
 		if (S_ISREG(info.st_mode)) {
-			stats->local_files++;
-			stats->local_size += info.st_size; /* Always accumulate size */
+			/* Check if file is excluded and count accordingly */
+			if (watch && config_exclude_match(watch, path)) {
+				/* Excluded file, update the counters and checksums */
+				stats->excluded_files++;
+				stats->excluded_size += info.st_size;
+				/* Track latest mtime of excluded files for change detection */
+				if (info.st_mtime > stats->excluded_mtime) {
+					stats->excluded_mtime = info.st_mtime;
+				}
+			} else {
+				/* Included file, process normally */
+				stats->local_files++;
+				stats->local_size += info.st_size; /* Always accumulate size */
 
-			/* Update latest modification time */
-			if (info.st_mtime > stats->last_mtime) {
-				stats->last_mtime = info.st_mtime;
-			}
+				/* Update latest modification time */
+				if (info.st_mtime > stats->last_mtime) {
+					stats->last_mtime = info.st_mtime;
+				}
 
-			/* Check for very recent file modifications (< 1 seconds) */
-			if (difftime(current_time, info.st_mtime) < 1.0) {
-				log_message(DEBUG, "Directory %s unstable: recent file modification (%s, %.1f seconds ago)",
-							dir_path, dirent->d_name, difftime(current_time, info.st_mtime));
-				stats->temp_files = true;
-				is_stable = false; /* Mark as unstable but continue scanning */
+				/* Check for very recent file modifications (< 1 seconds) */
+				if (difftime(current_time, info.st_mtime) < 1.0) {
+					log_message(DEBUG, "Directory %s unstable: recent file modification (%s, %.1f seconds ago)",
+								dir_path, dirent->d_name, difftime(current_time, info.st_mtime));
+					stats->temp_files = true;
+					is_stable = false; /* Mark as unstable but continue scanning */
+				}
 			}
 		} else if (S_ISDIR(info.st_mode)) {
 			stats->local_dirs++;
@@ -357,6 +379,14 @@ bool scanner_stable(monitor_t *monitor, const watch_t *watch, const char *dir_pa
 				stats->tree_files += sub_stats.tree_files;
 				stats->tree_dirs += sub_stats.tree_dirs;
 				stats->tree_size += sub_stats.tree_size;
+
+				/* Aggregate the excluded file stats from the recursive call */
+				stats->excluded_files += sub_stats.excluded_files;
+				stats->excluded_size += sub_stats.excluded_size;
+				/* Use latest mtime across all excluded files in the tree */
+				if (sub_stats.excluded_mtime > stats->excluded_mtime) {
+					stats->excluded_mtime = sub_stats.excluded_mtime;
+				}
 
 				/* Update max_depth considering subdirectory's max depth */
 				if (sub_stats.max_depth + 1 > stats->max_depth) {

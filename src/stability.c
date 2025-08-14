@@ -509,8 +509,8 @@ void stability_reset(monitor_t *monitor, subscription_t *root) {
 		return;
 	}
 
-	log_message(INFO, "Resetting baseline for %s after command: %d files, %d dirs, depth %d",
-				root->resource->path, new_baseline.tree_files, new_baseline.tree_dirs, new_baseline.max_depth);
+	log_message(INFO, "Resetting baseline for %s: %d files, %d dirs, depth %d", root->resource->path,
+				new_baseline.tree_files, new_baseline.tree_dirs, new_baseline.max_depth);
 
 	/* Reset stability state to reflect new baseline as authoritative */
 	root->profile->stability->stats = new_baseline;
@@ -832,7 +832,34 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 			return;
 		}
 
-		/* Directory is stable with sufficient consecutive checks - execute commands */
+		/* Directory is stable with sufficient consecutive checks - check for exclude-only changes */
+		stats_t *baseline_stats = &root->profile->stability->ref_stats;
+		stats_t *execution_stats = &current_stats;
+
+		/* Check if the included set of files has changed in any way (count, dirs, or total size) */
+		bool included_changed = (execution_stats->tree_files != baseline_stats->tree_files) ||
+								(execution_stats->tree_dirs != baseline_stats->tree_dirs) ||
+								(execution_stats->tree_size != baseline_stats->tree_size);
+
+		/* Check if the excluded set of files has changed (count, total size, or latest mtime) */
+		bool excluded_changed = (execution_stats->excluded_files != baseline_stats->excluded_files) ||
+								(execution_stats->excluded_size != baseline_stats->excluded_size) ||
+								(execution_stats->excluded_mtime != baseline_stats->excluded_mtime);
+
+		/* If the included is unchanged and the excluded has changed then we ignore this event */
+		if (!included_changed && excluded_changed) {
+			log_message(INFO, "Ignoring event for %s, all recent changes were to excluded files", root->resource->path);
+
+			/* Reset the stability baseline to this new state */
+			stability_reset(monitor, root);
+
+			/* Clean up the queue and do not execute the command */
+			pthread_mutex_unlock(&root->resource->mutex);
+			queue_remove(monitor->check_queue, check->path);
+			return;
+		}
+
+		/* Legitimate changes - execute commands */
 		commands_attempted++;
 		log_message(INFO, "Directory %s stability confirmed (%d/%d checks), proceeding to command execution",
 					root->resource->path, root->profile->stability->checks_count, checks_required);
