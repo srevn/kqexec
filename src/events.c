@@ -105,43 +105,52 @@ static void events_defer(monitor_t *monitor, resource_t *resource, watchref_t wa
 void events_deferred(monitor_t *monitor, resource_t *resource) {
 	if (!monitor || !resource) return;
 
-	/* Reset window state since we're processing events */
+	/* This function is called when an activity window expires.
+	 * All events in the deferred queue are from a single burst of activity.
+	 * We coalesce them by clearing the queue and triggering a single stability check.
+	 */
+
 	resource_lock(resource);
 	resource->window_active = false;
+
+	// Check if there are any events to process.
+	if (!resource->deferred_head) {
+		resource_unlock(resource);
+		log_message(DEBUG, "Activity window expired for %s, but deferred queue is empty. Triggering check.", resource->path);
+		profile_t *profile = resource->profiles;
+		if (profile && profile->subscriptions) {
+			stability_ready(monitor, profile->subscriptions, OP_DIR_CONTENT_CHANGED, 0);
+		}
+		return;
+	}
+
+	log_message(DEBUG, "Coalescing %d deferred events into a single stability check for %s.",
+				resource->deferred_count, resource->path);
+
+	// Clear the entire queue.
+	deferred_t *current = resource->deferred_head;
+	while (current) {
+		deferred_t *next = current->next;
+		free(current->event.path);
+		free(current);
+		current = next;
+	}
+	resource->deferred_head = NULL;
+	resource->deferred_tail = NULL;
+	resource->deferred_count = 0;
+
+	// Find a subscription on the resource to trigger the check.
+	subscription_t *subscription = NULL;
+	if (resource->profiles) {
+		subscription = resource->profiles->subscriptions;
+	}
+
 	resource_unlock(resource);
 
-	/* Process the entire queue, not just one event */
-	while (true) {
-		deferred_t *deferred = NULL;
-
-		/* Dequeue the next event */
-		resource_lock(resource);
-		if (resource->deferred_head) {
-			deferred = resource->deferred_head;
-			resource->deferred_head = deferred->next;
-			if (!resource->deferred_head) {
-				resource->deferred_tail = NULL;
-			}
-			resource->deferred_count--;
-			log_message(DEBUG, "Processing deferred event for %s, remaining: %d",
-						resource->path, resource->deferred_count);
-		}
-		resource_unlock(resource);
-
-		if (!deferred) {
-			/* Queue is empty, we're done */
-			break;
-		}
-
-		log_message(DEBUG, "Processing deferred event for %s (watchref %u:%u)",
-					deferred->event.path, deferred->watchref.watch_id, deferred->watchref.generation);
-
-		/* Pass to stability system with is_deferred=true to prevent loops */
-		events_process(monitor, deferred->watchref, &deferred->event, deferred->kind, true);
-
-		/* Clean up */
-		free(deferred->event.path);
-		free(deferred);
+	if (subscription) {
+		stability_defer(monitor, subscription);
+	} else {
+		log_message(WARNING, "Could not find a subscription to trigger coalesced stability check for %s", resource->path);
 	}
 }
 
