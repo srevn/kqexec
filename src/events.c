@@ -521,9 +521,28 @@ struct timespec *timeout_calculate(monitor_t *monitor, struct timespec *timeout,
 			}
 
 			/* Wake exactly when the next activity window needs checking */
-			if (has_active_windows && timespec_before(&soonest_window, timeout)) {
-				*timeout = soonest_window;
-				log_message(DEBUG, "Using activity window timeout");
+			if (has_active_windows) {
+				struct timespec window_timeout;
+				/* Convert absolute time to relative timeout */
+				if (timespec_after(&soonest_window, current_time)) {
+					window_timeout.tv_sec = soonest_window.tv_sec - current_time->tv_sec;
+					if (soonest_window.tv_nsec >= current_time->tv_nsec) {
+						window_timeout.tv_nsec = soonest_window.tv_nsec - current_time->tv_nsec;
+					} else {
+						window_timeout.tv_sec--;
+						window_timeout.tv_nsec = 1000000000 + soonest_window.tv_nsec - current_time->tv_nsec;
+					}
+				} else {
+					/* Time already passed, use minimal timeout */
+					window_timeout.tv_sec = 0;
+					window_timeout.tv_nsec = 10000000; /* 10ms */
+				}
+				
+				if (timespec_before(&window_timeout, timeout)) {
+					*timeout = window_timeout;
+					log_message(DEBUG, "Using activity window timeout: %ld.%09lds", 
+								timeout->tv_sec, timeout->tv_nsec);
+				}
 			}
 
 			return timeout;
@@ -547,8 +566,22 @@ struct timespec *timeout_calculate(monitor_t *monitor, struct timespec *timeout,
 
 		/* Check if activity window timeout is sooner */
 		if (has_active_windows && (!have_timeout || timespec_before(&soonest_window, timeout))) {
-			*timeout = soonest_window;
-			log_message(DEBUG, "Using activity window timeout (no deferred checks)");
+			/* Convert absolute time to relative timeout */
+			if (timespec_after(&soonest_window, current_time)) {
+				timeout->tv_sec = soonest_window.tv_sec - current_time->tv_sec;
+				if (soonest_window.tv_nsec >= current_time->tv_nsec) {
+					timeout->tv_nsec = soonest_window.tv_nsec - current_time->tv_nsec;
+				} else {
+					timeout->tv_sec--;
+					timeout->tv_nsec = 1000000000 + soonest_window.tv_nsec - current_time->tv_nsec;
+				}
+			} else {
+				/* Time already passed, use minimal timeout */
+				timeout->tv_sec = 0;
+				timeout->tv_nsec = 10000000; /* 10ms */
+			}
+			log_message(DEBUG, "Using activity window timeout (no deferred checks): %ld.%09lds", 
+						timeout->tv_sec, timeout->tv_nsec);
 		}
 
 		return timeout;
