@@ -35,10 +35,10 @@ int main(int argc, char *argv[]) {
 	monitor_t *monitor;
 	threads_t *threads;
 	int c;
+	int daemon_mode = 0;
 	int option_index = 0;
 	int loglevel = NOTICE;
-	char *config_path = NULL;
-	int daemon_mode = 0;
+	const char *config_path = NULL;
 
 	/* Get program name */
 	program_name = strrchr(argv[0], '/');
