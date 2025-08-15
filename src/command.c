@@ -623,7 +623,12 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 			stability_reset(monitor, root ? root : subscription);
 
 			/* Process next deferred event, if any */
-			events_deferred(monitor, executing_resource);
+			resource_lock(executing_resource);
+			bool has_deferred = executing_resource->deferred_count > 0;
+			resource_unlock(executing_resource);
+			if (has_deferred) {
+				events_deferred(monitor, executing_resource);
+			}
 		}
 	}
 
