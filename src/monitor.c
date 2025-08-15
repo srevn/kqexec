@@ -620,6 +620,7 @@ static watch_t *monitor_config(const char *config_file_path) {
 	config_watch->hidden = false;
 	config_watch->environment = false;
 	config_watch->complexity = 1.0;
+	config_watch->time_window = 0;
 	config_watch->processing_delay = 100;
 
 	/* Initialize dynamic tracking fields (config watches are not dynamic) */
@@ -717,6 +718,62 @@ bool monitor_setup(monitor_t *monitor) {
 	return true;
 }
 
+/* Check time windows and trigger processing when gaps detected */
+static void monitor_window(monitor_t *monitor) {
+	if (!monitor || !monitor->resources || !monitor->resources->buckets) {
+		return;
+	}
+
+	struct timespec current_time;
+	clock_gettime(CLOCK_MONOTONIC, &current_time);
+
+	/* Iterate through all resources to check active windows */
+	for (size_t i = 0; i < monitor->resources->bucket_count; i++) {
+		resource_t *resource = monitor->resources->buckets[i];
+		while (resource) {
+			if (!resource->window_active) {
+				resource = resource->next;
+				continue;
+			}
+
+			/* Check if window has expired using current active window duration */
+			struct timespec window_end = resource->window_start;
+			/* Add current_window to window_start */
+			window_end.tv_sec += resource->current_window / 1000;
+			window_end.tv_nsec += (resource->current_window % 1000) * 1000000;
+			if (window_end.tv_nsec >= 1000000000) {
+				window_end.tv_sec++;
+				window_end.tv_nsec -= 1000000000;
+			}
+
+			bool window_expired = (current_time.tv_sec > window_end.tv_sec ||
+								   (current_time.tv_sec == window_end.tv_sec && current_time.tv_nsec > window_end.tv_nsec));
+
+			if (window_expired) {
+				/* Window expired - check gap threshold based on current active window */
+				long gap_ms = (current_time.tv_sec - resource->last_event.tv_sec) * 1000 +
+							  (current_time.tv_nsec - resource->last_event.tv_nsec) / 1000000;
+				long threshold_ms = (resource->current_window * 60) / 100; /* 60% hardcoded */
+
+				if (gap_ms >= threshold_ms) {
+					log_message(DEBUG, "Activity gap detected (%ldms >= %ldms) for %s (window: %dms)",
+								gap_ms, threshold_ms, resource->path, resource->current_window);
+
+					/* Process the entire deferred queue */
+					events_deferred(monitor, resource);
+				} else {
+					/* Gap too small - reset window to continue waiting */
+					resource->window_start = current_time;
+					log_message(DEBUG, "Activity continues, reset window for %s (gap: %ldms < %ldms)",
+								resource->path, gap_ms, threshold_ms);
+				}
+			}
+
+			resource = resource->next;
+		}
+	}
+}
+
 /* Process events from kqueue and handle commands */
 bool monitor_poll(monitor_t *monitor) {
 	struct kevent events[MAX_EVENTS];
@@ -792,6 +849,9 @@ bool monitor_poll(monitor_t *monitor) {
 
 	/* Check deferred scans */
 	stability_process(monitor, &kevent_time);
+
+	/* Check activity windows */
+	monitor_window(monitor);
 
 	/* Process delayed events */
 	events_delayed(monitor);

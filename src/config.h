@@ -43,7 +43,12 @@ typedef struct watch {
 	bool hidden;                           /* Whether to monitor hidden files/directories */
 	bool environment;                      /* Whether to inject KQ_* environment variables */
 	double complexity;                     /* Multiplier for quiet period calculation (default: 1.0) */
-	int processing_delay;                  /* Delay in milliseconds before processing events (0 = no delay) */
+	
+	/* Delays and time windows */
+	int time_window;                       /* Activity window duration in ms */
+	int processing_delay;                  /* Delay before processing events */
+	
+	/* Exlude patterns */
 	char **exclude;                        /* Array of exclude patterns */
 	int num_exclude;                       /* Number of exclude patterns */
 

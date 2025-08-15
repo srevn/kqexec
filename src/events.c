@@ -16,9 +16,66 @@
 #include "scanner.h"
 #include "stability.h"
 
+/* Utility functions for timespec operations */
+static void timespec_add(struct timespec *ts, int milliseconds) {
+	ts->tv_sec += milliseconds / 1000;
+	ts->tv_nsec += (milliseconds % 1000) * 1000000;
+
+	/* Normalize nsec */
+	if (ts->tv_nsec >= 1000000000) {
+		ts->tv_sec++;
+		ts->tv_nsec -= 1000000000;
+	}
+}
+
+static bool timespec_after(const struct timespec *a, const struct timespec *b) {
+	if (a->tv_sec > b->tv_sec) return true;
+	if (a->tv_sec == b->tv_sec && a->tv_nsec > b->tv_nsec) return true;
+	return false;
+}
+
+static bool timespec_before(const struct timespec *a, const struct timespec *b) {
+	if (a->tv_sec < b->tv_sec) return true;
+	if (a->tv_sec == b->tv_sec && a->tv_nsec < b->tv_nsec) return true;
+	return false;
+}
+
+static long timespec_diff(const struct timespec *a, const struct timespec *b) {
+	long sec_diff = a->tv_sec - b->tv_sec;
+	long nsec_diff = a->tv_nsec - b->tv_nsec;
+	return sec_diff * 1000 + nsec_diff / 1000000;
+}
+
 /* Defer an event on a resource that is currently executing a command */
-static void events_defer(resource_t *resource, watchref_t watchref, const event_t *event, kind_t kind) {
+static void events_defer(monitor_t *monitor, resource_t *resource, watchref_t watchref, const event_t *event, kind_t kind) {
 	if (!resource || !event) return;
+
+	/* Manage window state if time_window feature is active */
+	if (monitor && monitor->registry) {
+		watch_t *watch = registry_get(monitor->registry, watchref);
+		if (watch && watch->time_window > 0) {
+			struct timespec current_time;
+			clock_gettime(CLOCK_MONOTONIC, &current_time);
+
+			if (!resource->window_active) {
+				/* Start new window */
+				resource->window_start = current_time;
+				resource->window_active = true;
+				resource->current_window = watch->time_window;
+				log_message(DEBUG, "Started activity window (%dms) for %s", watch->time_window,
+							resource->path);
+			} else {
+				/* Window already active - apply longest time window */
+				if (watch->time_window > resource->current_window) {
+					resource->current_window = watch->time_window;
+					log_message(DEBUG, "Extended activity window to %dms for %s (multiple watches)",
+								watch->time_window, resource->path);
+				}
+			}
+
+			resource->last_event = current_time;
+		}
+	}
 
 	deferred_t *deferred = calloc(1, sizeof(deferred_t));
 	if (!deferred) {
@@ -52,34 +109,47 @@ static void events_defer(resource_t *resource, watchref_t watchref, const event_
 	}
 
 	resource->deferred_count++;
-	log_message(DEBUG, "Queued deferred event for %s, total deferred: %d", resource->path, resource->deferred_count);
+	log_message(DEBUG, "Queued deferred event for %s, total deferred: %d",
+				resource->path, resource->deferred_count);
 	resource_unlock(resource);
 }
 
-/* Process the next deferred event from a resource's queue */
+/* Process the entire deferred queue from a resource */
 void events_deferred(monitor_t *monitor, resource_t *resource) {
 	if (!monitor || !resource) return;
 
-	deferred_t *deferred = NULL;
-
-	/* Dequeue the next event */
+	/* Reset window state since we're processing events */
 	resource_lock(resource);
-	if (resource->deferred_head) {
-		deferred = resource->deferred_head;
-		resource->deferred_head = deferred->next;
-		if (!resource->deferred_head) {
-			resource->deferred_tail = NULL;
-		}
-		resource->deferred_count--;
-		log_message(DEBUG, "Dequeued deferred event for %s, remaining: %d", resource->path, resource->deferred_count);
-	}
+	resource->window_active = false;
 	resource_unlock(resource);
 
-	if (deferred) {
+	/* Process the entire queue, not just one event */
+	while (true) {
+		deferred_t *deferred = NULL;
+
+		/* Dequeue the next event */
+		resource_lock(resource);
+		if (resource->deferred_head) {
+			deferred = resource->deferred_head;
+			resource->deferred_head = deferred->next;
+			if (!resource->deferred_head) {
+				resource->deferred_tail = NULL;
+			}
+			resource->deferred_count--;
+			log_message(DEBUG, "Processing deferred event for %s, remaining: %d",
+						resource->path, resource->deferred_count);
+		}
+		resource_unlock(resource);
+
+		if (!deferred) {
+			/* Queue is empty, we're done */
+			break;
+		}
+
 		log_message(DEBUG, "Processing deferred event for %s (watchref %u:%u)",
 					deferred->event.path, deferred->watchref.watch_id, deferred->watchref.generation);
 
-		/* Re-inject the event into the main processing function, bypassing debounce */
+		/* Pass to stability system with is_deferred=true to prevent loops */
 		events_process(monitor, deferred->watchref, &deferred->event, deferred->kind, true);
 
 		/* Clean up */
@@ -414,6 +484,30 @@ struct timespec *timeout_calculate(monitor_t *monitor, struct timespec *timeout,
 	/* Get timeout for delayed events */
 	int delayed_timeout_ms = events_timeout(monitor, current_time);
 
+	/* Find soonest activity window expiration */
+	struct timespec soonest_window = {0};
+	bool has_active_windows = false;
+
+	/* Iterate through resources with window_active = true */
+	if (monitor->resources && monitor->resources->buckets) {
+		for (size_t i = 0; i < monitor->resources->bucket_count; i++) {
+			resource_t *resource = monitor->resources->buckets[i];
+			while (resource) {
+				if (resource->window_active) {
+					/* Calculate when this window should be checked using current active window */
+					struct timespec window_expires = resource->window_start;
+					timespec_add(&window_expires, resource->current_window);
+
+					if (!has_active_windows || timespec_before(&window_expires, &soonest_window)) {
+						soonest_window = window_expires;
+						has_active_windows = true;
+					}
+				}
+				resource = resource->next;
+			}
+		}
+	}
+
 	/* Check if we have any pending deferred checks */
 	if (monitor->check_queue && monitor->check_queue->size > 0) {
 		/* Debug output for the queue status */
@@ -455,6 +549,12 @@ struct timespec *timeout_calculate(monitor_t *monitor, struct timespec *timeout,
 				}
 			}
 
+			/* Wake exactly when the next activity window needs checking */
+			if (has_active_windows && timespec_before(&soonest_window, timeout)) {
+				*timeout = soonest_window;
+				log_message(DEBUG, "Using activity window timeout");
+			}
+
 			return timeout;
 		} else {
 			/* Check time already passed, use minimal timeout */
@@ -463,14 +563,26 @@ struct timespec *timeout_calculate(monitor_t *monitor, struct timespec *timeout,
 			log_message(DEBUG, "Deferred check overdue, using minimal timeout");
 			return timeout;
 		}
-	} else if (delayed_timeout_ms >= 0) {
-		/* No deferred checks, but we have delayed events */
-		timeout->tv_sec = delayed_timeout_ms / 1000;
-		timeout->tv_nsec = (delayed_timeout_ms % 1000) * 1000000;
-		log_message(DEBUG, "No deferred checks, timeout for delayed events: %d ms", delayed_timeout_ms);
+	} else if (delayed_timeout_ms >= 0 || has_active_windows) {
+		/* No deferred checks, but we have delayed events or activity windows */
+		bool have_timeout = false;
+
+		if (delayed_timeout_ms >= 0) {
+			timeout->tv_sec = delayed_timeout_ms / 1000;
+			timeout->tv_nsec = (delayed_timeout_ms % 1000) * 1000000;
+			have_timeout = true;
+			log_message(DEBUG, "No deferred checks, timeout for delayed events: %d ms", delayed_timeout_ms);
+		}
+
+		/* Check if activity window timeout is sooner */
+		if (has_active_windows && (!have_timeout || timespec_before(&soonest_window, timeout))) {
+			*timeout = soonest_window;
+			log_message(DEBUG, "Using activity window timeout (no deferred checks)");
+		}
+
 		return timeout;
 	} else {
-		log_message(DEBUG, "No pending directory activity or delayed events, waiting indefinitely");
+		log_message(DEBUG, "No pending directory activity, delayed events, or activity windows, waiting indefinitely");
 		return NULL;
 	}
 }
@@ -633,6 +745,16 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 		return false; /* Error already logged by resources_subscription */
 	}
 
+	/* Check if this watch has time window configured */
+	if (watch && watch->time_window > 0 && !is_deferred) {
+		/* Get root resource to ensure consistent gating across watch hierarchies */
+		subscription_t *root = stability_root(monitor, subscription);
+		resource_t *resource = root ? root->resource : subscription->resource;
+
+		events_defer(monitor, resource, watchref, event, kind);
+		return false; /* Stop further processing */
+	}
+
 	/* Check if command is executing for this path or its root - defer events during execution */
 	subscription_t *root = stability_root(monitor, subscription);
 	resource_t *executing_resource = root ? root->resource : subscription->resource;
@@ -640,7 +762,7 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 		log_message(DEBUG, "Deferring event for %s, command is currently executing for %s",
 					event->path, executing_resource->path);
 		/* Defer event on the resource itself until the current command completes */
-		events_defer(executing_resource, watchref, event, kind);
+		events_defer(monitor, executing_resource, watchref, event, kind);
 		return false;
 	}
 
