@@ -17,6 +17,7 @@
 #include "monitor.h"
 #include "resource.h"
 #include "stability.h"
+#include "utilities.h"
 
 /* Create a scanner state */
 scanner_t *scanner_create(const char *path) {
@@ -959,19 +960,10 @@ bool scanner_ready(monitor_t *monitor, subscription_t *subscription, struct time
 
 	/* Calculate elapsed time */
 	long elapsed_ms;
-	if (current_time->tv_sec < scanner_time->tv_sec ||
-		(current_time->tv_sec == scanner_time->tv_sec && current_time->tv_nsec < scanner_time->tv_nsec)) {
+	if (timespec_before(current_time, scanner_time)) {
 		elapsed_ms = -1; /* Clock went backwards */
 	} else {
-		struct timespec diff_time;
-		diff_time.tv_sec = current_time->tv_sec - scanner_time->tv_sec;
-		if (current_time->tv_nsec >= scanner_time->tv_nsec) {
-			diff_time.tv_nsec = current_time->tv_nsec - scanner_time->tv_nsec;
-		} else {
-			diff_time.tv_sec--;
-			diff_time.tv_nsec = 1000000000 + current_time->tv_nsec - scanner_time->tv_nsec;
-		}
-		elapsed_ms = diff_time.tv_sec * 1000 + diff_time.tv_nsec / 1000000;
+		elapsed_ms = timespec_diff(current_time, scanner_time);
 	}
 
 	if (elapsed_ms < 0) {

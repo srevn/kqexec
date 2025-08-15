@@ -7,6 +7,7 @@
 
 #include "logger.h"
 #include "registry.h"
+#include "utilities.h"
 
 /* Observer callback for watch deactivation */
 static void queue_deactivation(watchref_t watchref, void *context) {
@@ -150,16 +151,6 @@ bool queue_add(check_t *check, watchref_t watchref) {
 	return true;
 }
 
-/* Compare two timespec values for priority queue ordering */
-int time_compare(struct timespec *a, struct timespec *b) {
-	if (!a || !b) return 0; /* Handle NULL pointers */
-
-	if (a->tv_sec < b->tv_sec) return -1;
-	if (a->tv_sec > b->tv_sec) return 1;
-	if (a->tv_nsec < b->tv_nsec) return -1;
-	if (a->tv_nsec > b->tv_nsec) return 1;
-	return 0;
-}
 
 /* Restore heap property upward */
 void heap_up(check_t *queue, int heap_index) {
@@ -174,7 +165,7 @@ void heap_up(check_t *queue, int heap_index) {
 		return;
 	}
 
-	if (time_compare(&queue[heap_index].next_check, &queue[parent].next_check) < 0) {
+	if (timespec_before(&queue[heap_index].next_check, &queue[parent].next_check)) {
 		/* Swap with parent using a temporary copy */
 		check_t temp;
 		memcpy(&temp, &queue[heap_index], sizeof(check_t));
@@ -206,7 +197,7 @@ void heap_down(check_t *queue, int queue_size, int heap_index) {
 	if (left < queue_size) {
 		if (!queue[left].path) {
 			log_message(WARNING, "Left child at index %d has NULL path", left);
-		} else if (time_compare(&queue[left].next_check, &queue[smallest].next_check) < 0) {
+		} else if (timespec_before(&queue[left].next_check, &queue[smallest].next_check)) {
 			smallest = left;
 		}
 	}
@@ -215,7 +206,7 @@ void heap_down(check_t *queue, int queue_size, int heap_index) {
 	if (right < queue_size) {
 		if (!queue[right].path) {
 			log_message(WARNING, "Right child at index %d has NULL path", right);
-		} else if (time_compare(&queue[right].next_check, &queue[smallest].next_check) < 0) {
+		} else if (timespec_before(&queue[right].next_check, &queue[smallest].next_check)) {
 			smallest = right;
 		}
 	}
@@ -405,7 +396,7 @@ void queue_remove(queue_t *queue, const char *path) {
 
 		/* Restore heap property for the moved element */
 		int parent_index = (queue_index - 1) / 2;
-		if (queue_index > 0 && time_compare(&queue->items[queue_index].next_check, &queue->items[parent_index].next_check) < 0) {
+		if (queue_index > 0 && timespec_before(&queue->items[queue_index].next_check, &queue->items[parent_index].next_check)) {
 			heap_up(queue->items, queue_index);
 		} else {
 			heap_down(queue->items, queue->size, queue_index);
@@ -453,7 +444,7 @@ void queue_remove_by_index(queue_t *queue, int queue_index) {
 
 		/* Restore heap property for the moved element */
 		int parent_index = (queue_index - 1) / 2;
-		if (queue_index > 0 && time_compare(&queue->items[queue_index].next_check, &queue->items[parent_index].next_check) < 0) {
+		if (queue_index > 0 && timespec_before(&queue->items[queue_index].next_check, &queue->items[parent_index].next_check)) {
 			heap_up(queue->items, queue_index);
 		} else {
 			heap_down(queue->items, queue->size, queue_index);

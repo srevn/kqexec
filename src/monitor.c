@@ -724,7 +724,7 @@ static void monitor_window(monitor_t *monitor) {
 	if (!monitor || !monitor->resources || !monitor->resources->buckets) {
 		return;
 	}
-	
+
 	struct timespec current_time;
 	clock_gettime(CLOCK_MONOTONIC, &current_time);
 
@@ -742,7 +742,7 @@ static void monitor_window(monitor_t *monitor) {
 			timespec_add(&window_end, resource->current_window);
 
 			bool window_expired = timespec_after(&current_time, &window_end);
-			
+
 			if (window_expired) {
 				/* Window expired - check gap threshold based on current active window */
 				long gap_ms = timespec_diff(&current_time, &resource->last_event);
@@ -838,7 +838,7 @@ bool monitor_poll(monitor_t *monitor) {
 		} else {
 			log_message(DEBUG, "Timeout occurred, checking deferred scans");
 		}
-		
+
 		/* Check activity windows only on timeout */
 		monitor_window(monitor);
 	}

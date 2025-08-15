@@ -13,6 +13,7 @@
 #include "registry.h"
 #include "resource.h"
 #include "scanner.h"
+#include "utilities.h"
 
 /* Create a stability state */
 stability_t *stability_create(void) {
@@ -250,15 +251,8 @@ void stability_defer(monitor_t *monitor, subscription_t *subscription) {
 	log_message(DEBUG, "Calculated new quiet period for %s: %ld ms (first event of burst)",
 				root->resource->path, required_quiet);
 
-	struct timespec next_check;
-	next_check.tv_sec = root->profile->scanner->latest_time.tv_sec + (required_quiet / 1000);
-	next_check.tv_nsec = root->profile->scanner->latest_time.tv_nsec + ((required_quiet % 1000) * 1000000);
-
-	/* Normalize nsec */
-	if (next_check.tv_nsec >= 1000000000) {
-		next_check.tv_sec++;
-		next_check.tv_nsec -= 1000000000;
-	}
+	struct timespec next_check = root->profile->scanner->latest_time;
+	timespec_add(&next_check, required_quiet);
 
 	/* Add to queue */
 	queue_upsert(monitor->check_queue, root->resource->path, root->watchref, next_check);
@@ -303,19 +297,10 @@ bool stability_quiet(monitor_t *monitor, subscription_t *root, struct timespec *
 	long elapsed_ms;
 
 	/* Robustly calculate elapsed time in milliseconds */
-	if (current_time->tv_sec < scanner_time.tv_sec ||
-		(current_time->tv_sec == scanner_time.tv_sec && current_time->tv_nsec < scanner_time.tv_nsec)) {
+	if (timespec_before(current_time, &scanner_time)) {
 		elapsed_ms = 0; /* Clock went backwards, treat as no time elapsed */
 	} else {
-		struct timespec diff_time;
-		diff_time.tv_sec = current_time->tv_sec - scanner_time.tv_sec;
-		if (current_time->tv_nsec >= scanner_time.tv_nsec) {
-			diff_time.tv_nsec = current_time->tv_nsec - scanner_time.tv_nsec;
-		} else {
-			diff_time.tv_sec--;
-			diff_time.tv_nsec = 1000000000 + current_time->tv_nsec - scanner_time.tv_nsec;
-		}
-		elapsed_ms = diff_time.tv_sec * 1000 + diff_time.tv_nsec / 1000000;
+		elapsed_ms = timespec_diff(current_time, &scanner_time);
 	}
 
 	log_message(DEBUG, "Path %s: %ld ms elapsed of %ld ms quiet period, direct_entries=%d+%d, recursive_entries=%d+%d, depth=%d",
@@ -333,15 +318,8 @@ void stability_delay(monitor_t *monitor, check_t *check, subscription_t *root, s
 	}
 
 	/* Update next check time based on latest activity */
-	struct timespec next_check;
-	next_check.tv_sec = root->profile->scanner->latest_time.tv_sec + (required_quiet / 1000);
-	next_check.tv_nsec = root->profile->scanner->latest_time.tv_nsec + ((required_quiet % 1000) * 1000000);
-
-	/* Normalize timestamp */
-	if (next_check.tv_nsec >= 1000000000) {
-		next_check.tv_sec++;
-		next_check.tv_nsec -= 1000000000;
-	}
+	struct timespec next_check = root->profile->scanner->latest_time;
+	timespec_add(&next_check, required_quiet);
 
 	/* Update the check in place and restore heap property */
 	check->next_check = next_check;
@@ -668,8 +646,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 		}
 
 		/* Check if it's time to process this check */
-		if (current_time->tv_sec < check->next_check.tv_sec ||
-			(current_time->tv_sec == check->next_check.tv_sec && current_time->tv_nsec < check->next_check.tv_nsec)) {
+		if (timespec_before(current_time, &check->next_check)) {
 			/* Not yet time for this check. Since it's a min-heap, no other checks are ready */
 			return;
 		}
@@ -749,13 +726,8 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 			root->profile->stability->checks_required = 0; /* Recalculate required checks */
 
 			/* Schedule a short follow-up check instead of a full quiet period */
-			struct timespec next_check;
-			next_check.tv_sec = current_time->tv_sec;
-			next_check.tv_nsec = current_time->tv_nsec + 200000000; /* 200ms */
-			if (next_check.tv_nsec >= 1000000000) {
-				next_check.tv_sec++;
-				next_check.tv_nsec -= 1000000000;
-			}
+			struct timespec next_check = *current_time;
+			timespec_add(&next_check, 200); /* 200ms */
 			check->next_check = next_check;
 			heap_down(monitor->check_queue->items, monitor->check_queue->size, 0);
 			pthread_mutex_unlock(&root->resource->mutex);
@@ -777,9 +749,8 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 				return;
 			} else if (failure_type == SCAN_FAILURE_DIRECTORY_DELETED) {
 				/* Reschedule for another check */
-				struct timespec next_check;
-				next_check.tv_sec = current_time->tv_sec + 2; /* 2 seconds */
-				next_check.tv_nsec = current_time->tv_nsec;
+				struct timespec next_check = *current_time;
+				timespec_add(&next_check, 2000); /* 2 seconds */
 
 				/* Update check */
 				check->next_check = next_check;
@@ -831,15 +802,8 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 		/* Check if we have enough consecutive stable checks */
 		if (root->profile->stability->checks_count < checks_required) {
 			/* Not enough checks yet, schedule quick follow-up check */
-			struct timespec next_check;
-			next_check.tv_sec = current_time->tv_sec;
-			next_check.tv_nsec = current_time->tv_nsec + 200000000; /* 200ms */
-
-			/* Normalize timestamp */
-			if (next_check.tv_nsec >= 1000000000) {
-				next_check.tv_sec++;
-				next_check.tv_nsec -= 1000000000;
-			}
+			struct timespec next_check = *current_time;
+			timespec_add(&next_check, 200); /* 200ms */
 
 			/* Update check and restore heap property */
 			check->next_check = next_check;

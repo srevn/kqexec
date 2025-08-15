@@ -203,14 +203,7 @@ void events_schedule(monitor_t *monitor, watchref_t watchref, event_t *event, ki
 	/* Calculate process time */
 	struct timespec process_time;
 	clock_gettime(CLOCK_MONOTONIC, &process_time);
-	process_time.tv_sec += watch->processing_delay / 1000;
-	process_time.tv_nsec += (watch->processing_delay % 1000) * 1000000;
-
-	/* Normalize nsec */
-	if (process_time.tv_nsec >= 1000000000) {
-		process_time.tv_sec++;
-		process_time.tv_nsec -= 1000000000;
-	}
+	timespec_add(&process_time, watch->processing_delay);
 
 	/* Look for existing delayed event for the same watch and path to enable debouncing */
 	for (int i = 0; i < monitor->delayed_count; i++) {
@@ -275,8 +268,7 @@ void events_delayed(monitor_t *monitor) {
 		delayed_t *delayed = &monitor->delayed_events[read_idx];
 
 		/* Check if this event is ready to process */
-		if (current_time.tv_sec > delayed->process_time.tv_sec ||
-			(current_time.tv_sec == delayed->process_time.tv_sec && current_time.tv_nsec >= delayed->process_time.tv_nsec)) {
+		if (!timespec_before(&current_time, &delayed->process_time)) {
 			/* Resolve watch reference at processing time */
 			watch_t *watch = registry_get(monitor->registry, delayed->watchref);
 			if (!watch) {
@@ -322,27 +314,17 @@ int events_timeout(monitor_t *monitor, struct timespec *current_time) {
 	/* Find the earliest process time in the queue */
 	for (int i = 1; i < monitor->delayed_count; i++) {
 		delayed_t *delayed = &monitor->delayed_events[i];
-		if (delayed->process_time.tv_sec < earliest.tv_sec ||
-			(delayed->process_time.tv_sec == earliest.tv_sec && delayed->process_time.tv_nsec < earliest.tv_nsec)) {
+		if (timespec_before(&delayed->process_time, &earliest)) {
 			earliest = delayed->process_time;
 		}
 	}
 
 	/* Calculate timeout in milliseconds */
 	long timeout_ms;
-	if (current_time->tv_sec > earliest.tv_sec ||
-		(current_time->tv_sec == earliest.tv_sec && current_time->tv_nsec > earliest.tv_nsec)) {
+	if (timespec_after(current_time, &earliest)) {
 		timeout_ms = 1; /* Already overdue */
 	} else {
-		struct timespec diff_time;
-		diff_time.tv_sec = earliest.tv_sec - current_time->tv_sec;
-		if (earliest.tv_nsec >= current_time->tv_nsec) {
-			diff_time.tv_nsec = earliest.tv_nsec - current_time->tv_nsec;
-		} else {
-			diff_time.tv_sec--;
-			diff_time.tv_nsec = 1000000000 + earliest.tv_nsec - current_time->tv_nsec;
-		}
-		timeout_ms = diff_time.tv_sec * 1000 + diff_time.tv_nsec / 1000000;
+		timeout_ms = timespec_diff(&earliest, current_time);
 	}
 
 	return timeout_ms > 0 ? (int) timeout_ms : 1;
@@ -491,16 +473,11 @@ struct timespec *timeout_calculate(monitor_t *monitor, struct timespec *timeout,
 		struct timespec next_check = monitor->check_queue->items[0].next_check;
 
 		/* Calculate relative timeout */
-		if (current_time->tv_sec < next_check.tv_sec ||
-			(current_time->tv_sec == next_check.tv_sec && current_time->tv_nsec < next_check.tv_nsec)) {
+		if (timespec_before(current_time, &next_check)) {
 			/* Time until next check */
-			timeout->tv_sec = next_check.tv_sec - current_time->tv_sec;
-			if (next_check.tv_nsec >= current_time->tv_nsec) {
-				timeout->tv_nsec = next_check.tv_nsec - current_time->tv_nsec;
-			} else {
-				timeout->tv_sec--;
-				timeout->tv_nsec = 1000000000 + next_check.tv_nsec - current_time->tv_nsec;
-			}
+			long timeout_ms = timespec_diff(&next_check, current_time);
+			timeout->tv_sec = timeout_ms / 1000;
+			timeout->tv_nsec = (timeout_ms % 1000) * 1000000;
 
 			/* Ensure sane values */
 			if (timeout->tv_sec < 0) {
@@ -512,7 +489,8 @@ struct timespec *timeout_calculate(monitor_t *monitor, struct timespec *timeout,
 
 			/* If we have both deferred checks and delayed events, use the shorter timeout */
 			if (delayed_timeout_ms >= 0) {
-				long current_timeout_ms = timeout->tv_sec * 1000 + timeout->tv_nsec / 1000000;
+				struct timespec zero_time = {0, 0};
+				long current_timeout_ms = timespec_diff(timeout, &zero_time);
 				if (delayed_timeout_ms < current_timeout_ms) {
 					timeout->tv_sec = delayed_timeout_ms / 1000;
 					timeout->tv_nsec = (delayed_timeout_ms % 1000) * 1000000;
@@ -525,22 +503,18 @@ struct timespec *timeout_calculate(monitor_t *monitor, struct timespec *timeout,
 				struct timespec window_timeout;
 				/* Convert absolute time to relative timeout */
 				if (timespec_after(&soonest_window, current_time)) {
-					window_timeout.tv_sec = soonest_window.tv_sec - current_time->tv_sec;
-					if (soonest_window.tv_nsec >= current_time->tv_nsec) {
-						window_timeout.tv_nsec = soonest_window.tv_nsec - current_time->tv_nsec;
-					} else {
-						window_timeout.tv_sec--;
-						window_timeout.tv_nsec = 1000000000 + soonest_window.tv_nsec - current_time->tv_nsec;
-					}
+					long window_timeout_ms = timespec_diff(&soonest_window, current_time);
+					window_timeout.tv_sec = window_timeout_ms / 1000;
+					window_timeout.tv_nsec = (window_timeout_ms % 1000) * 1000000;
 				} else {
 					/* Time already passed, use minimal timeout */
 					window_timeout.tv_sec = 0;
 					window_timeout.tv_nsec = 10000000; /* 10ms */
 				}
-				
+
 				if (timespec_before(&window_timeout, timeout)) {
 					*timeout = window_timeout;
-					log_message(DEBUG, "Using activity window timeout: %ld.%09lds", 
+					log_message(DEBUG, "Using activity window timeout: %ld.%09lds",
 								timeout->tv_sec, timeout->tv_nsec);
 				}
 			}
@@ -568,19 +542,15 @@ struct timespec *timeout_calculate(monitor_t *monitor, struct timespec *timeout,
 		if (has_active_windows && (!have_timeout || timespec_before(&soonest_window, timeout))) {
 			/* Convert absolute time to relative timeout */
 			if (timespec_after(&soonest_window, current_time)) {
-				timeout->tv_sec = soonest_window.tv_sec - current_time->tv_sec;
-				if (soonest_window.tv_nsec >= current_time->tv_nsec) {
-					timeout->tv_nsec = soonest_window.tv_nsec - current_time->tv_nsec;
-				} else {
-					timeout->tv_sec--;
-					timeout->tv_nsec = 1000000000 + soonest_window.tv_nsec - current_time->tv_nsec;
-				}
+				long window_timeout_ms = timespec_diff(&soonest_window, current_time);
+				timeout->tv_sec = window_timeout_ms / 1000;
+				timeout->tv_nsec = (window_timeout_ms % 1000) * 1000000;
 			} else {
 				/* Time already passed, use minimal timeout */
 				timeout->tv_sec = 0;
 				timeout->tv_nsec = 10000000; /* 10ms */
 			}
-			log_message(DEBUG, "Using activity window timeout (no deferred checks): %ld.%09lds", 
+			log_message(DEBUG, "Using activity window timeout (no deferred checks): %ld.%09lds",
 						timeout->tv_sec, timeout->tv_nsec);
 		}
 
