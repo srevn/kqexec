@@ -9,7 +9,7 @@
 #include "registry.h"
 
 /* Observer callback for watch deactivation */
-static void queue_handle_deactivation(watchref_t watchref, void *context) {
+static void queue_deactivation(watchref_t watchref, void *context) {
 	queue_t *queue = (queue_t *) context;
 	if (!queue || !queue->items) {
 		return;
@@ -67,7 +67,7 @@ queue_t *queue_create(registry_t *registry, int initial_capacity) {
 
 	/* Initialize registry integration */
 	queue->registry = registry;
-	queue->observer.handle_deactivation = queue_handle_deactivation;
+	queue->observer.handle_deactivation = queue_deactivation;
 	queue->observer.context = queue;
 	queue->observer.next = NULL;
 
@@ -169,7 +169,8 @@ void heap_up(check_t *queue, int heap_index) {
 
 	/* Ensure both queue entries have valid paths to avoid crash */
 	if (!queue[heap_index].path || !queue[parent].path) {
-		log_message(WARNING, "Heapify up encountered invalid path at index %d or parent %d", heap_index, parent);
+		log_message(WARNING, "Heapify up encountered invalid path at index %d or parent %d",
+					heap_index, parent);
 		return;
 	}
 

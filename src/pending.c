@@ -16,13 +16,13 @@
 #include "registry.h"
 
 /* Check if a path contains glob patterns */
-static bool pending_has_glob(const char *target_path) {
+static bool pending_pattern(const char *target_path) {
 	if (!target_path) return false;
 	return strpbrk(target_path, "*?[") != NULL;
 }
 
 /* Check if path exists and is a directory */
-static bool pending_is_dir(const char *dir_path) {
+static bool pending_directory(const char *dir_path) {
 	if (!dir_path) return false;
 	struct stat info;
 	return (stat(dir_path, &info) == 0 && S_ISDIR(info.st_mode));
@@ -50,7 +50,8 @@ static watcher_t *pending_watcher(monitor_t *monitor, const char *target_path, w
 	if (!monitor || !target_path || !watchref_valid(watchref)) return NULL;
 
 	for (int i = 0; i < monitor->num_watches; i++) {
-		if (strcmp(monitor->watches[i]->path, target_path) == 0 && watchref_equal(monitor->watches[i]->watchref, watchref)) {
+		if (strcmp(monitor->watches[i]->path, target_path) == 0 &&
+			watchref_equal(monitor->watches[i]->watchref, watchref)) {
 			return monitor->watches[i];
 		}
 	}
@@ -65,11 +66,11 @@ static char *pending_parent(const char *target_path, bool stop_at_glob) {
 	if (!test_path) return NULL;
 
 	while (strlen(test_path) > 1) {
-		if (pending_is_dir(test_path)) {
+		if (pending_directory(test_path)) {
 			return test_path;
 		}
 
-		if (stop_at_glob && pending_has_glob(test_path)) {
+		if (stop_at_glob && pending_pattern(test_path)) {
 			char *last_slash = strrchr(test_path, '/');
 			if (!last_slash || last_slash == test_path) break;
 			*last_slash = '\0';
@@ -81,7 +82,7 @@ static char *pending_parent(const char *target_path, bool stop_at_glob) {
 		*last_slash = '\0';
 	}
 
-	if (pending_is_dir("/")) {
+	if (pending_directory("/")) {
 		strcpy(test_path, "/");
 		return test_path;
 	}
@@ -133,7 +134,7 @@ static bool glob_matches(const char *created_path, const char *glob_pattern) {
 }
 
 /* Find matching files in a directory for a glob component */
-static bool glob_find_matches(const char *parent_path, const watch_t *watch, const char *glob_component, char ***matches, int *match_count) {
+static bool glob_find(const char *parent_path, const watch_t *watch, const char *glob_component, char ***matches, int *match_count) {
 	if (!parent_path || !glob_component || !matches || !match_count) {
 		return false;
 	}
@@ -209,6 +210,47 @@ static bool glob_find_matches(const char *parent_path, const watch_t *watch, con
 	return true;
 }
 
+/* Find filesystem paths that match pattern using glob() */
+char **glob_scan(const char *pattern, int *count) {
+	glob_t glob_result;
+	memset(&glob_result, 0, sizeof(glob_result));
+
+	int return_value = glob(pattern, GLOB_TILDE | GLOB_BRACE | GLOB_MARK, NULL, &glob_result);
+	if (return_value != 0) {
+		globfree(&glob_result);
+		if (return_value != GLOB_NOMATCH) {
+			log_message(WARNING, "glob() failed with return value %d for pattern %s",
+						return_value, pattern);
+		}
+		*count = 0;
+		return NULL;
+	}
+
+	*count = glob_result.gl_pathc;
+	char **matches = malloc(*count * sizeof(char *));
+	if (!matches) {
+		globfree(&glob_result);
+		*count = 0;
+		return NULL;
+	}
+
+	for (size_t i = 0; i < glob_result.gl_pathc; i++) {
+		matches[i] = strdup(glob_result.gl_pathv[i]);
+	}
+
+	globfree(&glob_result);
+	return matches;
+}
+
+/* Free an array returned by glob_scan() */
+void glob_free(char **matches, int count) {
+	if (!matches) return;
+	for (int i = 0; i < count; i++) {
+		free(matches[i]);
+	}
+	free(matches);
+}
+
 /* Destroy a pending watch entry */
 void pending_destroy(pending_t *pending) {
 	if (!pending) return;
@@ -244,7 +286,7 @@ void pending_remove(monitor_t *monitor, int index) {
 }
 
 /* Generate unique name for a proxy watch */
-static char *pending_proxy_name(watchref_t watchref, const char *type) {
+static char *proxy_name(watchref_t watchref, const char *type) {
 	static uint32_t counter = 0;
 	char *name = malloc(PROXY_NAME_MAX_LEN);
 	if (!name) return NULL;
@@ -253,8 +295,8 @@ static char *pending_proxy_name(watchref_t watchref, const char *type) {
 }
 
 /* Create a proxy watch for a pending path's parent */
-static watchref_t pending_proxy_watch(monitor_t *monitor, const watch_t *original_watch, watchref_t original_ref, const char *parent_path, const char *type) {
-	if (!monitor || !original_watch || !parent_path) {
+static watchref_t proxy_create(monitor_t *monitor, const watch_t *source_watch, watchref_t source_ref, const char *parent_path, const char *type) {
+	if (!monitor || !source_watch || !parent_path) {
 		return WATCH_REF_INVALID;
 	}
 
@@ -265,7 +307,7 @@ static watchref_t pending_proxy_watch(monitor_t *monitor, const watch_t *origina
 	}
 
 	/* Create unique name for this proxy watch */
-	proxy_watch->name = pending_proxy_name(original_ref, type);
+	proxy_watch->name = proxy_name(source_ref, type);
 	if (!proxy_watch->name) {
 		free(proxy_watch);
 		return WATCH_REF_INVALID;
@@ -278,9 +320,9 @@ static watchref_t pending_proxy_watch(monitor_t *monitor, const watch_t *origina
 	proxy_watch->is_dynamic = false;
 	proxy_watch->source_pattern = NULL;
 
-	/* Copy relevant properties from original watch */
-	proxy_watch->recursive = original_watch->recursive;
-	proxy_watch->hidden = original_watch->hidden;
+	/* Copy relevant properties from source watch */
+	proxy_watch->recursive = source_watch->recursive;
+	proxy_watch->hidden = source_watch->hidden;
 
 	/* Add to registry */
 	watchref_t proxyref = registry_add(monitor->registry, proxy_watch);
@@ -291,7 +333,7 @@ static watchref_t pending_proxy_watch(monitor_t *monitor, const watch_t *origina
 	}
 
 	log_message(DEBUG, "Created proxy watch '%s' for pattern from watch %u:%u",
-				proxy_watch->name, original_ref.watch_id, original_ref.generation);
+				proxy_watch->name, source_ref.watch_id, source_ref.generation);
 
 	return proxyref;
 }
@@ -308,7 +350,7 @@ bool pending_add(monitor_t *monitor, const char *target_path, watchref_t watchre
 	}
 
 	/* Check if this is a glob pattern */
-	bool is_glob = pending_has_glob(target_path);
+	bool is_glob = pending_pattern(target_path);
 	char *parent_path = NULL;
 	char *next_component = NULL;
 
@@ -363,7 +405,7 @@ bool pending_add(monitor_t *monitor, const char *target_path, watchref_t watchre
 
 	/* Create a dedicated proxy watch to monitor the parent directory */
 	const char *type = is_glob ? "proxy_glob" : "proxy_exact";
-	watchref_t proxyref = pending_proxy_watch(monitor, watch, watchref, parent_path, type);
+	watchref_t proxyref = proxy_create(monitor, watch, watchref, parent_path, type);
 	if (!watchref_valid(proxyref)) {
 		log_message(ERROR, "Failed to create proxy watch for %s", target_path);
 		pending_destroy(pending);
@@ -435,7 +477,7 @@ static void pending_promote(monitor_t *monitor, pending_t *pending, const char *
 		}
 	}
 
-	/* Create a dynamic watch from the original's properties */
+	/* Create a dynamic watch from the source's properties */
 	watch_t *pending_watch = registry_get(monitor->registry, pending->watchref);
 	if (!pending_watch) {
 		log_message(ERROR, "Invalid pending watch reference during resolution");
@@ -498,9 +540,11 @@ static void pending_promote(monitor_t *monitor, pending_t *pending, const char *
 	}
 
 	if (monitor_add(monitor, resolved_ref, true)) {
-		log_message(INFO, "Successfully promoted glob match: %s from pattern %s", matched_path, pending->glob_pattern);
+		log_message(INFO, "Successfully promoted glob match: %s from pattern %s", matched_path,
+					pending->glob_pattern);
 	} else {
-		log_message(WARNING, "Failed to promote glob match: %s from pattern %s", matched_path, pending->glob_pattern);
+		log_message(WARNING, "Failed to promote glob match: %s from pattern %s", matched_path,
+					pending->glob_pattern);
 		/* Remove from config since monitor add failed */
 		config_remove_watch(monitor->config, monitor->registry, resolved_ref);
 	}
@@ -509,7 +553,7 @@ static void pending_promote(monitor_t *monitor, pending_t *pending, const char *
 /* Create a new pending watch for a proxy directory that matches a glob component */
 static void pending_proxy(monitor_t *monitor, pending_t *pending, const char *proxy_path) {
 	/* For globs, this means we found a proxy directory that matches part of the pattern */
-	if (!pending_is_dir(proxy_path)) {
+	if (!pending_directory(proxy_path)) {
 		return; /* Not a directory, so it can't be a proxy step */
 	}
 
@@ -551,14 +595,14 @@ static void pending_proxy(monitor_t *monitor, pending_t *pending, const char *pr
 	new_pending->proxyref = WATCH_REF_INVALID;
 
 	/* Create individual proxy watch for this glob directory */
-	watch_t *original_watch = registry_get(monitor->registry, pending->watchref);
-	if (!original_watch) {
-		log_message(ERROR, "Invalid original watch reference in pending_proxy");
+	watch_t *source_watch = registry_get(monitor->registry, pending->watchref);
+	if (!source_watch) {
+		log_message(ERROR, "Invalid source watch reference in pending_proxy");
 		pending_destroy(new_pending);
 		return;
 	}
 
-	watchref_t proxyref = pending_proxy_watch(monitor, original_watch, pending->watchref, proxy_path, "proxy_glob");
+	watchref_t proxyref = proxy_create(monitor, source_watch, pending->watchref, proxy_path, "proxy_glob");
 	if (!watchref_valid(proxyref)) {
 		log_message(ERROR, "Failed to create proxy glob watch for %s", proxy_path);
 		pending_destroy(new_pending);
@@ -599,14 +643,14 @@ static void pending_proxy(monitor_t *monitor, pending_t *pending, const char *pr
 }
 
 /* Process a pending watch for a glob pattern */
-static void pending_process_glob(monitor_t *monitor, pending_t *pending) {
+static void process_glob(monitor_t *monitor, pending_t *pending) {
 	char **matches = NULL;
 	int match_count = 0;
 
-	/* Get the original watch to check exclude patterns */
+	/* Get the source watch to check exclude patterns */
 	watch_t *watch = registry_get(monitor->registry, pending->watchref);
 
-	if (!glob_find_matches(pending->current_parent, watch, pending->next_component, &matches, &match_count)) {
+	if (!glob_find(pending->current_parent, watch, pending->next_component, &matches, &match_count)) {
 		return;
 	}
 
@@ -632,10 +676,10 @@ static void pending_process_glob(monitor_t *monitor, pending_t *pending) {
 }
 
 /* Process a pending watch for an exact path */
-static void pending_process_exact(monitor_t *monitor, pending_t *pending, int index) {
+static void process_exact(monitor_t *monitor, pending_t *pending, int index) {
 	/* Loop to process multiple path components created in a single event */
 	while (true) {
-		if (pending_is_dir(pending->next_component) || access(pending->next_component, F_OK) == 0) {
+		if (pending_directory(pending->next_component) || access(pending->next_component, F_OK) == 0) {
 			log_message(DEBUG, "Next component created: %s", pending->next_component);
 
 			/* Check if this completes the full target path */
@@ -700,12 +744,13 @@ void pending_process(monitor_t *monitor, const char *parent_path) {
 
 		/* Check if this pending watch is waiting for activity in this parent */
 		if (strcmp(pending->current_parent, parent_path) == 0) {
-			log_message(DEBUG, "Found pending watch for parent '%s', target '%s'", parent_path, pending->target_path);
+			log_message(DEBUG, "Found pending watch for parent '%s', target '%s'",
+						parent_path, pending->target_path);
 
 			if (pending->is_glob) {
-				pending_process_glob(monitor, pending);
+				process_glob(monitor, pending);
 			} else {
-				pending_process_exact(monitor, pending, i);
+				process_exact(monitor, pending, i);
 			}
 		}
 	}
@@ -757,7 +802,8 @@ void pending_delete(monitor_t *monitor, const char *deleted_path) {
 
 		if (affected) {
 			log_message(DEBUG, "Pending watch (%s) affected by deletion of %s: target=%s, current_parent=%s",
-						pending->is_glob ? "glob" : "exact", deleted_path, pending->target_path, pending->current_parent);
+						pending->is_glob ? "glob" : "exact", deleted_path, pending->target_path,
+						pending->current_parent);
 
 			/* Remove and re-add to find new deepest parent */
 			char *target_path = strdup(pending->target_path);
@@ -773,46 +819,8 @@ void pending_delete(monitor_t *monitor, const char *deleted_path) {
 	}
 }
 
-char **glob_scan_paths(const char *pattern, int *count) {
-	glob_t glob_result;
-	memset(&glob_result, 0, sizeof(glob_result));
-
-	int return_value = glob(pattern, GLOB_TILDE | GLOB_BRACE | GLOB_MARK, NULL, &glob_result);
-	if (return_value != 0) {
-		globfree(&glob_result);
-		if (return_value != GLOB_NOMATCH) {
-			log_message(WARNING, "glob() failed with return value %d for pattern %s", return_value, pattern);
-		}
-		*count = 0;
-		return NULL;
-	}
-
-	*count = glob_result.gl_pathc;
-	char **matches = malloc(*count * sizeof(char *));
-	if (!matches) {
-		globfree(&glob_result);
-		*count = 0;
-		return NULL;
-	}
-
-	for (size_t i = 0; i < glob_result.gl_pathc; i++) {
-		matches[i] = strdup(glob_result.gl_pathv[i]);
-	}
-
-	globfree(&glob_result);
-	return matches;
-}
-
-void glob_free_paths(char **matches, int count) {
-	if (!matches) return;
-	for (int i = 0; i < count; i++) {
-		free(matches[i]);
-	}
-	free(matches);
-}
-
 /* Observer callback for watch deactivation */
-void pending_handle_deactivation(watchref_t watchref, void *context) {
+void pending_deactivation(watchref_t watchref, void *context) {
 	monitor_t *monitor = (monitor_t *) context;
 	if (!monitor || !monitor->pending) {
 		return;
@@ -837,6 +845,7 @@ void pending_handle_deactivation(watchref_t watchref, void *context) {
 	}
 
 	if (entries_removed > 0) {
-		log_message(DEBUG, "Pending cleanup complete: removed %d orphaned entries", entries_removed);
+		log_message(DEBUG, "Pending cleanup complete: removed %d orphaned entries",
+					entries_removed);
 	}
 }

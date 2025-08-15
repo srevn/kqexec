@@ -79,7 +79,8 @@ static void watcher_destroy(monitor_t *monitor, watcher_t *watcher, bool is_stal
 static bool watcher_stat(watcher_t *watcher) {
 	struct stat info;
 	if (fstat(watcher->wd, &info) == -1) {
-		log_message(ERROR, "Failed to fstat file descriptor %d for %s: %s", watcher->wd, watcher->path, strerror(errno));
+		log_message(ERROR, "Failed to fstat file descriptor %d for %s: %s", watcher->wd,
+					watcher->path, strerror(errno));
 		return false;
 	}
 
@@ -125,7 +126,7 @@ static watcher_t *watcher_find(monitor_t *monitor, const char *path) {
 }
 
 /* Observer callback for direct watcher cleanup when watches are deactivated */
-static void monitor_handle_deactivation(watchref_t watchref, void *context) {
+static void monitor_deactivation(watchref_t watchref, void *context) {
 	monitor_t *monitor = (monitor_t *) context;
 	if (!monitor || !monitor->watches) {
 		return;
@@ -138,7 +139,8 @@ static void monitor_handle_deactivation(watchref_t watchref, void *context) {
 	for (int i = monitor->num_watches - 1; i >= 0; i--) {
 		watcher_t *watcher = monitor->watches[i];
 		if (watcher && watchref_equal(watcher->watchref, watchref)) {
-			log_message(DEBUG, "Removing watcher for deactivated watch: %s (fd %d)", watcher->path, watcher->wd);
+			log_message(DEBUG, "Removing watcher for deactivated watch: %s (fd %d)",
+						watcher->path, watcher->wd);
 
 			/* Remove the watcher from the array and destroy it */
 			watcher_destroy(monitor, watcher, false);
@@ -200,12 +202,12 @@ monitor_t *monitor_create(config_t *config, registry_t *registry) {
 	}
 
 	/* Initialize monitor watcher observer */
-	monitor->monitor_observer.handle_deactivation = monitor_handle_deactivation;
+	monitor->monitor_observer.handle_deactivation = monitor_deactivation;
 	monitor->monitor_observer.context = monitor;
 	monitor->monitor_observer.next = NULL;
 
 	/* Initialize pending watch observer */
-	monitor->pending_observer.handle_deactivation = pending_handle_deactivation;
+	monitor->pending_observer.handle_deactivation = pending_deactivation;
 	monitor->pending_observer.context = monitor;
 	monitor->pending_observer.next = NULL;
 
@@ -346,8 +348,8 @@ static bool monitor_kq(monitor_t *monitor, watcher_t *watcher) {
 	EV_SET(&changes[0], watcher->wd, EVFILT_VNODE, EV_ADD | EV_CLEAR, flags, 0, watcher);
 
 	if (kevent(monitor->kq, changes, 1, NULL, 0, NULL) == -1) {
-		log_message(ERROR, "Failed to register kqueue events for %s (fd %d): %s",
-					watcher->path, watcher->wd, strerror(errno));
+		log_message(ERROR, "Failed to register kqueue events for %s (fd %d): %s", watcher->path,
+					watcher->wd, strerror(errno));
 		return false;
 	}
 
@@ -659,7 +661,8 @@ bool monitor_setup(monitor_t *monitor) {
 			if (watchref_valid(watchrefs[i])) {
 				if (!monitor_add(monitor, watchrefs[i], false)) {
 					watch_t *watch = registry_get(monitor->registry, watchrefs[i]);
-					log_message(WARNING, "Failed to add watch for %s, skipping", watch ? watch->path : "unknown");
+					log_message(WARNING, "Failed to add watch for %s, skipping",
+								watch ? watch->path : "unknown");
 				}
 			}
 		}
@@ -956,8 +959,8 @@ bool monitor_reload(monitor_t *monitor) {
 		for (uint32_t i = 0; i < new_num_watches; i++) {
 			if (watchref_valid(new_watchrefs[i])) {
 				watch_t *watch = registry_get(monitor->registry, new_watchrefs[i]);
-				log_message(DEBUG, "Reloading watch: %s (%s)",
-							watch ? watch->name : "unknown", watch ? watch->path : "unknown");
+				log_message(DEBUG, "Reloading watch: %s (%s)", watch ? watch->name : "unknown",
+							watch ? watch->path : "unknown");
 				if (!monitor_add(monitor, new_watchrefs[i], false)) {
 					log_message(WARNING, "Failed to add watch for %s", watch ? watch->path : "unknown");
 				}

@@ -36,10 +36,10 @@ void pending_destroy(pending_t *pending);
 void pending_remove(monitor_t *monitor, int index);
 
 /* Glob scanning functions */
-char **glob_scan_paths(const char *pattern, int *count);
-void glob_free_paths(char **matches, int count);
+char **glob_scan(const char *pattern, int *count);
+void glob_free(char **matches, int count);
 
 /* Observer callback for watch deactivation */
-void pending_handle_deactivation(watchref_t watchref, void *context);
+void pending_deactivation(watchref_t watchref, void *context);
 
 #endif /* PENDING_H */

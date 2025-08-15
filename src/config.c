@@ -43,7 +43,7 @@ static char *trim(char *str) {
 }
 
 /* Canonize a file path using realpath(), with graceful fallback */
-static char *canonize_path(const char *path, int line_number) {
+static char *config_canonize(const char *path, int line_number) {
 	if (path == NULL) {
 		return NULL;
 	}
@@ -55,13 +55,14 @@ static char *canonize_path(const char *path, int line_number) {
 	/* First try realpath on the original path (handles both absolute and relative) */
 	if (realpath(path, resolved_path) != NULL) {
 		/* Success - path exists and was canonicalized */
-		log_message(DEBUG, "Canonized path '%s' -> '%s' at line %d", path, resolved_path, line_number);
+		log_message(DEBUG, "Canonized path '%s' -> '%s' at line %d", path,
+					resolved_path, line_number);
 		result = strdup(resolved_path);
 	} else {
 		/* realpath() failed - need to construct absolute path if relative */
 		if (path[0] == '/') {
 			/* Already absolute, just use it */
-			log_message(DEBUG, "Failed to canonicalize absolute path '%s' at line %d: %s (using original path)",
+			log_message(DEBUG, "Failed to canonicalize absolute path '%s' at line %d: %s",
 						path, line_number, strerror(errno));
 			result = strdup(path);
 		} else {
@@ -81,11 +82,12 @@ static char *canonize_path(const char *path, int line_number) {
 
 			/* Try to canonicalize the constructed absolute path */
 			if (realpath(resolved_path, absolute_path) != NULL) {
-				log_message(DEBUG, "Canonized relative path '%s' -> '%s' at line %d", path, absolute_path, line_number);
+				log_message(DEBUG, "Canonized relative path '%s' -> '%s' at line %d", path,
+							absolute_path, line_number);
 				result = strdup(absolute_path);
 			} else {
 				/* Use the constructed absolute path anyway */
-				log_message(DEBUG, "Failed to canonicalize constructed path '%s' at line %d: %s (using constructed absolute path)",
+				log_message(DEBUG, "Failed to canonicalize constructed path '%s' at line %d: %s",
 							resolved_path, line_number, strerror(errno));
 				result = strdup(resolved_path);
 			}
@@ -179,7 +181,8 @@ bool config_add_watch(config_t *config, registry_t *registry, watch_t *watch) {
 			for (uint32_t i = 0; i < num_active; i++) {
 				watch_t *existing = registry_get(registry, watchrefs[i]);
 				if (existing && existing->name && watch->name && strcmp(existing->name, watch->name) == 0) {
-					log_message(ERROR, "Duplicate watch name '%s' found in configuration", watch->name);
+					log_message(ERROR, "Duplicate watch name '%s' found in configuration",
+								watch->name);
 					free(watchrefs);
 					return false;
 				}
@@ -210,7 +213,8 @@ bool config_remove_watch(config_t *config, registry_t *registry, watchref_t watc
 
 	watch_t *watch = registry_get(registry, watchref);
 	if (watch) {
-		log_message(DEBUG, "Removing watch '%s' for path '%s' from config", watch->name, watch->path);
+		log_message(DEBUG, "Removing watch '%s' for path '%s' from config",
+					watch->name, watch->path);
 	}
 
 	/* Deactivate in registry */
@@ -514,7 +518,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 
 			if (strcasecmp(key, "file") == 0) {
 				current_watch->target = WATCH_FILE;
-				current_watch->path = canonize_path(value, line_number);
+				current_watch->path = config_canonize(value, line_number);
 				if (current_watch->path == NULL) {
 					config_destroy_watch(current_watch);
 					fclose(fp);
@@ -522,7 +526,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 				}
 			} else if (strcasecmp(key, "directory") == 0) {
 				current_watch->target = WATCH_DIRECTORY;
-				current_watch->path = canonize_path(value, line_number);
+				current_watch->path = config_canonize(value, line_number);
 				if (current_watch->path == NULL) {
 					config_destroy_watch(current_watch);
 					fclose(fp);

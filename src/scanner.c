@@ -158,7 +158,7 @@ bool scanner_scan(const char *dir_path, const watch_t *watch, stats_t *stats) {
 						stats->depth = sub_stats.depth + 1;
 					}
 
-					/* Calculate and update recursive stats by summing up from subdirectories */
+					/* Calculate and update recursive stats by summing up subdirectories */
 					stats->tree_files += sub_stats.tree_files;
 					stats->tree_dirs += sub_stats.tree_dirs;
 					stats->tree_size += sub_stats.tree_size;

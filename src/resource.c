@@ -45,7 +45,7 @@ bool subscription_corrupted(const subscription_t *subscription) {
 }
 
 /* Observer callback for watch deactivation */
-static void resources_handle_deactivation(watchref_t watchref, void *context) {
+static void resources_deactivation(watchref_t watchref, void *context) {
 	resources_t *resources = (resources_t *) context;
 	if (!resources || !resources->buckets) {
 		return;
@@ -123,7 +123,7 @@ static void resources_handle_deactivation(watchref_t watchref, void *context) {
 	}
 
 	if (subscriptions_removed > 0 || profiles_removed > 0 || resources_removed > 0) {
-		log_message(DEBUG, "Resources cleanup complete: removed %d subscriptions, %d profiles, %d resources",
+		log_message(DEBUG, "Resources cleanup: removed %d subscriptions, %d profiles, %d resources",
 					subscriptions_removed, profiles_removed, resources_removed);
 	}
 }
@@ -183,7 +183,7 @@ resources_t *resources_create(size_t bucket_count, registry_t *registry) {
 
 	/* Initialize registry integration */
 	resources->registry = registry;
-	resources->observer.handle_deactivation = resources_handle_deactivation;
+	resources->observer.handle_deactivation = resources_deactivation;
 	resources->observer.context = resources;
 	resources->observer.next = NULL;
 
@@ -616,9 +616,10 @@ subscription_t *resources_subscription(resources_t *resources, registry_t *regis
 				profile->stability->ref_stats = initial_stats;
 				profile->stability->reference_init = true;
 
-				log_message(DEBUG, "Initial baseline established for %s: files=%d, dirs=%d, depth=%d, size=%s", path,
-							profile->stability->stats.tree_files, profile->stability->stats.tree_dirs,
-							profile->stability->stats.max_depth, format_size((ssize_t) profile->stability->stats.tree_size, false));
+				log_message(DEBUG, "Initial baseline established for %s: files=%d, dirs=%d, depth=%d, size=%s",
+							path, profile->stability->stats.tree_files, profile->stability->stats.tree_dirs,
+							profile->stability->stats.max_depth,
+							format_size((ssize_t) profile->stability->stats.tree_size, false));
 			} else {
 				log_message(WARNING, "Failed to gather initial stats for directory: %s", path);
 			}
