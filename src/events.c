@@ -38,11 +38,12 @@ static void events_defer(monitor_t *monitor, resource_t *resource, watchref_t wa
 
 				/* Proactively add watches to subdirectories to detect ongoing activity */
 				if (resource->kind == ENTITY_DIRECTORY && watch->recursive) {
-					log_message(DEBUG, "Proactively scanning %s to add watches for activity window.", resource->path);
+					log_message(DEBUG, "Proactively scanning %s to add watches for activity window.",
+								resource->path);
 					monitor_tree(monitor, resource->path, watchref);
 				}
 			} else {
-				/* Window already active - apply longest time window */
+				/* Window already active, apply longest time window */
 				if (watch->time_window > resource->current_window) {
 					resource->current_window = watch->time_window;
 					log_message(DEBUG, "Extended activity window to %dms for %s (multiple watches)",
@@ -101,22 +102,20 @@ static void events_defer(monitor_t *monitor, resource_t *resource, watchref_t wa
 	resource_unlock(resource);
 }
 
-/* Process the entire deferred queue from a resource */
+/* Process deferred events when activity window expires */
 void events_deferred(monitor_t *monitor, resource_t *resource) {
-	if (!monitor || !resource) return;
-
-	/* This function is called when an activity window expires.
-	 * All events in the deferred queue are from a single burst of activity.
-	 * We coalesce them by clearing the queue and triggering a single stability check.
-	 */
+	if (!monitor || !resource) {
+		log_message(WARNING, "events_deferred called with NULL parameters");
+		return;
+	}
 
 	resource_lock(resource);
 	resource->window_active = false;
 
-	// Check if there are any events to process.
+	/* Check if there are any events to process */
 	if (!resource->deferred_head) {
 		resource_unlock(resource);
-		log_message(DEBUG, "Activity window expired for %s, but deferred queue is empty. Triggering check.", resource->path);
+		log_message(DEBUG, "Time window expired for %s, no events queued", resource->path);
 		profile_t *profile = resource->profiles;
 		if (profile && profile->subscriptions) {
 			stability_ready(monitor, profile->subscriptions, OP_DIR_CONTENT_CHANGED, 0);
@@ -124,10 +123,10 @@ void events_deferred(monitor_t *monitor, resource_t *resource) {
 		return;
 	}
 
-	log_message(DEBUG, "Coalescing %d deferred events into a single stability check for %s.",
-				resource->deferred_count, resource->path);
+	log_message(DEBUG, "Coalescing %d deferred events for %s", resource->deferred_count,
+				resource->path);
 
-	// Clear the entire queue.
+	/* Clear deferred queue to coalesce into single stability check */
 	deferred_t *current = resource->deferred_head;
 	while (current) {
 		deferred_t *next = current->next;
@@ -139,7 +138,7 @@ void events_deferred(monitor_t *monitor, resource_t *resource) {
 	resource->deferred_tail = NULL;
 	resource->deferred_count = 0;
 
-	// Find a subscription on the resource to trigger the check.
+	/* Find a subscription on the resource to trigger the stability check */
 	subscription_t *subscription = NULL;
 	if (resource->profiles) {
 		subscription = resource->profiles->subscriptions;
@@ -148,9 +147,11 @@ void events_deferred(monitor_t *monitor, resource_t *resource) {
 	resource_unlock(resource);
 
 	if (subscription) {
+		log_message(DEBUG, "Triggering stability verification for %s after coalescing %d events",
+					resource->path, resource->deferred_count > 0 ? resource->deferred_count : 0);
 		stability_defer(monitor, subscription);
 	} else {
-		log_message(WARNING, "Could not find a subscription to trigger coalesced stability check for %s", resource->path);
+		log_message(WARNING, "No subscription found for %s", resource->path);
 	}
 }
 

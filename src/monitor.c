@@ -719,7 +719,7 @@ bool monitor_setup(monitor_t *monitor) {
 	return true;
 }
 
-/* Check time windows and trigger processing when gaps detected */
+/* Check time windows and trigger processing when activity gaps are detected */
 static void monitor_window(monitor_t *monitor) {
 	if (!monitor || !monitor->resources || !monitor->resources->buckets) {
 		return;
@@ -728,7 +728,7 @@ static void monitor_window(monitor_t *monitor) {
 	struct timespec current_time;
 	clock_gettime(CLOCK_MONOTONIC, &current_time);
 
-	/* Iterate through all resources to check active windows */
+	/* Iterate through all resources to check active activity windows */
 	for (size_t i = 0; i < monitor->resources->bucket_count; i++) {
 		resource_t *resource = monitor->resources->buckets[i];
 		while (resource) {
@@ -744,7 +744,7 @@ static void monitor_window(monitor_t *monitor) {
 			bool window_expired = timespec_after(&current_time, &window_end);
 
 			if (window_expired) {
-				/* Window expired - check gap threshold based on current active window */
+				/* Window expired, check if activity gap exceeds threshold */
 				long gap_ms = timespec_diff(&current_time, &resource->last_event);
 				long threshold_ms = (resource->current_window * 60) / 100; /* 60% hardcoded */
 
@@ -753,30 +753,32 @@ static void monitor_window(monitor_t *monitor) {
 								gap_ms, threshold_ms, resource->path, resource->current_window);
 
 					resource_lock(resource);
-					bool has_deferred = resource->deferred_count > 0;
+					bool has_deferred_events = resource->deferred_count > 0;
 					resource_unlock(resource);
 
-					if (has_deferred) {
-						/* Process the entire deferred queue */
+					if (has_deferred_events) {
+						/* Process deferred events through stability verification */
 						events_deferred(monitor, resource);
 					} else {
-						/* No new events, but window expired. Trigger stability check directly. */
-						log_message(DEBUG, "No deferred events for %s, triggering stability check directly.", resource->path);
+						/* No deferred events but window expired, trigger direct stability check */
+						log_message(DEBUG, "No deferred events for %s, triggering stability check",
+									resource->path);
 
-						/* Reset window state manually */
+						/* Deactivate window */
 						resource->window_active = false;
 
-						/* Find a subscription to trigger the check. Any subscription on this resource will do. */
+						/* Find subscription to trigger stability verification */
 						profile_t *profile = resource->profiles;
 						if (profile && profile->subscriptions) {
-							/* Use OP_DIR_CONTENT_CHANGED to signify a general check, and 0 debounce */
 							stability_ready(monitor, profile->subscriptions, OP_DIR_CONTENT_CHANGED, 0);
+						} else {
+							log_message(WARNING, "No subscription found for %s", resource->path);
 						}
 					}
 				} else {
-					/* Gap too small - reset window to continue waiting */
+					/* Activity gap too small, reset window start time to last event */
 					resource->window_start = resource->last_event;
-					log_message(DEBUG, "Activity continues, resetting window from last event time for %s (gap: %ldms < %ldms)",
+					log_message(DEBUG, "Activity continues for %s, resetting window (gap: %ldms < %ldms)",
 								resource->path, gap_ms, threshold_ms);
 				}
 			}
