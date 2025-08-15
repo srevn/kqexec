@@ -752,12 +752,31 @@ static void monitor_window(monitor_t *monitor) {
 					log_message(DEBUG, "Activity gap detected (%ldms >= %ldms) for %s (window: %dms)",
 								gap_ms, threshold_ms, resource->path, resource->current_window);
 
-					/* Process the entire deferred queue */
-					events_deferred(monitor, resource);
+					resource_lock(resource);
+					bool has_deferred = resource->deferred_count > 0;
+					resource_unlock(resource);
+
+					if (has_deferred) {
+						/* Process the entire deferred queue */
+						events_deferred(monitor, resource);
+					} else {
+						/* No new events, but window expired. Trigger stability check directly. */
+						log_message(DEBUG, "No deferred events for %s, triggering stability check directly.", resource->path);
+
+						/* Reset window state manually */
+						resource->window_active = false;
+
+						/* Find a subscription to trigger the check. Any subscription on this resource will do. */
+						profile_t *profile = resource->profiles;
+						if (profile && profile->subscriptions) {
+							/* Use OP_DIR_CONTENT_CHANGED to signify a general check, and 0 debounce */
+							stability_ready(monitor, profile->subscriptions, OP_DIR_CONTENT_CHANGED, 0);
+						}
+					}
 				} else {
 					/* Gap too small - reset window to continue waiting */
-					resource->window_start = current_time;
-					log_message(DEBUG, "Activity continues, reset window for %s (gap: %ldms < %ldms)",
+					resource->window_start = resource->last_event;
+					log_message(DEBUG, "Activity continues, resetting window from last event time for %s (gap: %ldms < %ldms)",
 								resource->path, gap_ms, threshold_ms);
 				}
 			}
