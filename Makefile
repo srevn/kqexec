@@ -55,6 +55,7 @@ SRCS = src/main.c \
 	   src/registry.c \
 	   src/resource.c \
 	   src/stability.c \
+	   src/utilities.c \
 	   src/command.c \
 	   src/threads.c \
 	   src/daemon.c \

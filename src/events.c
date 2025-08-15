@@ -15,36 +15,7 @@
 #include "resource.h"
 #include "scanner.h"
 #include "stability.h"
-
-/* Utility functions for timespec operations */
-static void timespec_add(struct timespec *ts, int milliseconds) {
-	ts->tv_sec += milliseconds / 1000;
-	ts->tv_nsec += (milliseconds % 1000) * 1000000;
-
-	/* Normalize nsec */
-	if (ts->tv_nsec >= 1000000000) {
-		ts->tv_sec++;
-		ts->tv_nsec -= 1000000000;
-	}
-}
-
-static bool timespec_after(const struct timespec *a, const struct timespec *b) {
-	if (a->tv_sec > b->tv_sec) return true;
-	if (a->tv_sec == b->tv_sec && a->tv_nsec > b->tv_nsec) return true;
-	return false;
-}
-
-static bool timespec_before(const struct timespec *a, const struct timespec *b) {
-	if (a->tv_sec < b->tv_sec) return true;
-	if (a->tv_sec == b->tv_sec && a->tv_nsec < b->tv_nsec) return true;
-	return false;
-}
-
-static long timespec_diff(const struct timespec *a, const struct timespec *b) {
-	long sec_diff = a->tv_sec - b->tv_sec;
-	long nsec_diff = a->tv_nsec - b->tv_nsec;
-	return sec_diff * 1000 + nsec_diff / 1000000;
-}
+#include "utilities.h"
 
 /* Defer an event on a resource that is currently executing a command */
 static void events_defer(monitor_t *monitor, resource_t *resource, watchref_t watchref, const event_t *event, kind_t kind) {

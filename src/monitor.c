@@ -19,6 +19,7 @@
 #include "queue.h"
 #include "resource.h"
 #include "stability.h"
+#include "utilities.h"
 
 /* Check if a path is a hidden file or directory (starts with dot) */
 static bool path_hidden(const char *path) {
@@ -738,21 +739,13 @@ static void monitor_window(monitor_t *monitor) {
 
 			/* Check if window has expired using current active window duration */
 			struct timespec window_end = resource->window_start;
-			/* Add current_window to window_start */
-			window_end.tv_sec += resource->current_window / 1000;
-			window_end.tv_nsec += (resource->current_window % 1000) * 1000000;
-			if (window_end.tv_nsec >= 1000000000) {
-				window_end.tv_sec++;
-				window_end.tv_nsec -= 1000000000;
-			}
+			timespec_add(&window_end, resource->current_window);
 
-			bool window_expired = (current_time.tv_sec > window_end.tv_sec ||
-								   (current_time.tv_sec == window_end.tv_sec && current_time.tv_nsec > window_end.tv_nsec));
+			bool window_expired = timespec_after(&current_time, &window_end);
 
 			if (window_expired) {
 				/* Window expired - check gap threshold based on current active window */
-				long gap_ms = (current_time.tv_sec - resource->last_event.tv_sec) * 1000 +
-							  (current_time.tv_nsec - resource->last_event.tv_nsec) / 1000000;
+				long gap_ms = timespec_diff(&current_time, &resource->last_event);
 				long threshold_ms = (resource->current_window * 60) / 100; /* 60% hardcoded */
 
 				if (gap_ms >= threshold_ms) {
