@@ -104,10 +104,7 @@ static void events_defer(monitor_t *monitor, resource_t *resource, watchref_t wa
 
 /* Process deferred events when activity window expires */
 void events_deferred(monitor_t *monitor, resource_t *resource) {
-	if (!monitor || !resource) {
-		log_message(WARNING, "events_deferred called with NULL parameters");
-		return;
-	}
+	if (!monitor || !resource) return;
 
 	resource_lock(resource);
 	resource->window_active = false;
@@ -144,14 +141,28 @@ void events_deferred(monitor_t *monitor, resource_t *resource) {
 		subscription = resource->profiles->subscriptions;
 	}
 
+	/* Perform a preliminary scan here to update the stats before calculating the quiet period */
+	if (subscription) {
+		subscription_t *root = stability_root(monitor, subscription);
+		if (root && root->profile && root->profile->stability) {
+			stats_t current_stats;
+			watch_t *watch = registry_get(monitor->registry, root->watchref);
+			if (watch) {
+				scanner_scan(root->resource->path, watch, &current_stats);
+				root->profile->stability->prev_stats = root->profile->stability->stats;
+				root->profile->stability->stats = current_stats;
+				scanner_update(root->profile, root->resource->path);
+			}
+		}
+	}
+
 	resource_unlock(resource);
 
+	/* Trigger the stability check, which will now use the updated stats */
 	if (subscription) {
-		log_message(DEBUG, "Triggering stability verification for %s after coalescing %d events",
-					resource->path, resource->deferred_count > 0 ? resource->deferred_count : 0);
 		stability_defer(monitor, subscription);
 	} else {
-		log_message(WARNING, "No subscription found for %s", resource->path);
+		log_message(WARNING, "No subscription found for %s to trigger stability check.", resource->path);
 	}
 }
 
