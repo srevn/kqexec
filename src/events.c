@@ -28,6 +28,28 @@ static void events_defer(monitor_t *monitor, resource_t *resource, watchref_t wa
 			struct timespec current_time;
 			clock_gettime(CLOCK_MONOTONIC, &current_time);
 
+			if (!resource->window_active) {
+				/* Start new window */
+				resource->window_start = current_time;
+				resource->window_active = true;
+				resource->current_window = watch->time_window;
+				log_message(DEBUG, "Started activity window (%dms) for %s", watch->time_window,
+							resource->path);
+
+				/* Proactively add watches to subdirectories to detect ongoing activity */
+				if (resource->kind == ENTITY_DIRECTORY && watch->recursive) {
+					log_message(DEBUG, "Proactively scanning %s to add watches for activity window.", resource->path);
+					monitor_tree(monitor, resource->path, watchref);
+				}
+			} else {
+				/* Window already active - apply longest time window */
+				if (watch->time_window > resource->current_window) {
+					resource->current_window = watch->time_window;
+					log_message(DEBUG, "Extended activity window to %dms for %s (multiple watches)",
+								watch->time_window, resource->path);
+				}
+			}
+
 			/* Update timers for both windowing and stability */
 			resource->last_event = current_time;
 			if (resource->profiles) {
@@ -38,29 +60,6 @@ static void events_defer(monitor_t *monitor, resource_t *resource, watchref_t wa
 					}
 					profile = profile->next;
 				}
-			}
-
-			/* Check if a stability check is already queued for this resource */
-			bool stability_check_pending = queue_find(monitor->check_queue, resource->path) >= 0;
-
-			if (!resource->window_active) {
-				if (stability_check_pending) {
-					log_message(DEBUG, "events_defer: New event resets stability check timer for %s", resource->path);
-				} else {
-					/* Start new window if not already active and not in stability phase */
-					resource->window_start = current_time;
-					resource->window_active = true;
-					resource->current_window = watch->time_window;
-					log_message(DEBUG, "Started activity window (%dms) for %s", watch->time_window,
-								resource->path);
-				}
-			}
-
-			/* Extend window if a longer one is configured on another watch */
-			if (resource->window_active && watch->time_window > resource->current_window) {
-				resource->current_window = watch->time_window;
-				log_message(DEBUG, "Extended activity window to %dms for %s (multiple watches)",
-							watch->time_window, resource->path);
 			}
 		}
 	}
