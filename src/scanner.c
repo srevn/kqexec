@@ -520,52 +520,57 @@ static void scanner_propagate(monitor_t *monitor, subscription_t *subscription, 
 		}
 
 		/* Update directory stats for parent if this is a content change */
-		if (optype == OP_DIR_CONTENT_CHANGED && parent->resource->kind == ENTITY_DIRECTORY) {
-			/* For recursive watches within the same scope, propagate incremental changes */
-			watch_t *parent_watch = registry_get(monitor->registry, parent->watchref);
-			watch_t *root_scope = registry_get(monitor->registry, root->watchref);
-			bool in_scope = (root_stats && parent_watch && root_scope && parent_watch->recursive &&
-							 parent_watch == root_scope && strlen(path_copy) >= strlen(root_scope->path));
+		if (optype != OP_DIR_CONTENT_CHANGED || parent->resource->kind != ENTITY_DIRECTORY) {
+			last_slash = strrchr(path_copy, '/');
+			continue;
+		}
 
-			if (in_scope && root->profile->stability && parent->profile->stability) {
-				if (parent != root) {
-					/* Calculate incremental changes from root's current update */
-					int root_files = root->profile->stability->stats.tree_files - root->profile->stability->prev_stats.tree_files;
-					int root_dirs = root->profile->stability->stats.tree_dirs - root->profile->stability->prev_stats.tree_dirs;
-					int root_depth = root->profile->stability->stats.max_depth - root->profile->stability->prev_stats.max_depth;
-					ssize_t root_size = (ssize_t) root->profile->stability->stats.tree_size -
-										(ssize_t) root->profile->stability->prev_stats.tree_size;
+		/* For recursive watches within the same scope, propagate incremental changes */
+		watch_t *parent_watch = registry_get(monitor->registry, parent->watchref);
+		watch_t *root_scope = registry_get(monitor->registry, root->watchref);
+		bool in_scope = (root_stats && parent_watch && root_scope && parent_watch->recursive &&
+						 parent_watch == root_scope && strlen(path_copy) >= strlen(root_scope->path));
 
-					/* Apply incremental changes to parent while preserving its absolute state */
+		if (!in_scope || !root->profile->stability || !parent->profile->stability) {
+			/* Fall back to scanning for non-recursive or cross-scope parents */
+			stats_t parent_new_stats;
+			if (parent_watch && scanner_scan(parent->resource->path, parent_watch, &parent_new_stats)) {
+				if (!parent->profile->stability) {
+					parent->profile->stability = stability_create();
+				}
+				if (parent->profile->stability) {
 					parent->profile->stability->prev_stats = parent->profile->stability->stats;
-					parent->profile->stability->stats.tree_files += root_files;
-					parent->profile->stability->stats.tree_dirs += root_dirs;
-					parent->profile->stability->stats.max_depth = (root_depth > 0) ?
-																	  parent->profile->stability->stats.max_depth + root_depth :
-																	  parent->profile->stability->stats.max_depth;
-					parent->profile->stability->stats.tree_size += root_size;
-
-					/* Update cumulative changes */
+					parent->profile->stability->stats = parent_new_stats;
 					scanner_update(parent->profile, parent->resource->path);
 				}
-			} else {
-				/* Fall back to scanning for non-recursive or cross-scope parents */
-				stats_t parent_new_stats;
-				watch_t *parent_watch = registry_get(monitor->registry, parent->watchref);
-				if (parent_watch && scanner_scan(parent->resource->path, parent_watch, &parent_new_stats)) {
-					if (!parent->profile->stability) {
-						parent->profile->stability = stability_create();
-					}
-					if (parent->profile->stability) {
-						parent->profile->stability->prev_stats = parent->profile->stability->stats;
-						parent->profile->stability->stats = parent_new_stats;
-
-						/* Update cumulative changes */
-						scanner_update(parent->profile, parent->resource->path);
-					}
-				}
 			}
+			last_slash = strrchr(path_copy, '/');
+			continue;
 		}
+
+		if (parent == root) {
+			last_slash = strrchr(path_copy, '/');
+			continue;
+		}
+
+		/* Calculate incremental changes from root's current update */
+		int root_files = root->profile->stability->stats.tree_files - root->profile->stability->prev_stats.tree_files;
+		int root_dirs = root->profile->stability->stats.tree_dirs - root->profile->stability->prev_stats.tree_dirs;
+		int root_depth = root->profile->stability->stats.max_depth - root->profile->stability->prev_stats.max_depth;
+		ssize_t root_size = (ssize_t) root->profile->stability->stats.tree_size -
+							(ssize_t) root->profile->stability->prev_stats.tree_size;
+
+		/* Apply incremental changes to parent while preserving its absolute state */
+		parent->profile->stability->prev_stats = parent->profile->stability->stats;
+		parent->profile->stability->stats.tree_files += root_files;
+		parent->profile->stability->stats.tree_dirs += root_dirs;
+		parent->profile->stability->stats.max_depth = (root_depth > 0) ?
+														  parent->profile->stability->stats.max_depth + root_depth :
+														  parent->profile->stability->stats.max_depth;
+		parent->profile->stability->stats.tree_size += root_size;
+
+		/* Update cumulative changes */
+		scanner_update(parent->profile, parent->resource->path);
 
 		/* Move to next parent directory */
 		last_slash = strrchr(path_copy, '/');
@@ -854,61 +859,63 @@ long scanner_delay(monitor_t *monitor, subscription_t *subscription) {
 
 	long required_ms = QUIET_PERIOD_MS;
 
-	/* Use a longer base period for directories */
-	if (subscription->resource->kind == ENTITY_DIRECTORY) {
-		/* Default quiet period */
-		required_ms = DIR_QUIET_PERIOD_MS; /* Default 1000ms */
-
-		/* For active directories, use adaptive complexity measurement */
-		bool active = subscription->profile->scanner ? subscription->profile->scanner->active : false;
-		if (active) {
-			/* Extract complexity indicators */
-			int tree_entries = 0;
-			int tree_depth = 0;
-			if (subscription->profile->stability) {
-				tree_entries = subscription->profile->stability->stats.tree_files + subscription->profile->stability->stats.tree_dirs;
-				tree_depth = subscription->profile->stability->stats.max_depth > 0 ? subscription->profile->stability->stats.max_depth :
-																					 subscription->profile->stability->stats.depth;
-			}
-
-			/* Get recent activity to drive the base period calculation */
-			int recent_files, recent_dirs, recent_depth;
-			ssize_t recent_size;
-			scanner_recent(subscription, &recent_files, &recent_dirs, &recent_depth, &recent_size);
-
-			/* Calculate base period from recent change magnitude */
-			required_ms = scanner_base(recent_files, recent_dirs, recent_depth, recent_size);
-
-			/* Apply stability adjustments (depth, size, stability loss) */
-			required_ms = scanner_adjust(subscription, required_ms);
-
-			/* Apply exponential backoff for consecutive instability */
-			required_ms = scanner_backoff(subscription, required_ms);
-
-			int delta_files = subscription->profile->stability ? subscription->profile->stability->delta_files : 0;
-			int delta_dirs = subscription->profile->stability ? subscription->profile->stability->delta_dirs : 0;
-			int delta_depth = subscription->profile->stability ? subscription->profile->stability->delta_depth : 0;
-			ssize_t delta_size = subscription->profile->stability ? subscription->profile->stability->delta_size : 0;
-
-			log_message(DEBUG, "Quiet for %s: %ld ms (cumulative: %+d files, %+d dirs, %+d depth, %s size) (total: %d entries, %d depth)",
-						subscription->resource->path, required_ms, delta_files, delta_dirs, delta_depth, format_size(delta_size, true),
-						tree_entries, tree_depth);
-		} else {
-			/* For inactive directories, just log the base period with recursive stats */
-			int tree_entries = 0;
-			int tree_depth = 0;
-			int num_subdir = 0;
-			if (subscription->profile->stability) {
-				tree_entries = subscription->profile->stability->stats.tree_files + subscription->profile->stability->stats.tree_dirs;
-				tree_depth = subscription->profile->stability->stats.max_depth > 0 ? subscription->profile->stability->stats.max_depth :
-																					 subscription->profile->stability->stats.depth;
-				num_subdir = subscription->profile->stability->stats.tree_dirs;
-			}
-
-			log_message(DEBUG, "Using base quiet period for %s: %ld ms (recursive entries: %d, depth: %d, subdirs: %d)",
-						subscription->resource->path, required_ms, tree_entries, tree_depth, num_subdir);
-		}
+	/* For non-directories, use default period */
+	if (subscription->resource->kind != ENTITY_DIRECTORY) {
+		return scanner_limit(monitor, subscription, required_ms);
 	}
+
+	/* Use a longer base period for directories */
+	required_ms = DIR_QUIET_PERIOD_MS; /* Default 1000ms */
+
+	/* For inactive directories, just log the base period with recursive stats */
+	bool active = subscription->profile->scanner ? subscription->profile->scanner->active : false;
+	if (!active) {
+		int tree_entries = 0;
+		int tree_depth = 0;
+		int num_subdir = 0;
+		if (subscription->profile->stability) {
+			tree_entries = subscription->profile->stability->stats.tree_files + subscription->profile->stability->stats.tree_dirs;
+			tree_depth = subscription->profile->stability->stats.max_depth > 0 ? subscription->profile->stability->stats.max_depth :
+																				 subscription->profile->stability->stats.depth;
+			num_subdir = subscription->profile->stability->stats.tree_dirs;
+		}
+
+		log_message(DEBUG, "Using base quiet period for %s: %ld ms (recursive entries: %d, depth: %d, subdirs: %d)",
+					subscription->resource->path, required_ms, tree_entries, tree_depth, num_subdir);
+		return scanner_limit(monitor, subscription, required_ms);
+	}
+
+	/* For active directories, use adaptive complexity measurement */
+	int tree_entries = 0;
+	int tree_depth = 0;
+	if (subscription->profile->stability) {
+		tree_entries = subscription->profile->stability->stats.tree_files + subscription->profile->stability->stats.tree_dirs;
+		tree_depth = subscription->profile->stability->stats.max_depth > 0 ? subscription->profile->stability->stats.max_depth :
+																			 subscription->profile->stability->stats.depth;
+	}
+
+	/* Get recent activity to drive the base period calculation */
+	int recent_files, recent_dirs, recent_depth;
+	ssize_t recent_size;
+	scanner_recent(subscription, &recent_files, &recent_dirs, &recent_depth, &recent_size);
+
+	/* Calculate base period from recent change magnitude */
+	required_ms = scanner_base(recent_files, recent_dirs, recent_depth, recent_size);
+
+	/* Apply stability adjustments (depth, size, stability loss) */
+	required_ms = scanner_adjust(subscription, required_ms);
+
+	/* Apply exponential backoff for consecutive instability */
+	required_ms = scanner_backoff(subscription, required_ms);
+
+	int delta_files = subscription->profile->stability ? subscription->profile->stability->delta_files : 0;
+	int delta_dirs = subscription->profile->stability ? subscription->profile->stability->delta_dirs : 0;
+	int delta_depth = subscription->profile->stability ? subscription->profile->stability->delta_depth : 0;
+	ssize_t delta_size = subscription->profile->stability ? subscription->profile->stability->delta_size : 0;
+
+	log_message(DEBUG, "Quiet for %s: %ld ms (cumulative: %+d files, %+d dirs, %+d depth, %s size) (total: %d entries, %d depth)",
+				subscription->resource->path, required_ms, delta_files, delta_dirs, delta_depth, format_size(delta_size, true),
+				tree_entries, tree_depth);
 
 	/* Apply final limits and complexity multiplier */
 	return scanner_limit(monitor, subscription, required_ms);
