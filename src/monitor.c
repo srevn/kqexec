@@ -313,20 +313,20 @@ static bool monitor_kq(monitor_t *monitor, watcher_t *watcher) {
 
 	/* Consolidate event filters from ALL watches on this file descriptor */
 	for (int i = 0; i < monitor->num_watches; i++) {
-		if (monitor->watches[i]->wd == watcher->wd) {
-			shared_count++;
-			watch_t *shared_watch = registry_get(monitor->registry, monitor->watches[i]->watchref);
-			if (shared_watch) {
-				if (shared_watch->filter & EVENT_STRUCTURE) {
-					flags |= NOTE_WRITE | NOTE_EXTEND;
-				}
-				if (shared_watch->filter & EVENT_METADATA) {
-					flags |= NOTE_ATTRIB | NOTE_LINK;
-				}
-				if (shared_watch->filter & EVENT_CONTENT) {
-					flags |= NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE | NOTE_WRITE;
-				}
-			}
+		if (monitor->watches[i]->wd != watcher->wd) continue;
+
+		shared_count++;
+		watch_t *shared_watch = registry_get(monitor->registry, monitor->watches[i]->watchref);
+		if (!shared_watch) continue;
+
+		if (shared_watch->filter & EVENT_STRUCTURE) {
+			flags |= NOTE_WRITE | NOTE_EXTEND;
+		}
+		if (shared_watch->filter & EVENT_METADATA) {
+			flags |= NOTE_ATTRIB | NOTE_LINK;
+		}
+		if (shared_watch->filter & EVENT_CONTENT) {
+			flags |= NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE | NOTE_WRITE;
 		}
 	}
 
@@ -543,22 +543,23 @@ bool monitor_add(monitor_t *monitor, watchref_t watchref, bool skip_pending) {
 
 	/* Get file/directory stats */
 	struct stat info;
-	if (stat(watch->path, &info) == -1) {
+	if (stat(watch->path, &info) != 0) {
+		/* Handle path not existing */
 		if (errno == ENOENT && !skip_pending) {
-			/* Path does not exist - add to pending watches for event-driven monitoring */
+			/* Path does not exist, add to pending watches for event-driven monitoring */
 			log_message(DEBUG, "Path does not exist, adding to pending watches: %s", watch->path);
-			if (pending_add(monitor, watch->path, watchref)) {
-				/* Immediately process the parent to catch existing paths */
-				pending_process(monitor, monitor->pending[monitor->num_pending - 1]->current_parent);
-				return true;
+			if (!pending_add(monitor, watch->path, watchref)) {
+				return false;
 			}
-			return false;
-		} else {
-			/* Other stat error or skipping pending */
-			log_message(WARNING, "Failed to stat %s: %s%s", watch->path, strerror(errno),
-						skip_pending ? " (skipping pending)" : ". It may have been deleted");
-			return skip_pending ? false : true; /* Fail if skipping pending, else not fatal */
+			/* Immediately process the parent to catch existing paths */
+			pending_process(monitor, monitor->pending[monitor->num_pending - 1]->current_parent);
+			return true;
 		}
+
+		/* Other stat error or skipping pending */
+		log_message(WARNING, "Failed to stat %s: %s%s", watch->path, strerror(errno),
+					skip_pending ? " (skipping pending)" : ". It may have been deleted");
+		return skip_pending ? false : true; /* Fail if skipping pending, else not fatal */
 	}
 
 	/* Handle directories (possibly recursively) */
@@ -569,19 +570,19 @@ bool monitor_add(monitor_t *monitor, watchref_t watchref, bool skip_pending) {
 		}
 		return monitor_tree(monitor, watch->path, watchref);
 	}
+
 	/* Handle regular files */
-	else if (S_ISREG(info.st_mode)) {
+	if (S_ISREG(info.st_mode)) {
 		if (watch->target != WATCH_FILE) {
 			log_message(WARNING, "%s is a file but configured as a directory", watch->path);
 			watch->target = WATCH_FILE;
 		}
 		return monitor_path(monitor, watch->path, watchref);
 	}
+
 	/* Unsupported file type */
-	else {
-		log_message(ERROR, "Unsupported file type for %s", watch->path);
-		return false;
-	}
+	log_message(ERROR, "Unsupported file type for %s", watch->path);
+	return false;
 }
 
 /* Create a watch entry for the configuration file */
@@ -659,42 +660,45 @@ bool monitor_setup(monitor_t *monitor) {
 	}
 
 	/* Add config file watch for hot reload by adding it to the config structure */
-	if (monitor->config_path != NULL) {
-		watch_t *config_watch = monitor_config(monitor->config_path);
-		if (config_watch) {
-			/* Add to config structure so it gets managed properly */
-			if (config_add_watch(monitor->config, monitor->registry, config_watch)) {
-				/* Find the watchref that was just added */
-				uint32_t num_active = 0;
-				watchref_t *watchrefs = registry_active(monitor->registry, &num_active);
-				watchref_t config_watchref = WATCH_REF_INVALID;
+	if (!monitor->config_path) return true;
 
-				if (watchrefs && num_active > 0) {
-					/* Find the config watch by looking for the special command */
-					for (uint32_t i = 0; i < num_active; i++) {
-						watch_t *watch = registry_get(monitor->registry, watchrefs[i]);
-						if (watch && watch->command && strcmp(watch->command, "__config_reload__") == 0) {
-							config_watchref = watchrefs[i];
-							break;
-						}
-					}
-					free(watchrefs);
-				}
+	watch_t *config_watch = monitor_config(monitor->config_path);
+	if (!config_watch) return true;
 
-				if (watchref_valid(config_watchref)) {
-					if (!monitor_add(monitor, config_watchref, false)) {
-						log_message(WARNING, "Failed to add config file watch for %s", monitor->config_path);
-						/* Remove from config since it wasn't added to monitor */
-						config_remove_watch(monitor->config, monitor->registry, config_watchref);
-					} else {
-						log_message(DEBUG, "Added config file watch for %s", monitor->config_path);
-					}
-				}
-			} else {
-				log_message(WARNING, "Failed to add config watch to config structure");
-				config_destroy_watch(config_watch);
-			}
+	/* Try to add to config structure */
+	if (!config_add_watch(monitor->config, monitor->registry, config_watch)) {
+		log_message(WARNING, "Failed to add config watch to config structure");
+		config_destroy_watch(config_watch);
+		return true;
+	}
+
+	/* Find the watchref that was just added */
+	uint32_t num_active = 0;
+	watchref_t *active_watchrefs = registry_active(monitor->registry, &num_active);
+	if (!active_watchrefs || num_active == 0) {
+		return true;
+	}
+
+	watchref_t config_watchref = WATCH_REF_INVALID;
+	for (uint32_t i = 0; i < num_active; i++) {
+		watch_t *watch = registry_get(monitor->registry, active_watchrefs[i]);
+		if (!watch || !watch->command || strcmp(watch->command, "__config_reload__") != 0) {
+			continue;
 		}
+		config_watchref = active_watchrefs[i];
+		break;
+	}
+	free(active_watchrefs);
+
+	if (!watchref_valid(config_watchref)) {
+		return true;
+	}
+
+	if (!monitor_add(monitor, config_watchref, false)) {
+		log_message(WARNING, "Failed to add config file watch for %s", monitor->config_path);
+		config_remove_watch(monitor->config, monitor->registry, config_watchref);
+	} else {
+		log_message(DEBUG, "Added config file watch for %s", monitor->config_path);
 	}
 
 	return true;

@@ -434,20 +434,25 @@ static void pending_promote(monitor_t *monitor, pending_t *pending, const char *
 	if (!pending_watch) return;
 
 	/* Check if a watch for this path with the same name already exists */
-	if (monitor->config && matched_path) {
-		/* Check for existing watches with same path and name */
+	if (!monitor->config || !matched_path) {
+		/* Skip check if no config or path */
+	} else {
 		uint32_t num_active = 0;
 		watchref_t *watchrefs = registry_active(monitor->registry, &num_active);
-		if (watchrefs) {
+		if (!watchrefs) {
+			/* No watchrefs to check */
+		} else {
 			for (uint32_t i = 0; i < num_active; i++) {
 				watch_t *watch = registry_get(monitor->registry, watchrefs[i]);
-				if (watch && watch->path && watch->name && strcmp(watch->path, matched_path) == 0 &&
-					strcmp(watch->name, pending_watch->name) == 0) {
-					log_message(INFO, "Watch for %s with name '%s' from pattern %s already exists, skipping promotion",
-								matched_path, watch->name, pending->glob_pattern);
-					free(watchrefs);
-					return;
+				if (!watch || !watch->path || !watch->name ||
+					strcmp(watch->path, matched_path) != 0 ||
+					strcmp(watch->name, pending_watch->name) != 0) {
+					continue;
 				}
+				log_message(INFO, "Watch for %s with name '%s' from pattern %s already exists, skipping promotion",
+							matched_path, watch->name, pending->glob_pattern);
+				free(watchrefs);
+				return;
 			}
 			free(watchrefs);
 		}
@@ -486,27 +491,30 @@ static void pending_promote(monitor_t *monitor, pending_t *pending, const char *
 	/* Find the watch that was just added to the registry */
 	watchref_t resolvedref = WATCH_REF_INVALID;
 	uint32_t num_active = 0;
-	watchref_t *watchrefs = registry_active(monitor->registry, &num_active);
-	if (watchrefs && num_active > 0) {
+	watchref_t *active_refs = registry_active(monitor->registry, &num_active);
+	if (!active_refs || num_active == 0) {
+		/* No active watchrefs found */
+	} else {
 		/* Find the watch with matching path and name */
 		for (uint32_t i = 0; i < num_active; i++) {
-			watch_t *watch = registry_get(monitor->registry, watchrefs[i]);
-			if (watch && watch->path && watch->name && strcmp(watch->path, matched_path) == 0 &&
-				strcmp(watch->name, resolved_watch->name) == 0) {
-				resolvedref = watchrefs[i];
-				break;
+			watch_t *watch = registry_get(monitor->registry, active_refs[i]);
+			if (!watch || !watch->path || !watch->name || strcmp(watch->path, matched_path) != 0 ||
+				strcmp(watch->name, resolved_watch->name) != 0) {
+				continue;
 			}
+			resolvedref = active_refs[i];
+			break;
 		}
-		free(watchrefs);
+		free(active_refs);
 	}
 
-	if (watchref_valid(resolvedref)) {
-		log_message(INFO, "Adding resolved watch to monitoring system: %s (watchref %u:%u)", matched_path,
-					resolvedref.watch_id, resolvedref.generation);
-	} else {
+	if (!watchref_valid(resolvedref)) {
 		log_message(ERROR, "Could not find watchref for newly added watch: %s", matched_path);
 		return;
 	}
+
+	log_message(INFO, "Adding resolved watch to monitoring system: %s (watchref %u:%u)", matched_path,
+				resolvedref.watch_id, resolvedref.generation);
 
 	if (monitor_add(monitor, resolvedref, true)) {
 		log_message(INFO, "Successfully promoted glob match: %s from pattern %s", matched_path,

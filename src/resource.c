@@ -558,64 +558,66 @@ subscription_t *resources_subscription(resources_t *resources, registry_t *regis
 	profile_t *profile = profile_get(resource, watch_hash);
 
 	/* If no matching profile found, create a new one */
-	if (!profile) {
-		/* For directories, pre-scan before creating profile to avoid holding lock during I/O */
-		stats_t initial_stats;
-		bool scan_success = false;
+	if (profile) goto create_subscription;
 
-		if (resource->kind == ENTITY_DIRECTORY && resource->exists) {
-			/* Release resource lock before scanning to prevent blocking other threads */
-			resource_unlock(resource);
+	/* For directories, pre-scan before creating profile to avoid holding lock during I/O */
+	stats_t initial_stats;
+	bool scan_success = false;
+	bool is_directory = (resource->kind == ENTITY_DIRECTORY && resource->exists);
 
-			/* Perform initial scan without holding the lock */
-			scan_success = scanner_scan(path, watch, &initial_stats);
+	if (is_directory) {
+		/* Release resource lock before scanning to prevent blocking other threads */
+		resource_unlock(resource);
 
-			/* Re-acquire lock and check if another thread created the profile */
-			resource_lock(resource);
+		/* Perform initial scan without holding the lock */
+		scan_success = scanner_scan(path, watch, &initial_stats);
 
-			/* Check again if profile was created while we were scanning */
-			profile = profile_get(resource, watch_hash);
-			if (profile) {
-				/* Another thread created the profile - use the existing one and discard our scan */
-				log_message(DEBUG, "Profile created by another thread during scan for %s", path);
-				goto create_subscription;
-			}
-		}
+		/* Re-acquire lock and check if another thread created the profile */
+		resource_lock(resource);
 
-		/* Create the profile now */
-		profile = profile_create(resource, watch_hash);
-		if (!profile) {
-			log_message(ERROR, "Failed to create scanning profile for %s", path);
-			resource_unlock(resource);
-			return NULL;
-		}
-
-		/* Initialize the profile for directories with pre-scanned data */
-		if (resource->kind == ENTITY_DIRECTORY && resource->exists) {
-			/* Create stability state for this configuration */
-			profile->stability = stability_create();
-			if (!profile->stability) {
-				log_message(ERROR, "Failed to create stability state for directory: %s", path);
-				resource_unlock(resource);
-				return NULL;
-			}
-
-			/* Use pre-scanned data if scan was successful */
-			if (scan_success) {
-				profile->stability->stats = initial_stats;
-				profile->stability->prev_stats = initial_stats;
-				profile->stability->ref_stats = initial_stats;
-				profile->stability->reference_init = true;
-
-				log_message(DEBUG, "Initial baseline established for %s: files=%d, dirs=%d, depth=%d, size=%s",
-							path, profile->stability->stats.tree_files, profile->stability->stats.tree_dirs,
-							profile->stability->stats.max_depth,
-							format_size((ssize_t) profile->stability->stats.tree_size, false));
-			} else {
-				log_message(WARNING, "Failed to gather initial stats for directory: %s", path);
-			}
+		/* Check again if profile was created while we were scanning */
+		profile = profile_get(resource, watch_hash);
+		if (profile) {
+			/* Another thread created the profile - use the existing one and discard our scan */
+			log_message(DEBUG, "Profile created by another thread during scan for %s", path);
+			goto create_subscription;
 		}
 	}
+
+	/* Create the profile now */
+	profile = profile_create(resource, watch_hash);
+	if (!profile) {
+		log_message(ERROR, "Failed to create scanning profile for %s", path);
+		resource_unlock(resource);
+		return NULL;
+	}
+
+	/* Initialize the profile for directories with pre-scanned data */
+	if (!is_directory) goto create_subscription;
+
+	/* Create stability state for this configuration */
+	profile->stability = stability_create();
+	if (!profile->stability) {
+		log_message(ERROR, "Failed to create stability state for directory: %s", path);
+		resource_unlock(resource);
+		return NULL;
+	}
+
+	/* Use pre-scanned data if scan was successful */
+	if (!scan_success) {
+		log_message(WARNING, "Failed to gather initial stats for directory: %s", path);
+		goto create_subscription;
+	}
+
+	profile->stability->stats = initial_stats;
+	profile->stability->prev_stats = initial_stats;
+	profile->stability->ref_stats = initial_stats;
+	profile->stability->reference_init = true;
+
+	log_message(DEBUG, "Initial baseline established for %s: files=%d, dirs=%d, depth=%d, size=%s",
+				path, profile->stability->stats.tree_files, profile->stability->stats.tree_dirs,
+				profile->stability->stats.max_depth,
+				format_size((ssize_t) profile->stability->stats.tree_size, false));
 
 create_subscription:
 	/* Create subscription linking this watch to the profile */
