@@ -85,7 +85,7 @@ events = EVENT1,EVENT2        # Comma-separated list of events
 command = command to execute  # Command to run when events occur
 environment = false           # Whether to set KQ_* environment variables (default: false)
 processing_delay = 5000       # Delay in milliseconds before processing events (default: 0)
-batch_timeout = 3000          # Batch events and process them when timeout expires (default: 0)
+batch_timeout = 30000         # Batch events and process them when filesystem activity settles (default: 0)
 complexity = 2.5              # Higher values reduce I/O by waiting longer for stability checks (default: 1.0)
 log_output = false            # Whether to capture and log command output (default: false)
 buffer_output = false         # Whether to buffer log output until command completes (default: false)
@@ -310,11 +310,11 @@ The `complexity` option allows fine-tuning of stability verification for heavy f
 
 #### Delayed Event Processing
 
-The `processing_delay`/`delay` option introduces an initial delay before processing events, useful for scenarios where immediate response isn't required or when batching operations.
+The `processing_delay`/`delay` option introduces an initial fixed delay before processing events, useful for scenarios where immediate response isn't required or for bursts of activity which need batching.
 
 #### Batch Event Processing
 
-The `batch_timeout`/`timeout` option collects multiple rapid events and processes them as a single operation when the timeout window expires. This prevents command flooding during intensive or chaotic filesystem operations like git operations, builds, or large file transfers. When the timeout expires, all queued events are coalesced into a single stability check, significantly reducing resource usage.
+The `batch_timeout`/`timeout` option defers events during active filesystem operations and processes them as a single operation when activity settles. Rather than a simple timer, it uses activity gap detection - the timeout window resets if events continue arriving, only triggering when there's been no activity for 60% of the configured duration. This prevents command flooding during intensive or chaotic operations like git operations, builds, or large file transfers.
 
 #### Buffered Command Output
 
