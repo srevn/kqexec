@@ -36,9 +36,7 @@ static bool path_hidden(const char *path) {
 
 /* Clean up internal resources of a watcher */
 static void watcher_cleanup(monitor_t *monitor, watcher_t *watcher, bool is_stale) {
-	if (watcher == NULL) {
-		return;
-	}
+	if (watcher == NULL) return;
 
 	/* Close the file descriptor if this is the last watcher using it */
 	if (watcher->wd >= 0) {
@@ -69,9 +67,8 @@ static void watcher_cleanup(monitor_t *monitor, watcher_t *watcher, bool is_stal
 
 /* Free resources used by a watcher structure */
 static void watcher_destroy(monitor_t *monitor, watcher_t *watcher, bool is_stale) {
-	if (watcher == NULL) {
-		return;
-	}
+	if (watcher == NULL) return;
+
 	watcher_cleanup(monitor, watcher, is_stale);
 	free(watcher);
 }
@@ -110,9 +107,7 @@ static bool watcher_add(monitor_t *monitor, watcher_t *watcher) {
 
 /* Find a watcher entry by path */
 static watcher_t *watcher_find(monitor_t *monitor, const char *path) {
-	if (!monitor || !path) {
-		return NULL;
-	}
+	if (!monitor || !path) return NULL;
 
 	for (int i = 0; i < monitor->num_watches; i++) {
 		if (monitor->watches[i] && monitor->watches[i]->path) {
@@ -129,9 +124,7 @@ static watcher_t *watcher_find(monitor_t *monitor, const char *path) {
 /* Observer callback for direct watcher cleanup when watches are deactivated */
 static void monitor_deactivation(watchref_t watchref, void *context) {
 	monitor_t *monitor = (monitor_t *) context;
-	if (!monitor || !monitor->watches) {
-		return;
-	}
+	if (!monitor || !monitor->watches) return;
 
 	log_message(DEBUG, "Monitor observer: Watch ID %u (gen %u) deactivated, cleaning up watcher resources",
 				watchref.watch_id, watchref.generation);
@@ -213,7 +206,7 @@ monitor_t *monitor_create(config_t *config, registry_t *registry) {
 	monitor->pending_observer.next = NULL;
 
 	/* Register observers with the registry */
-	if (monitor->registry && !observer_register(monitor->registry, &monitor->monitor_observer)) {
+	if (!observer_register(monitor->registry, &monitor->monitor_observer)) {
 		log_message(ERROR, "Failed to register monitor observer with registry");
 		observer_unregister(monitor->registry, &monitor->pending_observer);
 		resources_destroy(monitor->resources);
@@ -223,7 +216,7 @@ monitor_t *monitor_create(config_t *config, registry_t *registry) {
 		return NULL;
 	}
 
-	if (monitor->registry && !observer_register(monitor->registry, &monitor->pending_observer)) {
+	if (!observer_register(monitor->registry, &monitor->pending_observer)) {
 		log_message(ERROR, "Failed to register pending observer with registry");
 		resources_destroy(monitor->resources);
 		queue_destroy(monitor->check_queue);
@@ -242,9 +235,7 @@ monitor_t *monitor_create(config_t *config, registry_t *registry) {
 
 /* Destroy a monitor and free all associated resources */
 void monitor_destroy(monitor_t *monitor) {
-	if (monitor == NULL) {
-		return;
-	}
+	if (monitor == NULL) return;
 
 	/* Close kqueue */
 	if (monitor->kq >= 0) {
@@ -359,10 +350,7 @@ static bool monitor_kq(monitor_t *monitor, watcher_t *watcher) {
 
 /* Add a watch for a single path, creating or sharing file descriptors as needed */
 bool monitor_path(monitor_t *monitor, const char *path, watchref_t watchref) {
-	if (!monitor || !path || !watchref_valid(watchref)) {
-		log_message(ERROR, "Invalid parameters to monitor_path");
-		return false;
-	}
+	if (!monitor || !path || !watchref_valid(watchref)) return false;
 
 	/* Clean up any stale watchers for this path first */
 	monitor_sync(monitor, path);
@@ -549,10 +537,7 @@ bool monitor_tree(monitor_t *monitor, const char *dir_path, watchref_t watchref)
 /* Add a watch for a file or directory based on a watch reference */
 bool monitor_add(monitor_t *monitor, watchref_t watchref, bool skip_pending) {
 	watch_t *watch = registry_get(monitor->registry, watchref);
-	if (monitor == NULL || !watch || watch->path == NULL) {
-		log_message(ERROR, "Invalid arguments to monitor_add");
-		return false;
-	}
+	if (monitor == NULL || !watch || watch->path == NULL) return false;
 
 	/* Proactively validate the path to handle re-creations before adding watches */
 	monitor_sync(monitor, watch->path);
@@ -643,10 +628,7 @@ static watch_t *monitor_config(const char *config_file_path) {
 
 /* Set up the monitor by creating kqueue and adding watches */
 bool monitor_setup(monitor_t *monitor) {
-	if (monitor == NULL) {
-		log_message(ERROR, "Invalid monitor");
-		return false;
-	}
+	if (monitor == NULL) return false;
 
 	/* Create kqueue */
 	monitor->kq = kqueue();
@@ -720,7 +702,7 @@ bool monitor_setup(monitor_t *monitor) {
 }
 
 /* Check batch timeouts and trigger processing when activity gaps are detected */
-static void monitor_timeouts(monitor_t *monitor) {
+static void monitor_batch(monitor_t *monitor) {
 	if (!monitor || !monitor->resources || !monitor->resources->buckets) return;
 
 	struct timespec current_time;
@@ -859,7 +841,7 @@ bool monitor_poll(monitor_t *monitor) {
 		}
 
 		/* Check batch timeouts only on timeout */
-		monitor_timeouts(monitor);
+		monitor_batch(monitor);
 	}
 
 	/* Check deferred scans */
@@ -876,10 +858,7 @@ bool monitor_poll(monitor_t *monitor) {
 
 /* Start the monitor and enter the main event loop */
 bool monitor_start(monitor_t *monitor) {
-	if (monitor == NULL) {
-		log_message(ERROR, "Invalid monitor");
-		return false;
-	}
+	if (monitor == NULL) return false;
 
 	monitor->running = true;
 
@@ -954,13 +933,11 @@ bool monitor_reload(monitor_t *monitor) {
 	}
 
 	/* Add config file watch to the new config */
-	if (monitor->config_path != NULL) {
-		watch_t *config_watch = monitor_config(monitor->config_path);
-		if (config_watch) {
-			if (!config_add_watch(new_config, new_registry, config_watch)) {
-				log_message(WARNING, "Failed to add config watch to new config structure");
-				config_destroy_watch(config_watch);
-			}
+	watch_t *config_watch = monitor_config(monitor->config_path);
+	if (config_watch) {
+		if (!config_add_watch(new_config, new_registry, config_watch)) {
+			log_message(WARNING, "Failed to add config watch to new config structure");
+			config_destroy_watch(config_watch);
 		}
 	}
 
@@ -1085,9 +1062,7 @@ bool monitor_reload(monitor_t *monitor) {
 
 /* Remove all watches for subdirectories of a given parent path */
 bool monitor_prune(monitor_t *monitor, const char *parent) {
-	if (!monitor || !parent) {
-		return false;
-	}
+	if (!monitor || !parent) return false;
 
 	int parent_len = strlen(parent);
 	bool changed = false;
@@ -1118,9 +1093,7 @@ bool monitor_prune(monitor_t *monitor, const char *parent) {
 
 /* Clean up stale items in the graveyard */
 void monitor_graveyard(monitor_t *monitor) {
-	if (!monitor || (!monitor->graveyard.stale_watches && !monitor->graveyard.old_config)) {
-		return;
-	}
+	if (!monitor || (!monitor->graveyard.stale_watches && !monitor->graveyard.old_config)) return;
 
 	time_t now = time(NULL);
 	if (now >= monitor->graveyard.retirement_time) {
@@ -1147,9 +1120,7 @@ void monitor_graveyard(monitor_t *monitor) {
 
 /* Validate a path and refresh it if it has been recreated */
 bool monitor_sync(monitor_t *monitor, const char *path) {
-	if (!monitor || !path) {
-		return false;
-	}
+	if (!monitor || !path) return false;
 
 	struct stat info;
 	bool path_exists = (stat(path, &info) == 0);
@@ -1165,9 +1136,7 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 		/* Iterate and clean up any remaining watchers for this specific path */
 		for (int i = monitor->num_watches - 1; i >= 0; i--) {
 			watcher_t *watcher = monitor->watches[i];
-			if (!watcher || !watcher->path || strcmp(watcher->path, path) != 0) {
-				continue;
-			}
+			if (!watcher || !watcher->path || strcmp(watcher->path, path) != 0) continue;
 
 			/* Store watch config before watcher becomes invalid */
 			watch_t *target_watch = registry_get(monitor->registry, watcher->watchref);
@@ -1212,9 +1181,7 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 		/* Path exists, check for recreation */
 		for (int i = monitor->num_watches - 1; i >= 0; i--) {
 			watcher_t *watcher = monitor->watches[i];
-			if (!watcher || !watcher->path || strcmp(watcher->path, path) != 0) {
-				continue;
-			}
+			if (!watcher || !watcher->path || strcmp(watcher->path, path) != 0) continue;
 
 			if (watcher->inode != info.st_ino || watcher->device != info.st_dev) {
 				/* Path exists but inode/device changed - it was recreated */
@@ -1271,9 +1238,7 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 
 /* Stop the monitor by setting the running flag to false */
 void monitor_stop(monitor_t *monitor) {
-	if (monitor == NULL) {
-		return;
-	}
+	if (monitor == NULL) return;
 
 	monitor->running = false;
 }

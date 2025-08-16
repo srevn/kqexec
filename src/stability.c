@@ -46,23 +46,17 @@ void stability_destroy(stability_t *stability) {
 
 /* Find the root subscription for a given subscription */
 subscription_t *stability_root(monitor_t *monitor, subscription_t *subscription) {
-	if (!monitor || !subscription || !subscription->resource) {
-		return NULL;
-	}
+	if (!monitor || !subscription || !subscription->resource) return NULL;
 
 	/* Get the watch for this subscription */
 	watch_t *watch = registry_get(monitor->registry, subscription->watchref);
 	if (!watch || !watch->path) {
-		if (subscription->resource) {
-			log_message(WARNING, "Invalid watch info for subscription %s", subscription->resource->path);
-		}
+		log_message(WARNING, "Invalid watch info for subscription %s", subscription->resource->path);
 		return NULL;
 	}
 
 	/* If current subscription is already the root, return it */
-	if (strcmp(subscription->resource->path, watch->path) == 0) {
-		return subscription;
-	}
+	if (strcmp(subscription->resource->path, watch->path) == 0) return subscription;
 
 	/* Otherwise, get the subscription for the watch path */
 	return resources_subscription(monitor->resources, monitor->registry, watch->path, subscription->watchref, ENTITY_DIRECTORY);
@@ -81,9 +75,7 @@ bool stability_ready(monitor_t *monitor, subscription_t *subscription, optype_t 
 	/* Defer all directory-related operations to the stability system */
 	if (subscription->resource->kind == ENTITY_DIRECTORY) {
 		subscription_t *root = stability_root(monitor, subscription);
-		if (!root || !monitor) {
-			return false;
-		}
+		if (!root || !monitor) return false;
 
 		/* Ensure scanner is created for this profile */
 		if (!root->profile->scanner) {
@@ -142,13 +134,13 @@ bool stability_ready(monitor_t *monitor, subscription_t *subscription, optype_t 
 /* Schedule a deferred stability check for a directory */
 void stability_defer(monitor_t *monitor, subscription_t *subscription) {
 	if (!monitor || !subscription) {
-		log_message(WARNING, "Cannot schedule deferred check - invalid monitor or subscription");
+		log_message(WARNING, "Cannot schedule deferred check. invalid monitor or subscription");
 		return;
 	}
 
 	watch_t *subscription_watch = registry_get(monitor->registry, subscription->watchref);
 	if (!subscription->resource || !subscription_watch) {
-		log_message(WARNING, "Cannot schedule deferred check - subscription has null resource or watch");
+		log_message(WARNING, "Cannot schedule deferred check, subscription has null resource or watch");
 		return;
 	}
 
@@ -159,7 +151,7 @@ void stability_defer(monitor_t *monitor, subscription_t *subscription) {
 		if (subscription->resource->kind == ENTITY_DIRECTORY) {
 			root = subscription;
 		} else {
-			log_message(WARNING, "Cannot schedule check for %s: no root subscription found", subscription->resource->path);
+			log_message(WARNING, "Cannot schedule check for %s, no root subscription found", subscription->resource->path);
 			return;
 		}
 	}
@@ -270,10 +262,7 @@ void stability_defer(monitor_t *monitor, subscription_t *subscription) {
 
 /* Get the root subscription for a deferred check */
 subscription_t *stability_entry(monitor_t *monitor, check_t *check) {
-	if (!monitor || !check || check->num_watches <= 0) {
-		log_message(ERROR, "Invalid parameters for stability_entry");
-		return NULL;
-	}
+	if (!monitor || !check || check->num_watches <= 0) return NULL;
 
 	/* Use the first watch reference to find the subscription. All watches for a check share the same path */
 	watchref_t primary_watchref = check->watchrefs[0];
@@ -289,9 +278,7 @@ subscription_t *stability_entry(monitor_t *monitor, check_t *check) {
 
 /* Check if quiet period has elapsed for a directory */
 bool stability_quiet(monitor_t *monitor, subscription_t *root, struct timespec *current_time, long required_quiet) {
-	if (!monitor || !root || !current_time) {
-		return false;
-	}
+	if (!monitor || !root || !current_time) return false;
 
 	struct timespec scanner_time = root->profile->scanner->latest_time;
 	long elapsed_ms;
@@ -313,9 +300,7 @@ bool stability_quiet(monitor_t *monitor, subscription_t *root, struct timespec *
 
 /* Reschedule a deferred check */
 void stability_delay(monitor_t *monitor, check_t *check, subscription_t *root, struct timespec *current_time, long required_quiet) {
-	if (!monitor || !check || !root || !current_time) {
-		return;
-	}
+	if (!monitor || !check || !root || !current_time) return;
 
 	/* Update next check time based on latest activity */
 	struct timespec next_check = root->profile->scanner->latest_time;
@@ -329,9 +314,7 @@ void stability_delay(monitor_t *monitor, check_t *check, subscription_t *root, s
 
 /* Check for new directories in recursive watches */
 bool stability_new(monitor_t *monitor, check_t *check) {
-	if (!monitor || !check) {
-		return false;
-	}
+	if (!monitor || !check) return false;
 
 	int prev_num_watches = monitor->num_watches;
 
@@ -348,9 +331,7 @@ bool stability_new(monitor_t *monitor, check_t *check) {
 
 /* Perform directory stability verification */
 bool stability_scan(monitor_t *monitor, subscription_t *root, const char *path, stats_t *stats_out) {
-	if (!monitor || !root || !path || !stats_out) {
-		return false;
-	}
+	if (!monitor || !root || !path || !stats_out) return false;
 
 	/* Perform recursive stability verification */
 	watch_t *watch = registry_get(monitor->registry, root->watchref);
@@ -409,9 +390,7 @@ failure_t stability_fail(monitor_t *monitor, check_t *check, subscription_t *roo
 
 /* Calculate required stability checks based on complexity */
 int stability_require(subscription_t *root, const stats_t *current_stats) {
-	if (!root || !current_stats) {
-		return 1;
-	}
+	if (!root || !current_stats) return 1;
 
 	int tree_entries = current_stats->tree_files + current_stats->tree_dirs;
 	int tree_depth = current_stats->max_depth > 0 ? current_stats->max_depth : current_stats->depth;
@@ -454,9 +433,7 @@ int stability_require(subscription_t *root, const stats_t *current_stats) {
 
 /* Determine if directory is stable */
 bool stability_stable(subscription_t *root, const stats_t *current_stats, bool scan_completed) {
-	if (!root || !current_stats || !scan_completed) {
-		return false;
-	}
+	if (!root || !current_stats || !scan_completed) return false;
 
 	bool has_prev_stats = (root->profile->stability->prev_stats.local_files > 0 || root->profile->stability->prev_stats.local_dirs > 0);
 	if (has_prev_stats && !scanner_compare(&root->profile->stability->prev_stats, (stats_t *) current_stats)) {
@@ -468,9 +445,7 @@ bool stability_stable(subscription_t *root, const stats_t *current_stats, bool s
 
 /* Reset stability tracking after successful command execution */
 void stability_reset(monitor_t *monitor, subscription_t *root) {
-	if (!monitor || !root) {
-		return;
-	}
+	if (!monitor || !root) return;
 
 	/* Only process directories with stability tracking */
 	if (root->resource->kind != ENTITY_DIRECTORY || !root->profile->stability) {
@@ -535,9 +510,7 @@ void stability_reset(monitor_t *monitor, subscription_t *root) {
 
 /* Execute commands for all watches of a stable directory */
 bool stability_execute(monitor_t *monitor, check_t *check, subscription_t *root, struct timespec *current_time, int *commands_executed) {
-	if (!monitor || !check || !root || !current_time) {
-		return false;
-	}
+	if (!monitor || !check || !root || !current_time) return false;
 
 	int executed_count = 0;
 	const char *active_path = root->profile->scanner->active_path ? root->profile->scanner->active_path : check->path;
@@ -629,9 +602,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 	int commands_executed = 0;
 	bool item_processed = false;
 
-	if (!monitor || !monitor->check_queue) {
-		return;
-	}
+	if (!monitor || !monitor->check_queue) return;
 
 	/* Process one overdue check to maintain main loop responsiveness */
 	if (monitor->check_queue->size > 0) {

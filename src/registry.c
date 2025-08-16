@@ -116,10 +116,7 @@ static bool registry_expand(registry_t *registry) {
 
 /* Add a watch to the registry */
 watchref_t registry_add(registry_t *registry, struct watch *watch) {
-	if (!registry || !watch) {
-		log_message(ERROR, "Invalid parameters to registry_add");
-		return WATCH_REF_INVALID;
-	}
+	if (!registry || !watch) return WATCH_REF_INVALID;
 
 	pthread_rwlock_wrlock(&registry->lock);
 
@@ -151,9 +148,7 @@ watchref_t registry_add(registry_t *registry, struct watch *watch) {
 
 /* Get watch by reference */
 struct watch *registry_get(registry_t *registry, watchref_t watchref) {
-	if (!registry || !watchref_valid(watchref)) {
-		return NULL;
-	}
+	if (!registry || !watchref_valid(watchref)) return NULL;
 
 	pthread_rwlock_rdlock(&registry->lock);
 
@@ -170,9 +165,7 @@ struct watch *registry_get(registry_t *registry, watchref_t watchref) {
 
 /* Check if a watch reference is valid */
 bool registry_valid(registry_t *registry, watchref_t watchref) {
-	if (!registry || !watchref_valid(watchref)) {
-		return false;
-	}
+	if (!registry || !watchref_valid(watchref)) return false;
 
 	pthread_rwlock_rdlock(&registry->lock);
 
@@ -286,9 +279,7 @@ static void registry_notify(registry_t *registry, watchref_t watchref) {
 
 /* Two-phase deletion: deactivate watch and notify observers */
 void registry_deactivate(registry_t *registry, watchref_t watchref) {
-	if (!registry || !watchref_valid(watchref)) {
-		return;
-	}
+	if (!registry || !watchref_valid(watchref)) return;
 
 	pthread_rwlock_wrlock(&registry->lock);
 
@@ -302,7 +293,7 @@ void registry_deactivate(registry_t *registry, watchref_t watchref) {
 
 	watch_t *watch = registry->watches[watchref.watch_id];
 	log_message(DEBUG, "Deactivating watch '%s' (ID: %u, Gen: %u)",
-				watch ? watch->name : "unknown", watchref.watch_id, watchref.generation);
+				watch->name, watchref.watch_id, watchref.generation);
 
 	/* Phase 1: Notify all observers (releases and reacquires lock) */
 	registry_notify(registry, watchref);

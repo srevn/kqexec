@@ -62,24 +62,21 @@ static void *threads_worker(void *arg) {
 
 		pthread_mutex_unlock(&threads->queue_mutex);
 
-		/* Execute the command */
-		if (task) {
-			/* Resolve watch reference at execution time */
-			watch_t *watch = registry_get(task->monitor->registry, task->watchref);
-			if (watch) {
-				log_message(DEBUG, "Executing async command for %s (watch: %s)",
-							task->event->path, watch->name);
-				command_execute(task->monitor, task->watchref, task->event, false);
-			} else {
-				/* Watch was deactivated while task was queued */
-				log_message(DEBUG, "Skipping async command for %s - watch was deactivated",
-							task->event->path);
-			}
-
-			/* Clean up work task */
-			threads_free_event(task->event);
-			free(task);
+		/* Resolve watch reference at execution time */
+		watch_t *watch = registry_get(task->monitor->registry, task->watchref);
+		if (watch) {
+			log_message(DEBUG, "Executing async command for %s (watch: %s)",
+						task->event->path, watch->name);
+			command_execute(task->monitor, task->watchref, task->event, false);
+		} else {
+			/* Watch was deactivated while task was queued */
+			log_message(DEBUG, "Skipping async command for %s - watch was deactivated",
+						task->event->path);
 		}
+
+		/* Clean up work task */
+		threads_free_event(task->event);
+		free(task);
 
 		/* Signal that work is done */
 		pthread_mutex_lock(&threads->queue_mutex);
@@ -204,7 +201,6 @@ bool threads_submit(threads_t *threads, monitor_t *monitor, watchref_t watchref,
 
 	if (!task->event) {
 		log_message(ERROR, "Failed to copy event data for work task");
-		threads_free_event(task->event);
 		free(task);
 		return false;
 	}

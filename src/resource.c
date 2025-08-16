@@ -343,9 +343,7 @@ resource_t *resource_get(resources_t *resources, const char *path, kind_t kind) 
 		if (kind == ENTITY_UNKNOWN && resource->exists) {
 			if (S_ISDIR(info.st_mode)) resource->kind = ENTITY_DIRECTORY;
 			else if (S_ISREG(info.st_mode)) resource->kind = ENTITY_FILE;
-		} else if (kind != ENTITY_UNKNOWN) {
-			resource->kind = kind;
-		}
+		} else if (kind != ENTITY_UNKNOWN) resource->kind = kind;
 
 		/* Initialize timestamps on the resource */
 		clock_gettime(CLOCK_MONOTONIC, &resource->last_time);
@@ -517,9 +515,7 @@ bool profile_unsubscribe(profile_t *profile, watchref_t watchref) {
 
 /* Find a subscription within a profile */
 subscription_t *profile_subscription(profile_t *profile, watchref_t watchref) {
-	if (!profile || !watchref_valid(watchref)) {
-		return NULL;
-	}
+	if (!profile || !watchref_valid(watchref)) return NULL;
 
 	subscription_t *subscription = profile->subscriptions;
 	while (subscription) {
@@ -533,10 +529,7 @@ subscription_t *profile_subscription(profile_t *profile, watchref_t watchref) {
 
 /* Finds or creates a complete subscription chain for a given path and watch */
 subscription_t *resources_subscription(resources_t *resources, registry_t *registry, const char *path, watchref_t watchref, kind_t kind) {
-	if (!resources || !path || !watchref_valid(watchref) || !registry) {
-		log_message(ERROR, "Invalid arguments to resources_subscription");
-		return NULL;
-	}
+	if (!resources || !path || !watchref_valid(watchref) || !registry) return NULL;
 
 	/* Validate watch reference against registry */
 	if (!registry_valid(registry, watchref)) {
@@ -553,9 +546,7 @@ subscription_t *resources_subscription(resources_t *resources, registry_t *regis
 
 	/* Get or create resource (with bucket-level locking) */
 	resource_t *resource = resource_get(resources, path, kind);
-	if (!resource) {
-		return NULL;
-	}
+	if (!resource) return NULL;
 
 	/* Lock resource for profile/subscription operations */
 	resource_lock(resource);

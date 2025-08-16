@@ -143,18 +143,17 @@ void events_deferred(monitor_t *monitor, resource_t *resource) {
 
 	resource_unlock(resource);
 
-	/* Handle files vs directories differently after coalescing */
+	/* Handle files or directories after coalescing */
 	if (subscription) {
 		if (resource->kind == ENTITY_FILE) {
 			/* For files, trigger immediate command execution */
 			event_t synthetic_event = {
 				.path = resource->path,
-				.type = EVENT_CONTENT, /* Files typically have content changes */
+				.type = EVENT_CONTENT,
 				.time = resource->last_time,
 				.wall_time = resource->wall_time,
-				.user_id = getuid()
-			};
-			
+				.user_id = getuid()};
+
 			command_execute(monitor, subscription->watchref, &synthetic_event, true);
 		} else {
 			/* For directories, perform preliminary scan before using stability system */
@@ -179,6 +178,7 @@ void events_deferred(monitor_t *monitor, resource_t *resource) {
 /* Initialize a sync request structure */
 void events_sync_init(sync_t *sync) {
 	if (!sync) return;
+
 	sync->paths = NULL;
 	sync->paths_count = 0;
 	sync->paths_capacity = 0;
@@ -237,15 +237,11 @@ void events_sync_cleanup(sync_t *sync) {
 
 /* Schedule an event for delayed processing */
 void events_schedule(monitor_t *monitor, watchref_t watchref, event_t *event, kind_t kind) {
-	if (!monitor || !event || !watchref_valid(watchref)) {
-		return;
-	}
+	if (!monitor || !event || !watchref_valid(watchref)) return;
 
 	/* Resolve watch to get processing delay */
 	watch_t *watch = registry_get(monitor->registry, watchref);
-	if (!watch || watch->processing_delay <= 0) {
-		return;
-	}
+	if (!watch || watch->processing_delay <= 0) return;
 
 	/* Calculate process time */
 	struct timespec process_time;
@@ -296,15 +292,13 @@ void events_schedule(monitor_t *monitor, watchref_t watchref, event_t *event, ki
 	delayed->kind = kind;
 	delayed->process_time = process_time;
 
-	log_message(DEBUG, "Scheduled delayed event for %s (watch: %s) in %d ms",
-				event->path, watch->name, watch->processing_delay);
+	log_message(DEBUG, "Scheduled delayed event for %s (watch: %s) in %d ms", event->path,
+				watch->name, watch->processing_delay);
 }
 
 /* Process delayed events that are ready */
 void events_delayed(monitor_t *monitor) {
-	if (!monitor || !monitor->delayed_events || monitor->delayed_count == 0) {
-		return;
-	}
+	if (!monitor || !monitor->delayed_events || monitor->delayed_count == 0) return;
 
 	struct timespec current_time;
 	clock_gettime(CLOCK_MONOTONIC, &current_time);
@@ -320,7 +314,7 @@ void events_delayed(monitor_t *monitor) {
 			watch_t *watch = registry_get(monitor->registry, delayed->watchref);
 			if (!watch) {
 				/* Watch was deactivated, skip this event */
-				log_message(DEBUG, "Delayed event for %s skipped - watch was deactivated", delayed->event.path);
+				log_message(DEBUG, "Delayed event for %s skipped, watch was deactivated", delayed->event.path);
 				free(delayed->event.path);
 				processed++;
 				continue;
@@ -401,9 +395,7 @@ static filter_t flags_to_filter(uint32_t flags) {
 
 /* Handle kqueue events */
 bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, struct timespec *time, sync_t *sync) {
-	if (!monitor || !events || event_count <= 0) {
-		return false;
-	}
+	if (!monitor || !events || event_count <= 0) return false;
 
 	/* Process new events */
 	for (int i = 0; i < event_count; i++) {
@@ -431,10 +423,7 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 				event.user_id = getuid();
 
 				watch_t *watch = registry_get(monitor->registry, watcher->watchref);
-				if (!watch) {
-					log_message(WARNING, "Invalid watch reference for watcher at %s", watcher->path);
-					continue;
-				}
+				if (!watch) continue;
 
 				kind_t kind = (watch->target == WATCH_FILE) ? ENTITY_FILE : ENTITY_DIRECTORY;
 
@@ -474,9 +463,7 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 
 /* Calculate timeouts for monitor based on deferred checks and delayed events */
 struct timespec *timeout_calculate(monitor_t *monitor, struct timespec *timeout, struct timespec *current_time) {
-	if (!monitor || !timeout || !current_time) {
-		return NULL;
-	}
+	if (!monitor || !timeout || !current_time) return NULL;
 
 	/* Initialize timeout buffer */
 	memset(timeout, 0, sizeof(*timeout));
@@ -710,10 +697,7 @@ optype_t events_operation(monitor_t *monitor, subscription_t *subscription, filt
 
 /* Process a single filesystem event */
 bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kind_t kind, bool is_deferred) {
-	if (event == NULL || event->path == NULL) {
-		log_message(ERROR, "events_process: Received NULL event or event path");
-		return false;
-	}
+	if (event == NULL || event->path == NULL) return false;
 
 	watch_t *watch = registry_get(monitor->registry, watchref);
 	if (!watch) {
@@ -751,12 +735,8 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 	/* Handle config file events specially for hot reload */
 	if (strcmp(watch->name, "__config_file__") == 0) {
 		log_message(NOTICE, "Configuration changed: %s", event->path);
-		if (monitor != NULL) {
-			monitor->reload = true;
-			log_message(DEBUG, "Configuration reload requested");
-		} else {
-			log_message(WARNING, "Config file changed but no monitor available for reload");
-		}
+		monitor->reload = true;
+		log_message(DEBUG, "Configuration reload requested");
 		return true;
 	}
 
@@ -767,7 +747,7 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 	}
 
 	/* Check if this watch has batch timeout configured */
-	if (watch && watch->batch_timeout > 0 && !is_deferred) {
+	if (watch->batch_timeout > 0 && !is_deferred) {
 		/* Get root resource to ensure consistent gating across watch hierarchies */
 		subscription_t *root = stability_root(monitor, subscription);
 		resource_t *resource = root ? root->resource : subscription->resource;
@@ -793,9 +773,7 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 
 	/* Determine the logical operation */
 	optype_t optype = events_operation(monitor, subscription, event->type);
-	if (optype == OP_NONE) {
-		return false; /* No relevant change detected */
-	}
+	if (optype == OP_NONE) return false; /* No relevant change detected */
 
 	log_message(DEBUG, "Determined operation type %d for %s", optype, subscription->resource->path);
 

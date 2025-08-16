@@ -86,9 +86,7 @@ bool scanner_scan(const char *dir_path, const watch_t *watch, stats_t *stats) {
 	struct stat info;
 	char path[PATH_MAX];
 
-	if (!dir_path || !stats) {
-		return false;
-	}
+	if (!dir_path || !stats) return false;
 
 	/* Extract flags from watch with correct defaults */
 	bool recursive = watch ? watch->recursive : true; /* Default: recursive for directories */
@@ -117,9 +115,7 @@ bool scanner_scan(const char *dir_path, const watch_t *watch, stats_t *stats) {
 		/* Skip hidden files if not requested */
 		if (!hidden) {
 			const char *basename = strrchr(path, '/');
-			if ((basename ? basename + 1 : path)[0] == '.') {
-				continue;
-			}
+			if ((basename ? basename + 1 : path)[0] == '.') continue;
 		}
 
 		if (stat(path, &info) != 0) {
@@ -286,9 +282,7 @@ bool scanner_stable(monitor_t *monitor, const watch_t *watch, const char *dir_pa
 	char path[PATH_MAX];
 	bool is_stable = true; /* Assume stable until proven otherwise */
 
-	if (!dir_path || !stats) {
-		return false;
-	}
+	if (!dir_path || !stats) return false;
 
 	/* Extract flags from watch with sensible defaults */
 	bool recursive = watch ? watch->recursive : true; /* Default: recursive for directories */
@@ -493,9 +487,7 @@ static void scanner_propagate(monitor_t *monitor, subscription_t *subscription, 
 			*last_slash = '\0'; /* Truncate to get parent directory */
 
 			/* Skip if we've reached or gone beyond the root watch path */
-			if (strlen(path_copy) < strlen(root_watch->path)) {
-				break;
-			}
+			if (strlen(path_copy) < strlen(root_watch->path)) break;
 
 			/* Update subscription for this parent directory */
 			subscription_t *parent = resources_subscription(monitor->resources, monitor->registry, path_copy, subscription->watchref, ENTITY_DIRECTORY);
@@ -638,7 +630,7 @@ void scanner_track(monitor_t *monitor, subscription_t *subscription, optype_t op
 	if (subscription->resource->op_time.tv_sec == subscription->resource->last_time.tv_sec &&
 		subscription->resource->op_time.tv_nsec == subscription->resource->last_time.tv_nsec) {
 		log_message(DEBUG, "Skipping duplicate track for %s (optype=%d)",
-					subscription->resource ? subscription->resource->path : "NULL", optype);
+					subscription->resource->path, optype);
 		return;
 	}
 
@@ -987,9 +979,7 @@ bool scanner_ready(monitor_t *monitor, subscription_t *subscription, struct time
 
 /* Find the most recently modified file in a directory */
 char *scanner_newest(const char *dir_path) {
-	if (!dir_path) {
-		return NULL;
-	}
+	if (!dir_path) return NULL;
 
 	DIR *dir = opendir(dir_path);
 	if (!dir) {
@@ -1038,9 +1028,7 @@ char *scanner_newest(const char *dir_path) {
 
 /* Find all files modified since a specific time */
 char *scanner_modified(const char *base_path, time_t since_time, bool recursive, bool basename) {
-	if (!base_path) {
-		return NULL;
-	}
+	if (!base_path) return NULL;
 
 	DIR *dir = opendir(base_path);
 	if (!dir) {
