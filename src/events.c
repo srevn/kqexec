@@ -344,31 +344,96 @@ void events_delayed(monitor_t *monitor) {
 	}
 }
 
-/* Calculate timeout for the next delayed event */
+/* Calculate timeout for delayed events, deferred events, and deferred checks */
 int events_timeout(monitor_t *monitor, struct timespec *current_time) {
-	if (!monitor || !monitor->delayed_events || monitor->delayed_count == 0) {
-		return -1; /* No timeout needed */
-	}
+	if (!monitor || !current_time) return -1; /* No timeout needed */
 
-	struct timespec earliest = monitor->delayed_events[0].process_time;
+	long shortest_timeout_ms = -1; /* No timeout by default */
 
-	/* Find the earliest process time in the queue */
-	for (int i = 1; i < monitor->delayed_count; i++) {
-		delayed_t *delayed = &monitor->delayed_events[i];
-		if (timespec_before(&delayed->process_time, &earliest)) {
-			earliest = delayed->process_time;
+	/* Check delayed events timeout */
+	if (monitor->delayed_events && monitor->delayed_count > 0) {
+		struct timespec earliest = monitor->delayed_events[0].process_time;
+
+		/* Find the earliest process time in the delayed queue */
+		for (int i = 1; i < monitor->delayed_count; i++) {
+			delayed_t *delayed = &monitor->delayed_events[i];
+			if (timespec_before(&delayed->process_time, &earliest)) {
+				earliest = delayed->process_time;
+			}
+		}
+
+		/* Calculate timeout in milliseconds */
+		long delayed_timeout_ms;
+		if (timespec_after(current_time, &earliest)) {
+			delayed_timeout_ms = 1; /* Already overdue */
+		} else {
+			delayed_timeout_ms = timespec_diff(&earliest, current_time);
+		}
+
+		if (delayed_timeout_ms > 0) {
+			shortest_timeout_ms = delayed_timeout_ms;
 		}
 	}
 
-	/* Calculate timeout in milliseconds */
-	long timeout_ms;
-	if (timespec_after(current_time, &earliest)) {
-		timeout_ms = 1; /* Already overdue */
-	} else {
-		timeout_ms = timespec_diff(&earliest, current_time);
+	/* Check batch timeout expiration for deferred events */
+	if (monitor->resources && monitor->resources->buckets) {
+		struct timespec soonest_batch_timeout = {0};
+		bool has_batch_timeouts = false;
+
+		/* Iterate through resources with active batch timeouts */
+		for (size_t i = 0; i < monitor->resources->bucket_count; i++) {
+			resource_t *resource = monitor->resources->buckets[i];
+			while (resource) {
+				if (resource->timeout_active) {
+					/* Calculate when this batch timeout should expire */
+					struct timespec timeout_expires = resource->timeout_start;
+					timespec_add(&timeout_expires, resource->current_timeout);
+
+					if (!has_batch_timeouts || timespec_before(&timeout_expires, &soonest_batch_timeout)) {
+						soonest_batch_timeout = timeout_expires;
+						has_batch_timeouts = true;
+					}
+				}
+				resource = resource->next;
+			}
+		}
+
+		if (has_batch_timeouts) {
+			long batch_timeout_ms;
+			if (timespec_after(current_time, &soonest_batch_timeout)) {
+				batch_timeout_ms = 1; /* Already overdue */
+			} else {
+				batch_timeout_ms = timespec_diff(&soonest_batch_timeout, current_time);
+			}
+
+			if (batch_timeout_ms > 0) {
+				if (shortest_timeout_ms < 0 || batch_timeout_ms < shortest_timeout_ms) {
+					shortest_timeout_ms = batch_timeout_ms;
+				}
+			}
+		}
 	}
 
-	return timeout_ms > 0 ? (int) timeout_ms : 1;
+	/* Check deferred checks timeout from queue */
+	if (monitor->check_queue && monitor->check_queue->size > 0) {
+		/* Get the earliest check time */
+		struct timespec next_check = monitor->check_queue->items[0].next_check;
+
+		long deferred_timeout_ms;
+		if (timespec_after(current_time, &next_check)) {
+			deferred_timeout_ms = 1; /* Already overdue */
+		} else {
+			deferred_timeout_ms = timespec_diff(&next_check, current_time);
+		}
+
+		if (deferred_timeout_ms > 0) {
+			if (shortest_timeout_ms < 0 || deferred_timeout_ms < shortest_timeout_ms) {
+				shortest_timeout_ms = deferred_timeout_ms;
+			}
+		}
+	}
+
+	return shortest_timeout_ms > 0 ? (int) shortest_timeout_ms : -1;
 }
 
 /* Convert kqueue flags to filter type bitmask */
@@ -468,124 +533,23 @@ struct timespec *timeout_calculate(monitor_t *monitor, struct timespec *timeout,
 	/* Initialize timeout buffer */
 	memset(timeout, 0, sizeof(*timeout));
 
-	/* Get timeout for delayed events */
-	int delayed_timeout_ms = events_timeout(monitor, current_time);
+	/* Get unified timeout from events_timeout() */
+	int timeout_ms = events_timeout(monitor, current_time);
 
-	/* Find soonest batch timeout expiration */
-	struct timespec soonest_timeout = {0};
-	bool has_active_timeouts = false;
+	if (timeout_ms > 0) {
+		/* Convert milliseconds to timespec */
+		timeout->tv_sec = timeout_ms / 1000;
+		timeout->tv_nsec = (timeout_ms % 1000) * 1000000;
 
-	/* Iterate through resources with active batch timeouts */
-	if (monitor->resources && monitor->resources->buckets) {
-		for (size_t i = 0; i < monitor->resources->bucket_count; i++) {
-			resource_t *resource = monitor->resources->buckets[i];
-			while (resource) {
-				if (resource->timeout_active) {
-					/* Calculate when this batch timeout should be checked */
-					struct timespec timeout_expires = resource->timeout_start;
-					timespec_add(&timeout_expires, resource->current_timeout);
-
-					if (!has_active_timeouts || timespec_before(&timeout_expires, &soonest_timeout)) {
-						soonest_timeout = timeout_expires;
-						has_active_timeouts = true;
-					}
-				}
-				resource = resource->next;
-			}
-		}
-	}
-
-	/* Check if we have any pending deferred checks */
-	if (monitor->check_queue && monitor->check_queue->size > 0) {
-		/* Debug output for the queue status */
-		if (monitor->check_queue->items[0].path) {
-			log_message(DEBUG, "Deferred queue status: %d entries, next check for path %s",
-						monitor->check_queue->size, monitor->check_queue->items[0].path);
+		/* Ensure minimum sensible timeout values */
+		if (timeout->tv_sec == 0 && timeout->tv_nsec < 10000000) {
+			timeout->tv_nsec = 10000000; /* 10ms minimum */
 		}
 
-		/* Get the earliest check time */
-		struct timespec next_check = monitor->check_queue->items[0].next_check;
-
-		/* Calculate relative timeout */
-		if (timespec_before(current_time, &next_check)) {
-			/* Time until next check */
-			long timeout_ms = timespec_diff(&next_check, current_time);
-			timeout->tv_sec = timeout_ms / 1000;
-			timeout->tv_nsec = (timeout_ms % 1000) * 1000000;
-
-			/* Ensure sane values */
-			if (timeout->tv_sec < 0) {
-				timeout->tv_sec = 0;
-				timeout->tv_nsec = 50000000; /* 50ms minimum */
-			} else if (timeout->tv_sec == 0 && timeout->tv_nsec < 10000000) {
-				timeout->tv_nsec = 50000000; /* 50ms minimum */
-			}
-
-			/* If we have both deferred checks and delayed events, use the shorter timeout */
-			if (delayed_timeout_ms >= 0) {
-				struct timespec zero_time = {0, 0};
-				long current_timeout_ms = timespec_diff(timeout, &zero_time);
-				if (delayed_timeout_ms < current_timeout_ms) {
-					timeout->tv_sec = delayed_timeout_ms / 1000;
-					timeout->tv_nsec = (delayed_timeout_ms % 1000) * 1000000;
-					log_message(DEBUG, "Using shorter delayed event timeout: %d ms", delayed_timeout_ms);
-				}
-			}
-
-			/* Wake exactly when the next batch timeout needs checking */
-			if (has_active_timeouts) {
-				struct timespec batch_timeout;
-				/* Convert absolute time to relative timeout */
-				if (timespec_after(&soonest_timeout, current_time)) {
-					long timeout_ms = timespec_diff(&soonest_timeout, current_time);
-					batch_timeout.tv_sec = timeout_ms / 1000;
-					batch_timeout.tv_nsec = (timeout_ms % 1000) * 1000000;
-				} else {
-					/* Time already passed, use minimal timeout */
-					batch_timeout.tv_sec = 0;
-					batch_timeout.tv_nsec = 10000000; /* 10ms */
-				}
-
-				if (timespec_before(&batch_timeout, timeout)) {
-					*timeout = batch_timeout;
-					log_message(DEBUG, "Using batch timeout wake-up: %ld.%09lds",
-								timeout->tv_sec, timeout->tv_nsec);
-				}
-			}
-
-			return timeout;
-		} else {
-			/* Check time already passed, use minimal timeout */
-			timeout->tv_sec = 0;
-			timeout->tv_nsec = 10000000; /* 10ms */
-			log_message(DEBUG, "Deferred check overdue, using minimal timeout");
-			return timeout;
-		}
-	} else if (delayed_timeout_ms >= 0 || has_active_timeouts) {
-		/* No deferred checks, but we have delayed events or batch timeouts */
-		bool have_timeout = false;
-
-		if (delayed_timeout_ms >= 0) {
-			timeout->tv_sec = delayed_timeout_ms / 1000;
-			timeout->tv_nsec = (delayed_timeout_ms % 1000) * 1000000;
-			have_timeout = true;
-			log_message(DEBUG, "No deferred checks, timeout for delayed events: %d ms", delayed_timeout_ms);
-		}
-
-		/* Check if batch timeout expiration is sooner */
-		if (has_active_timeouts && (!have_timeout || timespec_before(&soonest_timeout, timeout))) {
-			/* Convert absolute time to relative timeout */
-			if (timespec_after(&soonest_timeout, current_time)) {
-				long timeout_ms = timespec_diff(&soonest_timeout, current_time);
-				timeout->tv_sec = timeout_ms / 1000;
-				timeout->tv_nsec = (timeout_ms % 1000) * 1000000;
-			} else {
-				/* Time already passed, use minimal timeout */
-				timeout->tv_sec = 0;
-				timeout->tv_nsec = 10000000; /* 10ms */
-			}
-			log_message(DEBUG, "Using batch timeout wake-up (no deferred checks): %ld.%09lds",
-						timeout->tv_sec, timeout->tv_nsec);
+		/* Debug output for the queue status if we have deferred checks */
+		if (monitor->check_queue && monitor->check_queue->size > 0 && monitor->check_queue->items[0].path) {
+			log_message(DEBUG, "Deferred queue status: %d entries, next check for path %s, timeout: %d ms",
+						monitor->check_queue->size, monitor->check_queue->items[0].path, timeout_ms);
 		}
 
 		return timeout;
