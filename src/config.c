@@ -270,8 +270,8 @@ watch_t *config_clone_watch(const watch_t *source) {
 	clone->hidden = source->hidden;
 	clone->environment = source->environment;
 	clone->complexity = source->complexity;
+	clone->batch_timeout = source->batch_timeout;
 	clone->processing_delay = source->processing_delay;
-	clone->time_window = source->time_window;
 	clone->is_dynamic = source->is_dynamic;
 
 	/* Copy exclude patterns array */
@@ -478,10 +478,10 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 			current_watch->buffer_output = false; /* Default to not buffering output */
 			current_watch->recursive = true;	  /* Default to recursive for directories */
 			current_watch->hidden = false;		  /* Default to not including hidden files */
-			current_watch->environment = false;	  /* Default to not injecting environment variables */
-			current_watch->processing_delay = 0;  /* Default to no delay */
-			current_watch->time_window = 0;		  /* Default to disabled */
 			current_watch->complexity = 1.0;	  /* Default complexity multiplier */
+			current_watch->environment = false;	  /* Default to not injecting environment variables */
+			current_watch->batch_timeout = 0;	  /* Default to disabled */
+			current_watch->processing_delay = 0;  /* Default to no delay */
 
 			/* Initialize exclude patterns */
 			current_watch->exclude = NULL;
@@ -592,6 +592,17 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 					fclose(fp);
 					return false;
 				}
+			} else if (strcasecmp(key, "complexity") == 0) {
+				double complexity_value = atof(value);
+				if (complexity_value <= 0) {
+					log_message(ERROR, "Invalid %s value at line %d: %s (must be > 0)", key,
+								line_number, value);
+					config_destroy_watch(current_watch);
+					fclose(fp);
+					return false;
+				} else {
+					current_watch->complexity = complexity_value;
+				}
 			} else if (strcasecmp(key, "environment") == 0 || strcasecmp(key, "env_vars") == 0) {
 				if (strcasecmp(value, "true") == 0 || strcmp(value, "1") == 0) {
 					current_watch->environment = true;
@@ -604,16 +615,16 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 					fclose(fp);
 					return false;
 				}
-			} else if (strcasecmp(key, "complexity") == 0) {
-				double complexity_value = atof(value);
-				if (complexity_value <= 0) {
-					log_message(ERROR, "Invalid %s value at line %d: %s (must be > 0)", key,
+			} else if (strcasecmp(key, "batch_timeout") == 0 || strcasecmp(key, "timeout") == 0) {
+				int batch_timeout_value = atoi(value);
+				if (batch_timeout_value < 0) {
+					log_message(ERROR, "Invalid %s value at line %d: %s (must be >= 0)", key,
 								line_number, value);
 					config_destroy_watch(current_watch);
 					fclose(fp);
 					return false;
 				} else {
-					current_watch->complexity = complexity_value;
+					current_watch->batch_timeout = batch_timeout_value;
 				}
 			} else if (strcasecmp(key, "processing_delay") == 0 || strcasecmp(key, "delay") == 0) {
 				int processing_delay_value = atoi(value);
@@ -625,17 +636,6 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 					return false;
 				} else {
 					current_watch->processing_delay = processing_delay_value;
-				}
-			} else if (strcasecmp(key, "time_window") == 0 || strcasecmp(key, "window") == 0) {
-				int time_window_value = atoi(value);
-				if (time_window_value < 0) {
-					log_message(ERROR, "Invalid %s value at line %d: %s (must be >= 0)", key,
-								line_number, value);
-					config_destroy_watch(current_watch);
-					fclose(fp);
-					return false;
-				} else {
-					current_watch->time_window = time_window_value;
 				}
 			} else if (strcasecmp(key, "exclude") == 0 || strcasecmp(key, "ignore") == 0) {
 				char *patterns = strdup(value);

@@ -44,8 +44,8 @@ typedef struct watch {
 	bool environment;                      /* Whether to inject KQ_* environment variables */
 	double complexity;                     /* Multiplier for quiet period calculation (default: 1.0) */
 	
-	/* Delays and time windows */
-	int time_window;                       /* Activity window duration in ms */
+	/* Delays and batch timeouts */
+	int batch_timeout;                     /* Event batching timeout duration in ms */
 	int processing_delay;                  /* Delay before processing events */
 	
 	/* Exlude patterns */

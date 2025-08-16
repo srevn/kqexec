@@ -21,37 +21,37 @@
 static void events_defer(monitor_t *monitor, resource_t *resource, watchref_t watchref, const event_t *event, kind_t kind) {
 	if (!resource || !event) return;
 
-	/* Manage window state if time_window feature is active */
+	/* Manage window state if batch_timeout feature is active */
 	if (monitor && monitor->registry) {
 		watch_t *watch = registry_get(monitor->registry, watchref);
-		if (watch && watch->time_window > 0) {
+		if (watch && watch->batch_timeout > 0) {
 			struct timespec current_time;
 			clock_gettime(CLOCK_MONOTONIC, &current_time);
 
-			if (!resource->window_active) {
-				/* Start new window */
-				resource->window_start = current_time;
-				resource->window_active = true;
-				resource->current_window = watch->time_window;
-				log_message(DEBUG, "Started activity window (%dms) for %s", watch->time_window,
+			if (!resource->timeout_active) {
+				/* Start new batch timeout */
+				resource->timeout_start = current_time;
+				resource->timeout_active = true;
+				resource->current_timeout = watch->batch_timeout;
+				log_message(DEBUG, "Started event batching (%dms timeout) for %s", watch->batch_timeout,
 							resource->path);
 
 				/* Proactively add watches to subdirectories to detect ongoing activity */
 				if (resource->kind == ENTITY_DIRECTORY && watch->recursive) {
-					log_message(DEBUG, "Proactively scanning %s to add watches for activity window.",
+					log_message(DEBUG, "Proactively scanning %s to add watches for batch timeout.",
 								resource->path);
 					monitor_tree(monitor, resource->path, watchref);
 				}
 			} else {
-				/* Window already active, apply longest time window */
-				if (watch->time_window > resource->current_window) {
-					resource->current_window = watch->time_window;
-					log_message(DEBUG, "Extended activity window to %dms for %s (multiple watches)",
-								watch->time_window, resource->path);
+				/* Batch timeout already active, apply longest timeout */
+				if (watch->batch_timeout > resource->current_timeout) {
+					resource->current_timeout = watch->batch_timeout;
+					log_message(DEBUG, "Extended batch timeout to %dms for %s (multiple watches)",
+								watch->batch_timeout, resource->path);
 				}
 			}
 
-			/* Update timers for both windowing and stability */
+			/* Update timers for both batch timeout and stability */
 			resource->last_event = current_time;
 			if (resource->profiles) {
 				profile_t *profile = resource->profiles;
@@ -102,17 +102,17 @@ static void events_defer(monitor_t *monitor, resource_t *resource, watchref_t wa
 	resource_unlock(resource);
 }
 
-/* Process deferred events when activity window expires */
+/* Process deferred events when batch timeout expires */
 void events_deferred(monitor_t *monitor, resource_t *resource) {
 	if (!monitor || !resource) return;
 
 	resource_lock(resource);
-	resource->window_active = false;
+	resource->timeout_active = false;
 
 	/* Check if there are any events to process */
 	if (!resource->deferred_head) {
 		resource_unlock(resource);
-		log_message(DEBUG, "Time window expired for %s, no events queued", resource->path);
+		log_message(DEBUG, "Batch timeout expired for %s, no events queued", resource->path);
 		profile_t *profile = resource->profiles;
 		if (profile && profile->subscriptions) {
 			stability_ready(monitor, profile->subscriptions, OP_DIR_CONTENT_CHANGED, 0);
@@ -484,23 +484,23 @@ struct timespec *timeout_calculate(monitor_t *monitor, struct timespec *timeout,
 	/* Get timeout for delayed events */
 	int delayed_timeout_ms = events_timeout(monitor, current_time);
 
-	/* Find soonest activity window expiration */
-	struct timespec soonest_window = {0};
-	bool has_active_windows = false;
+	/* Find soonest batch timeout expiration */
+	struct timespec soonest_timeout = {0};
+	bool has_active_timeouts = false;
 
-	/* Iterate through resources with window_active = true */
+	/* Iterate through resources with active batch timeouts */
 	if (monitor->resources && monitor->resources->buckets) {
 		for (size_t i = 0; i < monitor->resources->bucket_count; i++) {
 			resource_t *resource = monitor->resources->buckets[i];
 			while (resource) {
-				if (resource->window_active) {
-					/* Calculate when this window should be checked using current active window */
-					struct timespec window_expires = resource->window_start;
-					timespec_add(&window_expires, resource->current_window);
+				if (resource->timeout_active) {
+					/* Calculate when this batch timeout should be checked */
+					struct timespec timeout_expires = resource->timeout_start;
+					timespec_add(&timeout_expires, resource->current_timeout);
 
-					if (!has_active_windows || timespec_before(&window_expires, &soonest_window)) {
-						soonest_window = window_expires;
-						has_active_windows = true;
+					if (!has_active_timeouts || timespec_before(&timeout_expires, &soonest_timeout)) {
+						soonest_timeout = timeout_expires;
+						has_active_timeouts = true;
 					}
 				}
 				resource = resource->next;
@@ -545,23 +545,23 @@ struct timespec *timeout_calculate(monitor_t *monitor, struct timespec *timeout,
 				}
 			}
 
-			/* Wake exactly when the next activity window needs checking */
-			if (has_active_windows) {
-				struct timespec window_timeout;
+			/* Wake exactly when the next batch timeout needs checking */
+			if (has_active_timeouts) {
+				struct timespec batch_timeout;
 				/* Convert absolute time to relative timeout */
-				if (timespec_after(&soonest_window, current_time)) {
-					long window_timeout_ms = timespec_diff(&soonest_window, current_time);
-					window_timeout.tv_sec = window_timeout_ms / 1000;
-					window_timeout.tv_nsec = (window_timeout_ms % 1000) * 1000000;
+				if (timespec_after(&soonest_timeout, current_time)) {
+					long timeout_ms = timespec_diff(&soonest_timeout, current_time);
+					batch_timeout.tv_sec = timeout_ms / 1000;
+					batch_timeout.tv_nsec = (timeout_ms % 1000) * 1000000;
 				} else {
 					/* Time already passed, use minimal timeout */
-					window_timeout.tv_sec = 0;
-					window_timeout.tv_nsec = 10000000; /* 10ms */
+					batch_timeout.tv_sec = 0;
+					batch_timeout.tv_nsec = 10000000; /* 10ms */
 				}
 
-				if (timespec_before(&window_timeout, timeout)) {
-					*timeout = window_timeout;
-					log_message(DEBUG, "Using activity window timeout: %ld.%09lds",
+				if (timespec_before(&batch_timeout, timeout)) {
+					*timeout = batch_timeout;
+					log_message(DEBUG, "Using batch timeout wake-up: %ld.%09lds",
 								timeout->tv_sec, timeout->tv_nsec);
 				}
 			}
@@ -574,8 +574,8 @@ struct timespec *timeout_calculate(monitor_t *monitor, struct timespec *timeout,
 			log_message(DEBUG, "Deferred check overdue, using minimal timeout");
 			return timeout;
 		}
-	} else if (delayed_timeout_ms >= 0 || has_active_windows) {
-		/* No deferred checks, but we have delayed events or activity windows */
+	} else if (delayed_timeout_ms >= 0 || has_active_timeouts) {
+		/* No deferred checks, but we have delayed events or batch timeouts */
 		bool have_timeout = false;
 
 		if (delayed_timeout_ms >= 0) {
@@ -585,25 +585,25 @@ struct timespec *timeout_calculate(monitor_t *monitor, struct timespec *timeout,
 			log_message(DEBUG, "No deferred checks, timeout for delayed events: %d ms", delayed_timeout_ms);
 		}
 
-		/* Check if activity window timeout is sooner */
-		if (has_active_windows && (!have_timeout || timespec_before(&soonest_window, timeout))) {
+		/* Check if batch timeout expiration is sooner */
+		if (has_active_timeouts && (!have_timeout || timespec_before(&soonest_timeout, timeout))) {
 			/* Convert absolute time to relative timeout */
-			if (timespec_after(&soonest_window, current_time)) {
-				long window_timeout_ms = timespec_diff(&soonest_window, current_time);
-				timeout->tv_sec = window_timeout_ms / 1000;
-				timeout->tv_nsec = (window_timeout_ms % 1000) * 1000000;
+			if (timespec_after(&soonest_timeout, current_time)) {
+				long timeout_ms = timespec_diff(&soonest_timeout, current_time);
+				timeout->tv_sec = timeout_ms / 1000;
+				timeout->tv_nsec = (timeout_ms % 1000) * 1000000;
 			} else {
 				/* Time already passed, use minimal timeout */
 				timeout->tv_sec = 0;
 				timeout->tv_nsec = 10000000; /* 10ms */
 			}
-			log_message(DEBUG, "Using activity window timeout (no deferred checks): %ld.%09lds",
+			log_message(DEBUG, "Using batch timeout wake-up (no deferred checks): %ld.%09lds",
 						timeout->tv_sec, timeout->tv_nsec);
 		}
 
 		return timeout;
 	} else {
-		log_message(DEBUG, "No pending directory activity, delayed events, or activity windows, waiting indefinitely");
+		log_message(DEBUG, "No pending directory activity, delayed events, or batch timeouts, waiting indefinitely");
 		return NULL;
 	}
 }
@@ -766,8 +766,8 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 		return false; /* Error already logged by resources_subscription */
 	}
 
-	/* Check if this watch has time window configured */
-	if (watch && watch->time_window > 0 && !is_deferred) {
+	/* Check if this watch has batch timeout configured */
+	if (watch && watch->batch_timeout > 0 && !is_deferred) {
 		/* Get root resource to ensure consistent gating across watch hierarchies */
 		subscription_t *root = stability_root(monitor, subscription);
 		resource_t *resource = root ? root->resource : subscription->resource;

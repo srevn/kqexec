@@ -621,7 +621,7 @@ static watch_t *monitor_config(const char *config_file_path) {
 	config_watch->hidden = false;
 	config_watch->environment = false;
 	config_watch->complexity = 1.0;
-	config_watch->time_window = 0;
+	config_watch->batch_timeout = 0;
 	config_watch->processing_delay = 100;
 
 	/* Initialize dynamic tracking fields (config watches are not dynamic) */
@@ -719,38 +719,36 @@ bool monitor_setup(monitor_t *monitor) {
 	return true;
 }
 
-/* Check time windows and trigger processing when activity gaps are detected */
-static void monitor_window(monitor_t *monitor) {
-	if (!monitor || !monitor->resources || !monitor->resources->buckets) {
-		return;
-	}
+/* Check batch timeouts and trigger processing when activity gaps are detected */
+static void monitor_timeouts(monitor_t *monitor) {
+	if (!monitor || !monitor->resources || !monitor->resources->buckets) return;
 
 	struct timespec current_time;
 	clock_gettime(CLOCK_MONOTONIC, &current_time);
 
-	/* Iterate through all resources to check active activity windows */
+	/* Iterate through all resources to check active batch timeouts */
 	for (size_t i = 0; i < monitor->resources->bucket_count; i++) {
 		resource_t *resource = monitor->resources->buckets[i];
 		while (resource) {
-			if (!resource->window_active) {
+			if (!resource->timeout_active) {
 				resource = resource->next;
 				continue;
 			}
 
-			/* Check if window has expired using current active window duration */
-			struct timespec window_end = resource->window_start;
-			timespec_add(&window_end, resource->current_window);
+			/* Check if batch timeout has expired using current active duration */
+			struct timespec timeout_end = resource->timeout_start;
+			timespec_add(&timeout_end, resource->current_timeout);
 
-			bool window_expired = timespec_after(&current_time, &window_end);
+			bool timeout_expired = timespec_after(&current_time, &timeout_end);
 
-			if (window_expired) {
-				/* Window expired, check if activity gap exceeds threshold */
+			if (timeout_expired) {
+				/* Timeout window expired, check if activity gap exceeds threshold */
 				long gap_ms = timespec_diff(&current_time, &resource->last_event);
-				long threshold_ms = (resource->current_window * 60) / 100; /* 60% hardcoded */
+				long threshold_ms = (resource->current_timeout * 60) / 100; /* 60% hardcoded */
 
 				if (gap_ms >= threshold_ms) {
-					log_message(DEBUG, "Activity gap detected (%ldms >= %ldms) for %s (window: %dms)",
-								gap_ms, threshold_ms, resource->path, resource->current_window);
+					log_message(DEBUG, "Activity gap detected (%ldms >= %ldms) for %s (timeout: %dms)",
+								gap_ms, threshold_ms, resource->path, resource->current_timeout);
 
 					resource_lock(resource);
 					bool has_deferred_events = resource->deferred_count > 0;
@@ -760,12 +758,12 @@ static void monitor_window(monitor_t *monitor) {
 						/* Process deferred events through stability verification */
 						events_deferred(monitor, resource);
 					} else {
-						/* No deferred events but window expired, trigger direct stability check */
+						/* No deferred events but batch timeout expired, trigger direct stability check */
 						log_message(DEBUG, "No deferred events for %s, triggering stability check",
 									resource->path);
 
-						/* Deactivate window */
-						resource->window_active = false;
+						/* Deactivate batch timeout */
+						resource->timeout_active = false;
 
 						/* Find subscription to trigger stability verification */
 						profile_t *profile = resource->profiles;
@@ -776,9 +774,9 @@ static void monitor_window(monitor_t *monitor) {
 						}
 					}
 				} else {
-					/* Activity gap too small, reset window start time to last event */
-					resource->window_start = resource->last_event;
-					log_message(DEBUG, "Activity continues for %s, resetting window (gap: %ldms < %ldms)",
+					/* Activity gap too small, reset batch timeout start time to last event */
+					resource->timeout_start = resource->last_event;
+					log_message(DEBUG, "Activity continues for %s, resetting batch timeout (gap: %ldms < %ldms)",
 								resource->path, gap_ms, threshold_ms);
 				}
 			}
@@ -860,8 +858,8 @@ bool monitor_poll(monitor_t *monitor) {
 			log_message(DEBUG, "Timeout occurred, checking deferred scans");
 		}
 
-		/* Check activity windows only on timeout */
-		monitor_window(monitor);
+		/* Check batch timeouts only on timeout */
+		monitor_timeouts(monitor);
 	}
 
 	/* Check deferred scans */

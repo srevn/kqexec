@@ -59,10 +59,10 @@ typedef struct resource {
 	struct deferred *deferred_tail;        /* Tail of the deferred event queue */
 	int deferred_count;                    /* Number of events in the queue */
 	
-	/* Activity window detection */
-	bool window_active;                    /* Whether we're in an activity window */
-	int current_window;                    /* Active window duration */
-	struct timespec window_start;          /* When current activity window began */
+	/* Batch timeout detection */
+	bool timeout_active;                   /* Whether we're in a batch timeout */
+	int current_timeout;                   /* Active batch timeout duration */
+	struct timespec timeout_start;         /* When current batch timeout began */
 	struct timespec last_event;            /* Timestamp of most recent event */
 	
 	struct resource *next;                 /* Next resource in the hash bucket */
