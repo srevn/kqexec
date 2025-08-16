@@ -12,9 +12,7 @@
 /* Observer callback for watch deactivation */
 static void queue_deactivation(watchref_t watchref, void *context) {
 	queue_t *queue = (queue_t *) context;
-	if (!queue || !queue->items) {
-		return;
-	}
+	if (!queue || !queue->items) return;
 
 	log_message(DEBUG, "Queue observer: Watch ID %u (gen %u) deactivated, cleaning up queue",
 				watchref.watch_id, watchref.generation);
@@ -150,7 +148,6 @@ bool queue_add(check_t *check, watchref_t watchref) {
 	check->num_watches++;
 	return true;
 }
-
 
 /* Restore heap property upward */
 void heap_up(check_t *queue, int heap_index) {
@@ -367,46 +364,8 @@ void queue_remove(queue_t *queue, const char *path) {
 		if (queue_index < 0) return; /* Not found */
 	}
 
-	/* Store a copy of the path for logging if available */
-	char path_copy[PATH_MAX] = "<corrupted>";
-	if (queue->items[queue_index].path) {
-		strncpy(path_copy, queue->items[queue_index].path, PATH_MAX - 1);
-		path_copy[PATH_MAX - 1] = '\0';
-	}
-
-	/* Free resources */
-	if (queue->items[queue_index].path) {
-		free(queue->items[queue_index].path);
-		queue->items[queue_index].path = NULL;
-	}
-
-	if (queue->items[queue_index].watchrefs) {
-		free(queue->items[queue_index].watchrefs);
-		queue->items[queue_index].watchrefs = NULL;
-	}
-
-	/* Replace with the last element and restore heap property */
-	queue->size--;
-	if (queue_index < queue->size) {
-		/* Move the last element to the removed position */
-		memcpy(&queue->items[queue_index], &queue->items[queue->size], sizeof(check_t));
-
-		/* Clear the last element which was just moved */
-		memset(&queue->items[queue->size], 0, sizeof(check_t));
-
-		/* Restore heap property for the moved element */
-		int parent_index = (queue_index - 1) / 2;
-		if (queue_index > 0 && timespec_before(&queue->items[queue_index].next_check, &queue->items[parent_index].next_check)) {
-			heap_up(queue->items, queue_index);
-		} else {
-			heap_down(queue->items, queue->size, queue_index);
-		}
-	} else {
-		/* Removed the last element, just clear it */
-		memset(&queue->items[queue_index], 0, sizeof(check_t));
-	}
-
-	log_message(DEBUG, "Removed deferred check for %s", path_copy);
+	/* Delegate to index-based removal */
+	queue_remove_by_index(queue, queue_index);
 }
 
 /* Remove an entry from the queue by index*/
@@ -453,4 +412,6 @@ void queue_remove_by_index(queue_t *queue, int queue_index) {
 		/* Removed the last element, just clear it */
 		memset(&queue->items[queue_index], 0, sizeof(check_t));
 	}
+
+	log_message(DEBUG, "Removed deferred check for %s", path_copy);
 }
