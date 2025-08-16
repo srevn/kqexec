@@ -283,8 +283,8 @@ static char *proxy_name(watchref_t watchref, const char *type) {
 }
 
 /* Create a proxy watch for a pending path's parent */
-static watchref_t proxy_create(monitor_t *monitor, const watch_t *source_watch, watchref_t source_ref, const char *parent_path, const char *type) {
-	if (!monitor || !source_watch || !parent_path) return WATCH_REF_INVALID;
+static watchref_t proxy_create(monitor_t *monitor, const watch_t *watch, watchref_t watchref, const char *parent_path, const char *type) {
+	if (!monitor || !watch || !parent_path) return WATCH_REF_INVALID;
 
 	watch_t *proxy_watch = calloc(1, sizeof(watch_t));
 	if (!proxy_watch) {
@@ -293,7 +293,7 @@ static watchref_t proxy_create(monitor_t *monitor, const watch_t *source_watch, 
 	}
 
 	/* Create unique name for this proxy watch */
-	proxy_watch->name = proxy_name(source_ref, type);
+	proxy_watch->name = proxy_name(watchref, type);
 	if (!proxy_watch->name) {
 		free(proxy_watch);
 		return WATCH_REF_INVALID;
@@ -307,8 +307,8 @@ static watchref_t proxy_create(monitor_t *monitor, const watch_t *source_watch, 
 	proxy_watch->source_pattern = NULL;
 
 	/* Copy relevant properties from source watch */
-	proxy_watch->recursive = source_watch->recursive;
-	proxy_watch->hidden = source_watch->hidden;
+	proxy_watch->recursive = watch->recursive;
+	proxy_watch->hidden = watch->hidden;
 
 	/* Add to registry */
 	watchref_t proxyref = registry_add(monitor->registry, proxy_watch);
@@ -319,7 +319,7 @@ static watchref_t proxy_create(monitor_t *monitor, const watch_t *source_watch, 
 	}
 
 	log_message(DEBUG, "Created proxy watch '%s' for pattern from watch %u:%u",
-				proxy_watch->name, source_ref.watch_id, source_ref.generation);
+				proxy_watch->name, watchref.watch_id, watchref.generation);
 
 	return proxyref;
 }
@@ -484,7 +484,7 @@ static void pending_promote(monitor_t *monitor, pending_t *pending, const char *
 	}
 
 	/* Find the watch that was just added to the registry */
-	watchref_t resolved_ref = WATCH_REF_INVALID;
+	watchref_t resolvedref = WATCH_REF_INVALID;
 	uint32_t num_active = 0;
 	watchref_t *watchrefs = registry_active(monitor->registry, &num_active);
 	if (watchrefs && num_active > 0) {
@@ -493,29 +493,29 @@ static void pending_promote(monitor_t *monitor, pending_t *pending, const char *
 			watch_t *watch = registry_get(monitor->registry, watchrefs[i]);
 			if (watch && watch->path && watch->name && strcmp(watch->path, matched_path) == 0 &&
 				strcmp(watch->name, resolved_watch->name) == 0) {
-				resolved_ref = watchrefs[i];
+				resolvedref = watchrefs[i];
 				break;
 			}
 		}
 		free(watchrefs);
 	}
 
-	if (watchref_valid(resolved_ref)) {
+	if (watchref_valid(resolvedref)) {
 		log_message(INFO, "Adding resolved watch to monitoring system: %s (watchref %u:%u)", matched_path,
-					resolved_ref.watch_id, resolved_ref.generation);
+					resolvedref.watch_id, resolvedref.generation);
 	} else {
 		log_message(ERROR, "Could not find watchref for newly added watch: %s", matched_path);
 		return;
 	}
 
-	if (monitor_add(monitor, resolved_ref, true)) {
+	if (monitor_add(monitor, resolvedref, true)) {
 		log_message(INFO, "Successfully promoted glob match: %s from pattern %s", matched_path,
 					pending->glob_pattern);
 	} else {
 		log_message(WARNING, "Failed to promote glob match: %s from pattern %s", matched_path,
 					pending->glob_pattern);
 		/* Remove from config since monitor add failed */
-		config_remove_watch(monitor->config, monitor->registry, resolved_ref);
+		config_remove_watch(monitor->config, monitor->registry, resolvedref);
 	}
 }
 
@@ -564,14 +564,14 @@ static void pending_proxy(monitor_t *monitor, pending_t *pending, const char *pr
 	new_pending->proxyref = WATCH_REF_INVALID;
 
 	/* Create individual proxy watch for this glob directory */
-	watch_t *source_watch = registry_get(monitor->registry, pending->watchref);
-	if (!source_watch) {
+	watch_t *watch = registry_get(monitor->registry, pending->watchref);
+	if (!watch) {
 		log_message(ERROR, "Invalid source watch reference in pending_proxy");
 		pending_destroy(new_pending);
 		return;
 	}
 
-	watchref_t proxyref = proxy_create(monitor, source_watch, pending->watchref, proxy_path, "proxy_glob");
+	watchref_t proxyref = proxy_create(monitor, watch, pending->watchref, proxy_path, "proxy_glob");
 	if (!watchref_valid(proxyref)) {
 		log_message(ERROR, "Failed to create proxy glob watch for %s", proxy_path);
 		pending_destroy(new_pending);

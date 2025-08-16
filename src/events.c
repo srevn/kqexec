@@ -439,7 +439,7 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 				}
 
 				/* Keep watchref before pending_process, as watcher may be freed during deactivation */
-				watchref_t kept_watchref = watcher->watchref;
+				watchref_t savedref = watcher->watchref;
 
 				/* Process pending watches for any event that might create new paths */
 				if (monitor->num_pending > 0) {
@@ -449,10 +449,10 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 				/* Check if this watch has a processing delay configured */
 				if (watch->processing_delay > 0) {
 					/* Schedule the event for delayed processing */
-					events_schedule(monitor, kept_watchref, &event, kind);
+					events_schedule(monitor, savedref, &event, kind);
 				} else {
 					/* Process the event immediately */
-					events_process(monitor, kept_watchref, &event, kind, false);
+					events_process(monitor, savedref, &event, kind, false);
 				}
 			}
 		}

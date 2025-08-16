@@ -233,7 +233,7 @@ void stability_defer(monitor_t *monitor, subscription_t *subscription) {
 		/* Use existing scheduling logic with effective period */
 		stability_delay(monitor, check, root, &root->profile->scanner->latest_time, effective_quiet);
 
-		log_message(DEBUG, "Event received, using quiet period of %ld ms for %s (locked: %ld ms, calculated: %ld ms)",
+		log_message(DEBUG, "Event received, quiet period of %ld ms for %s (locked: %ld ms, calculated: %ld ms)",
 					effective_quiet, root->resource->path, locked_quiet, current_complexity);
 		return;
 	}
@@ -265,9 +265,9 @@ subscription_t *stability_entry(monitor_t *monitor, check_t *check) {
 	if (!monitor || !check || check->num_watches <= 0) return NULL;
 
 	/* Use the first watch reference to find the subscription. All watches for a check share the same path */
-	watchref_t primary_watchref = check->watchrefs[0];
+	watchref_t primaryref = check->watchrefs[0];
 
-	subscription_t *root = resources_subscription(monitor->resources, monitor->registry, check->path, primary_watchref, ENTITY_DIRECTORY);
+	subscription_t *root = resources_subscription(monitor->resources, monitor->registry, check->path, primaryref, ENTITY_DIRECTORY);
 	if (!root) {
 		log_message(WARNING, "Cannot find subscription for %s", check->path);
 		return NULL;

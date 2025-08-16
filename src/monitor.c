@@ -722,44 +722,48 @@ static void monitor_batch(monitor_t *monitor) {
 			timespec_add(&timeout_end, resource->current_timeout);
 
 			bool timeout_expired = timespec_after(&current_time, &timeout_end);
+			if (!timeout_expired) {
+				resource = resource->next;
+				continue;
+			}
 
-			if (timeout_expired) {
-				/* Timeout window expired, check if activity gap exceeds threshold */
-				long gap_ms = timespec_diff(&current_time, &resource->last_event);
-				long threshold_ms = (resource->current_timeout * 60) / 100; /* 60% hardcoded */
+			/* Timeout window expired, check if activity gap exceeds threshold */
+			long gap_ms = timespec_diff(&current_time, &resource->last_event);
+			long threshold_ms = (resource->current_timeout * 60) / 100; /* 60% hardcoded */
 
-				if (gap_ms >= threshold_ms) {
-					log_message(DEBUG, "Activity gap detected (%ldms >= %ldms) for %s (timeout: %dms)",
-								gap_ms, threshold_ms, resource->path, resource->current_timeout);
+			if (gap_ms < threshold_ms) {
+				/* Activity gap too small, reset batch timeout start time to last event */
+				resource->timeout_start = resource->last_event;
+				log_message(DEBUG, "Activity continues for %s, resetting batch timeout (gap: %ldms < %ldms)",
+							resource->path, gap_ms, threshold_ms);
+				resource = resource->next;
+				continue;
+			}
 
-					resource_lock(resource);
-					bool has_deferred_events = resource->deferred_count > 0;
-					resource_unlock(resource);
+			log_message(DEBUG, "Activity gap detected (%ldms >= %ldms) for %s (timeout: %dms)",
+						gap_ms, threshold_ms, resource->path, resource->current_timeout);
 
-					if (has_deferred_events) {
-						/* Process deferred events through stability verification */
-						events_deferred(monitor, resource);
-					} else {
-						/* No deferred events but batch timeout expired, trigger direct stability check */
-						log_message(DEBUG, "No deferred events for %s, triggering stability check",
-									resource->path);
+			resource_lock(resource);
+			bool has_deferred_events = resource->deferred_count > 0;
+			resource_unlock(resource);
 
-						/* Deactivate batch timeout */
-						resource->timeout_active = false;
+			if (has_deferred_events) {
+				/* Process deferred events through stability verification */
+				events_deferred(monitor, resource);
+			} else {
+				/* No deferred events but batch timeout expired, trigger direct stability check */
+				log_message(DEBUG, "No deferred events for %s, triggering stability check",
+							resource->path);
 
-						/* Find subscription to trigger stability verification */
-						profile_t *profile = resource->profiles;
-						if (profile && profile->subscriptions) {
-							stability_ready(monitor, profile->subscriptions, OP_DIR_CONTENT_CHANGED, 0);
-						} else {
-							log_message(WARNING, "No subscription found for %s", resource->path);
-						}
-					}
+				/* Deactivate batch timeout */
+				resource->timeout_active = false;
+
+				/* Find subscription to trigger stability verification */
+				profile_t *profile = resource->profiles;
+				if (profile && profile->subscriptions) {
+					stability_ready(monitor, profile->subscriptions, OP_DIR_CONTENT_CHANGED, 0);
 				} else {
-					/* Activity gap too small, reset batch timeout start time to last event */
-					resource->timeout_start = resource->last_event;
-					log_message(DEBUG, "Activity continues for %s, resetting batch timeout (gap: %ldms < %ldms)",
-								resource->path, gap_ms, threshold_ms);
+					log_message(WARNING, "No subscription found for %s", resource->path);
 				}
 			}
 

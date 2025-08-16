@@ -133,50 +133,51 @@ bool scanner_scan(const char *dir_path, const watch_t *watch, stats_t *stats) {
 				if (info.st_mtime > stats->excluded_mtime) {
 					stats->excluded_mtime = info.st_mtime;
 				}
-			} else {
-				/* Included file, increment the existing counter */
-				stats->local_files++;
-				stats->local_size += info.st_size;
+				continue;
+			}
 
-				/* Update latest modification time */
-				if (info.st_mtime > stats->last_mtime) {
-					stats->last_mtime = info.st_mtime;
-				}
+			/* Included file, increment the existing counter */
+			stats->local_files++;
+			stats->local_size += info.st_size;
+
+			/* Update latest modification time */
+			if (info.st_mtime > stats->last_mtime) {
+				stats->last_mtime = info.st_mtime;
 			}
 		} else if (S_ISDIR(info.st_mode)) {
 			stats->local_dirs++;
 
-			/* If recursive, scan subdirectories */
-			if (recursive) {
-				stats_t sub_stats;
-				if (scanner_scan(path, watch, &sub_stats)) {
-					/* Update maximum tree depth based on subdirectory scan results */
-					if (sub_stats.depth + 1 > stats->depth) {
-						stats->depth = sub_stats.depth + 1;
-					}
+			/* If not recursive, skip subdirectory scanning */
+			if (!recursive) continue;
 
-					/* Calculate and update recursive stats by summing up subdirectories */
-					stats->tree_files += sub_stats.tree_files;
-					stats->tree_dirs += sub_stats.tree_dirs;
-					stats->tree_size += sub_stats.tree_size;
+			stats_t sub_stats;
+			if (!scanner_scan(path, watch, &sub_stats)) continue;
 
-					/* Aggregate the excluded file stats from the recursive call */
-					stats->excluded_files += sub_stats.excluded_files;
-					stats->excluded_size += sub_stats.excluded_size;
-					/* Use latest mtime across all excluded files in the tree */
-					if (sub_stats.excluded_mtime > stats->excluded_mtime) {
-						stats->excluded_mtime = sub_stats.excluded_mtime;
-					}
+			/* Update maximum tree depth based on subdirectory scan results */
+			if (sub_stats.depth + 1 > stats->depth) {
+				stats->depth = sub_stats.depth + 1;
+			}
 
-					/* Update max_depth considering subdirectory's max depth */
-					if (sub_stats.max_depth + 1 > stats->max_depth) {
-						stats->max_depth = sub_stats.max_depth + 1;
-					}
+			/* Calculate and update recursive stats by summing up subdirectories */
+			stats->tree_files += sub_stats.tree_files;
+			stats->tree_dirs += sub_stats.tree_dirs;
+			stats->tree_size += sub_stats.tree_size;
 
-					if (sub_stats.last_mtime > stats->last_mtime) {
-						stats->last_mtime = sub_stats.last_mtime;
-					}
-				}
+			/* Aggregate the excluded file stats from the recursive call */
+			stats->excluded_files += sub_stats.excluded_files;
+			stats->excluded_size += sub_stats.excluded_size;
+			/* Use latest mtime across all excluded files in the tree */
+			if (sub_stats.excluded_mtime > stats->excluded_mtime) {
+				stats->excluded_mtime = sub_stats.excluded_mtime;
+			}
+
+			/* Update max_depth considering subdirectory's max depth */
+			if (sub_stats.max_depth + 1 > stats->max_depth) {
+				stats->max_depth = sub_stats.max_depth + 1;
+			}
+
+			if (sub_stats.last_mtime > stats->last_mtime) {
+				stats->last_mtime = sub_stats.last_mtime;
 			}
 		}
 	}
@@ -334,63 +335,64 @@ bool scanner_stable(monitor_t *monitor, const watch_t *watch, const char *dir_pa
 				if (info.st_mtime > stats->excluded_mtime) {
 					stats->excluded_mtime = info.st_mtime;
 				}
-			} else {
-				/* Included file, process normally */
-				stats->local_files++;
-				stats->local_size += info.st_size; /* Always accumulate size */
+				continue;
+			}
 
-				/* Update latest modification time */
-				if (info.st_mtime > stats->last_mtime) {
-					stats->last_mtime = info.st_mtime;
-				}
+			/* Included file, process normally */
+			stats->local_files++;
+			stats->local_size += info.st_size; /* Always accumulate size */
 
-				/* Check for very recent file modifications (< 1 seconds) */
-				if (difftime(current_time, info.st_mtime) < 1.0) {
-					log_message(DEBUG, "Directory %s unstable: recent file modification (%s, %.1f seconds ago)",
-								dir_path, dirent->d_name, difftime(current_time, info.st_mtime));
-					stats->temp_files = true;
-					is_stable = false; /* Mark as unstable but continue scanning */
-				}
+			/* Update latest modification time */
+			if (info.st_mtime > stats->last_mtime) {
+				stats->last_mtime = info.st_mtime;
+			}
+
+			/* Check for very recent file modifications (< 1 seconds) */
+			if (difftime(current_time, info.st_mtime) < 1.0) {
+				log_message(DEBUG, "Directory %s unstable: recent file modification (%s, %.1f seconds ago)",
+							dir_path, dirent->d_name, difftime(current_time, info.st_mtime));
+				stats->temp_files = true;
+				is_stable = false; /* Mark as unstable but continue scanning */
 			}
 		} else if (S_ISDIR(info.st_mode)) {
 			stats->local_dirs++;
 
-			/* If recursive, check subdirectories */
-			if (recursive) {
-				stats_t sub_stats;
-				if (!scanner_stable(monitor, watch, path, &sub_stats)) {
-					is_stable = false; /* Propagate instability from subdirectories */
-				}
+			/* If not recursive, skip subdirectory processing */
+			if (!recursive) continue;
 
-				/* Update maximum tree depth based on subdirectory scan results */
-				if (sub_stats.depth + 1 > stats->depth) {
-					stats->depth = sub_stats.depth + 1;
-				}
+			stats_t sub_stats;
+			if (!scanner_stable(monitor, watch, path, &sub_stats)) {
+				is_stable = false; /* Propagate instability from subdirectories */
+			}
 
-				/* Check for temp files */
-				stats->temp_files |= sub_stats.temp_files;
+			/* Update maximum tree depth based on subdirectory scan results */
+			if (sub_stats.depth + 1 > stats->depth) {
+				stats->depth = sub_stats.depth + 1;
+			}
 
-				/* Update recursive stats by summing up from subdirectories */
-				stats->tree_files += sub_stats.tree_files;
-				stats->tree_dirs += sub_stats.tree_dirs;
-				stats->tree_size += sub_stats.tree_size;
+			/* Check for temp files */
+			stats->temp_files |= sub_stats.temp_files;
 
-				/* Aggregate the excluded file stats from the recursive call */
-				stats->excluded_files += sub_stats.excluded_files;
-				stats->excluded_size += sub_stats.excluded_size;
-				/* Use latest mtime across all excluded files in the tree */
-				if (sub_stats.excluded_mtime > stats->excluded_mtime) {
-					stats->excluded_mtime = sub_stats.excluded_mtime;
-				}
+			/* Update recursive stats by summing up from subdirectories */
+			stats->tree_files += sub_stats.tree_files;
+			stats->tree_dirs += sub_stats.tree_dirs;
+			stats->tree_size += sub_stats.tree_size;
 
-				/* Update max_depth considering subdirectory's max depth */
-				if (sub_stats.max_depth + 1 > stats->max_depth) {
-					stats->max_depth = sub_stats.max_depth + 1;
-				}
+			/* Aggregate the excluded file stats from the recursive call */
+			stats->excluded_files += sub_stats.excluded_files;
+			stats->excluded_size += sub_stats.excluded_size;
+			/* Use latest mtime across all excluded files in the tree */
+			if (sub_stats.excluded_mtime > stats->excluded_mtime) {
+				stats->excluded_mtime = sub_stats.excluded_mtime;
+			}
 
-				if (sub_stats.last_mtime > stats->last_mtime) {
-					stats->last_mtime = sub_stats.last_mtime;
-				}
+			/* Update max_depth considering subdirectory's max depth */
+			if (sub_stats.max_depth + 1 > stats->max_depth) {
+				stats->max_depth = sub_stats.max_depth + 1;
+			}
+
+			if (sub_stats.last_mtime > stats->last_mtime) {
+				stats->last_mtime = sub_stats.last_mtime;
 			}
 		}
 	}
@@ -480,96 +482,95 @@ static void scanner_propagate(monitor_t *monitor, subscription_t *subscription, 
 	}
 
 	char *path_copy = strdup(subscription->resource->path);
-	if (path_copy) {
-		/* Get parent directory path */
-		char *last_slash = strrchr(path_copy, '/');
-		while (last_slash && last_slash > path_copy) {
-			*last_slash = '\0'; /* Truncate to get parent directory */
+	if (!path_copy) return;
 
-			/* Skip if we've reached or gone beyond the root watch path */
-			if (strlen(path_copy) < strlen(root_watch->path)) break;
+	/* Get parent directory path */
+	char *last_slash = strrchr(path_copy, '/');
+	while (last_slash && last_slash > path_copy) {
+		*last_slash = '\0'; /* Truncate to get parent directory */
 
-			/* Update subscription for this parent directory */
-			subscription_t *parent = resources_subscription(monitor->resources, monitor->registry, path_copy, subscription->watchref, ENTITY_DIRECTORY);
-			if (parent) {
-				/* Create activity state if needed */
-				if (!parent->profile->scanner) {
-					parent->profile->scanner = scanner_create(parent->resource->path);
+		/* Skip if we've reached or gone beyond the root watch path */
+		if (strlen(path_copy) < strlen(root_watch->path)) break;
+
+		/* Update subscription for this parent directory */
+		subscription_t *parent = resources_subscription(monitor->resources, monitor->registry, path_copy, subscription->watchref, ENTITY_DIRECTORY);
+		if (!parent) {
+			last_slash = strrchr(path_copy, '/');
+			continue;
+		}
+
+		/* Create activity state if needed */
+		if (!parent->profile->scanner) {
+			parent->profile->scanner = scanner_create(parent->resource->path);
+		}
+		if (parent->profile->scanner) {
+			parent->profile->scanner->latest_time = subscription->resource->last_time;
+			free(parent->profile->scanner->active_path);
+			parent->profile->scanner->active_path = strdup(subscription->resource->path);
+			parent->profile->scanner->active = true;
+		}
+
+		/* Create stability state if needed */
+		if (!parent->profile->stability) {
+			parent->profile->stability = stability_create();
+		}
+		if (parent->profile->stability) {
+			parent->profile->stability->checks_count = 0;
+			parent->profile->stability->stability_lost = false;
+		}
+
+		/* Update directory stats for parent if this is a content change */
+		if (optype == OP_DIR_CONTENT_CHANGED && parent->resource->kind == ENTITY_DIRECTORY) {
+			/* For recursive watches within the same scope, propagate incremental changes */
+			watch_t *parent_watch = registry_get(monitor->registry, parent->watchref);
+			watch_t *root_scope = registry_get(monitor->registry, root->watchref);
+			bool in_scope = (root_stats && parent_watch && root_scope && parent_watch->recursive &&
+							 parent_watch == root_scope && strlen(path_copy) >= strlen(root_scope->path));
+
+			if (in_scope && root->profile->stability && parent->profile->stability) {
+				if (parent != root) {
+					/* Calculate incremental changes from root's current update */
+					int root_files = root->profile->stability->stats.tree_files - root->profile->stability->prev_stats.tree_files;
+					int root_dirs = root->profile->stability->stats.tree_dirs - root->profile->stability->prev_stats.tree_dirs;
+					int root_depth = root->profile->stability->stats.max_depth - root->profile->stability->prev_stats.max_depth;
+					ssize_t root_size = (ssize_t) root->profile->stability->stats.tree_size -
+										(ssize_t) root->profile->stability->prev_stats.tree_size;
+
+					/* Apply incremental changes to parent while preserving its absolute state */
+					parent->profile->stability->prev_stats = parent->profile->stability->stats;
+					parent->profile->stability->stats.tree_files += root_files;
+					parent->profile->stability->stats.tree_dirs += root_dirs;
+					parent->profile->stability->stats.max_depth = (root_depth > 0) ?
+																	  parent->profile->stability->stats.max_depth + root_depth :
+																	  parent->profile->stability->stats.max_depth;
+					parent->profile->stability->stats.tree_size += root_size;
+
+					/* Update cumulative changes */
+					scanner_update(parent->profile, parent->resource->path);
 				}
-				if (parent->profile->scanner) {
-					parent->profile->scanner->latest_time = subscription->resource->last_time;
-					free(parent->profile->scanner->active_path);
-					parent->profile->scanner->active_path = strdup(subscription->resource->path);
-					parent->profile->scanner->active = true;
-				}
+			} else {
+				/* Fall back to scanning for non-recursive or cross-scope parents */
+				stats_t parent_new_stats;
+				watch_t *parent_watch = registry_get(monitor->registry, parent->watchref);
+				if (parent_watch && scanner_scan(parent->resource->path, parent_watch, &parent_new_stats)) {
+					if (!parent->profile->stability) {
+						parent->profile->stability = stability_create();
+					}
+					if (parent->profile->stability) {
+						parent->profile->stability->prev_stats = parent->profile->stability->stats;
+						parent->profile->stability->stats = parent_new_stats;
 
-				/* Create stability state if needed */
-				if (!parent->profile->stability) {
-					parent->profile->stability = stability_create();
-				}
-				if (parent->profile->stability) {
-					parent->profile->stability->checks_count = 0;
-				}
-
-				/* Reset stability_lost flag when activity becomes active to prevent repeated penalties */
-				if (parent->profile->stability) {
-					parent->profile->stability->stability_lost = false;
-				}
-
-				/* Update directory stats for parent if this is a content change */
-				if (optype == OP_DIR_CONTENT_CHANGED && parent->resource->kind == ENTITY_DIRECTORY) {
-					/* For recursive watches within the same scope, propagate incremental changes */
-					watch_t *parent_watch = registry_get(monitor->registry, parent->watchref);
-					watch_t *root_watch_for_scope = registry_get(monitor->registry, root->watchref);
-					bool in_scope = (root_stats && parent_watch && root_watch_for_scope && parent_watch->recursive &&
-									 parent_watch == root_watch_for_scope && strlen(path_copy) >= strlen(root_watch_for_scope->path));
-
-					if (in_scope && root->profile->stability && parent->profile->stability) {
-						if (parent != root) {
-							/* Calculate incremental changes from root's current update */
-							int root_files = root->profile->stability->stats.tree_files - root->profile->stability->prev_stats.tree_files;
-							int root_dirs = root->profile->stability->stats.tree_dirs - root->profile->stability->prev_stats.tree_dirs;
-							int root_depth = root->profile->stability->stats.max_depth - root->profile->stability->prev_stats.max_depth;
-							ssize_t root_size = (ssize_t) root->profile->stability->stats.tree_size -
-												(ssize_t) root->profile->stability->prev_stats.tree_size;
-
-							/* Apply incremental changes to parent while preserving its absolute state */
-							parent->profile->stability->prev_stats = parent->profile->stability->stats;
-							parent->profile->stability->stats.tree_files += root_files;
-							parent->profile->stability->stats.tree_dirs += root_dirs;
-							parent->profile->stability->stats.max_depth = (root_depth > 0) ?
-																			  parent->profile->stability->stats.max_depth + root_depth :
-																			  parent->profile->stability->stats.max_depth;
-							parent->profile->stability->stats.tree_size += root_size;
-
-							/* Update cumulative changes */
-							scanner_update(parent->profile, parent->resource->path);
-						}
-					} else {
-						/* Fall back to scanning for non-recursive or cross-scope parents */
-						stats_t parent_new_stats;
-						watch_t *parent_watch = registry_get(monitor->registry, parent->watchref);
-						if (parent_watch && scanner_scan(parent->resource->path, parent_watch, &parent_new_stats)) {
-							if (!parent->profile->stability) {
-								parent->profile->stability = stability_create();
-							}
-							if (parent->profile->stability) {
-								parent->profile->stability->prev_stats = parent->profile->stability->stats;
-								parent->profile->stability->stats = parent_new_stats;
-
-								/* Update cumulative changes */
-								scanner_update(parent->profile, parent->resource->path);
-							}
-						}
+						/* Update cumulative changes */
+						scanner_update(parent->profile, parent->resource->path);
 					}
 				}
 			}
-
-			/* Move to next parent directory */
-			last_slash = strrchr(path_copy, '/');
 		}
-		free(path_copy);
+
+		/* Move to next parent directory */
+		last_slash = strrchr(path_copy, '/');
 	}
+	free(path_copy);
 }
 
 /* Handle activity recording for recursive watches */
@@ -994,6 +995,7 @@ char *scanner_newest(const char *dir_path) {
 	struct dirent *dirent;
 
 	while ((dirent = readdir(dir))) {
+		/* Always skip current and parent directory entries */
 		if (strcmp(dirent->d_name, ".") == 0 || strcmp(dirent->d_name, "..") == 0) {
 			continue;
 		}
@@ -1008,17 +1010,17 @@ char *scanner_newest(const char *dir_path) {
 		}
 
 		struct stat info;
-		if (stat(path, &info) == 0) {
-			/* Use the most recent of modification or status change time */
-			time_t latest_time = (info.st_mtime > info.st_ctime) ? info.st_mtime : info.st_ctime;
-			if (latest_time > newest_time) {
-				newest_time = latest_time;
-				free(newest_file);
-				newest_file = strdup(path);
-				if (!newest_file) {
-					log_message(ERROR, "Failed to allocate memory for newest file path");
-				}
-			}
+		if (stat(path, &info) != 0) continue;
+
+		/* Use the most recent of modification or status change time */
+		time_t latest_time = (info.st_mtime > info.st_ctime) ? info.st_mtime : info.st_ctime;
+		if (latest_time <= newest_time) continue;
+
+		newest_time = latest_time;
+		free(newest_file);
+		newest_file = strdup(path);
+		if (!newest_file) {
+			log_message(ERROR, "Failed to allocate memory for newest file path");
 		}
 	}
 
@@ -1076,64 +1078,66 @@ char *scanner_modified(const char *base_path, time_t since_time, bool recursive,
 		if (S_ISREG(info.st_mode)) {
 			/* Use the most recent of modification or status change time */
 			time_t latest_time = (info.st_mtime > info.st_ctime) ? info.st_mtime : info.st_ctime;
+			if (latest_time <= since_time) continue;
 
-			if (latest_time > since_time) {
-				const char *output_name = basename ? dirent->d_name : path;
-				size_t name_len = strlen(output_name);
+			const char *output_name = basename ? dirent->d_name : path;
+			size_t name_len = strlen(output_name);
 
-				/* Ensure buffer has space for the new path, a newline, and a null terminator */
-				size_t required_capacity = result_size + name_len + 2; /* +1 for newline, +1 for null */
-				if (required_capacity > result_capacity) {
-					/* Grow buffer by doubling, or to the required size if that's larger */
-					size_t new_capacity = result_capacity * 2 > required_capacity ? result_capacity * 2 : required_capacity;
-					char *new_result = realloc(result, new_capacity);
-					if (!new_result) {
-						log_message(ERROR, "Failed to reallocate buffer for modified file list");
-						free(result);
-						closedir(dir);
-						return NULL;
-					}
-					result = new_result;
-					result_capacity = new_capacity;
+			/* Ensure buffer has space for the new path, a newline, and a null terminator */
+			size_t required_capacity = result_size + name_len + 2; /* +1 for newline, +1 for null */
+			if (required_capacity > result_capacity) {
+				/* Grow buffer by doubling, or to the required size if that's larger */
+				size_t new_capacity = result_capacity * 2 > required_capacity ? result_capacity * 2 : required_capacity;
+				char *new_result = realloc(result, new_capacity);
+				if (!new_result) {
+					log_message(ERROR, "Failed to reallocate buffer for modified file list");
+					free(result);
+					closedir(dir);
+					return NULL;
 				}
-
-				/* Append the new path, prefixed with a newline if the buffer is not empty */
-				if (result_size > 0) {
-					result[result_size++] = '\n';
-				}
-				memcpy(result + result_size, output_name, name_len + 1); /* +1 to copy null terminator */
-				result_size += name_len;
+				result = new_result;
+				result_capacity = new_capacity;
 			}
+
+			/* Append the new path, prefixed with a newline if the buffer is not empty */
+			if (result_size > 0) {
+				result[result_size++] = '\n';
+			}
+			memcpy(result + result_size, output_name, name_len + 1); /* +1 to copy null terminator */
+			result_size += name_len;
 		}
 		/* Handle directories for recursion */
-		else if (S_ISDIR(info.st_mode) && recursive) {
+		else if (S_ISDIR(info.st_mode)) {
+			if (!recursive) continue;
+
 			char *subdir_result = scanner_modified(path, since_time, recursive, basename);
-
-			/* If the recursive call found modified files, append them */
-			if (subdir_result && subdir_result[0] != '\0') {
-				size_t subdir_len = strlen(subdir_result);
-				size_t required_capacity = result_size + subdir_len + 2; /* +2 for newline and null terminator */
-
-				if (required_capacity > result_capacity) {
-					size_t new_capacity = result_capacity * 2 > required_capacity ? result_capacity * 2 : required_capacity;
-					char *new_result = realloc(result, new_capacity);
-					if (!new_result) {
-						log_message(ERROR, "Failed to reallocate buffer for recursive modified file list");
-						free(result);
-						free(subdir_result);
-						closedir(dir);
-						return NULL;
-					}
-					result = new_result;
-					result_capacity = new_capacity;
-				}
-
-				if (result_size > 0) {
-					result[result_size++] = '\n';
-				}
-				memcpy(result + result_size, subdir_result, subdir_len + 1);
-				result_size += subdir_len;
+			if (!subdir_result || subdir_result[0] == '\0') {
+				free(subdir_result);
+				continue;
 			}
+
+			size_t subdir_len = strlen(subdir_result);
+			size_t required_capacity = result_size + subdir_len + 2; /* +2 for newline and null terminator */
+
+			if (required_capacity > result_capacity) {
+				size_t new_capacity = result_capacity * 2 > required_capacity ? result_capacity * 2 : required_capacity;
+				char *new_result = realloc(result, new_capacity);
+				if (!new_result) {
+					log_message(ERROR, "Failed to reallocate buffer for recursive modified file list");
+					free(result);
+					free(subdir_result);
+					closedir(dir);
+					return NULL;
+				}
+				result = new_result;
+				result_capacity = new_capacity;
+			}
+
+			if (result_size > 0) {
+				result[result_size++] = '\n';
+			}
+			memcpy(result + result_size, subdir_result, subdir_len + 1);
+			result_size += subdir_len;
 			free(subdir_result);
 		}
 	}
