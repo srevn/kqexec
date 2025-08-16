@@ -86,7 +86,7 @@ command = command to execute  # Command to run when events occur
 environment = false           # Whether to set KQ_* environment variables (default: false)
 processing_delay = 5000       # Delay in milliseconds before processing events (default: 0)
 batch_timeout = 3000          # Batch events and process them when timeout expires (default: 0)
-complexity = 2.5              # Higher values reduce I/O by waiting longer for stability checks. (default: 1.0)
+complexity = 2.5              # Higher values reduce I/O by waiting longer for stability checks (default: 1.0)
 log_output = false            # Whether to capture and log command output (default: false)
 buffer_output = false         # Whether to buffer log output until command completes (default: false)
 recursive = true              # For recursive directory monitoring (default: true)
@@ -206,7 +206,7 @@ hidden = false
 [Script Automation]
 # Monitor directory and pass context via environment variables
 directory = /home/user/projects
-events = CONTENT,STRUCTURE
+events = STRUCTURE
 command = /home/user/scripts/build-deploy.sh
 environment = true
 log_output = true
@@ -215,7 +215,7 @@ recursive = true
 [Git Operations]
 # Monitor git repository with batch processing for multiple rapid changes
 directory = /home/user/projects/myapp
-events = STRUCTURE,CONTENT
+events = STRUCTURE
 command = /home/user/scripts/run-tests.sh
 batch_timeout = 4000
 log_output = true

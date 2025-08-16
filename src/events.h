@@ -69,6 +69,7 @@ void events_delayed(monitor_t *monitor);
 int events_timeout(monitor_t *monitor, struct timespec *current_time);
 
 /* Event processing */
+void events_batches(monitor_t *monitor);
 void events_deferred(monitor_t *monitor, resource_t *resource);
 bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, struct timespec *time, sync_t *sync);
 bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kind_t kind, bool is_deferred);
