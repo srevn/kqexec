@@ -283,39 +283,51 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 
 	/* Substitute %l with list of filenames (without paths) modified since processing began */
 	if (strstr(result, "%l")) {
-		/* Use current event time with 1-second buffer to catch files modified around this event */
-		time_t since_time = event->wall_time.tv_sec - 1;
-		char *modified_files = scanner_modified(watch->path, since_time, watch->recursive, true);
-		if (modified_files) {
-			char *escaped_files = command_escape_list(modified_files);
-			if (escaped_files) {
-				command_substitute(result, "%l", escaped_files);
-				free(escaped_files);
+		if (watch->target == WATCH_DIRECTORY) {
+			/* Use current event time with 1-second buffer to catch files modified around this event */
+			time_t since_time = event->wall_time.tv_sec - 1;
+			char *modified_files = scanner_modified(watch->path, since_time, watch->recursive, true);
+			if (modified_files) {
+				char *escaped_files = command_escape_list(modified_files);
+				if (escaped_files) {
+					command_substitute(result, "%l", escaped_files);
+					free(escaped_files);
+				} else {
+					command_substitute(result, "%l", "");
+				}
+				free(modified_files);
 			} else {
 				command_substitute(result, "%l", "");
 			}
-			free(modified_files);
 		} else {
-			command_substitute(result, "%l", "");
+			/* For file watches, just use the file basename */
+			char *basename_str = strrchr(event->path, '/');
+			basename_str = basename_str ? basename_str + 1 : event->path;
+			command_substitute(result, "%l", basename_str);
 		}
 	}
 
 	/* Substitute %L with list of files modified since processing began */
 	if (strstr(result, "%L")) {
-		/* Use current event time with 1-second buffer to catch files modified around this event */
-		time_t since_time = event->wall_time.tv_sec - 1;
-		char *modified_files = scanner_modified(watch->path, since_time, watch->recursive, false);
-		if (modified_files) {
-			char *escaped_files = command_escape_list(modified_files);
-			if (escaped_files) {
-				command_substitute(result, "%L", escaped_files);
-				free(escaped_files);
+		if (watch->target == WATCH_DIRECTORY) {
+			/* Use current event time with 1-second buffer to catch files modified around this event */
+			time_t since_time = event->wall_time.tv_sec - 1;
+			char *modified_files = scanner_modified(watch->path, since_time, watch->recursive, false);
+			if (modified_files) {
+				char *escaped_files = command_escape_list(modified_files);
+				if (escaped_files) {
+					command_substitute(result, "%L", escaped_files);
+					free(escaped_files);
+				} else {
+					command_substitute(result, "%L", "");
+				}
+				free(modified_files);
 			} else {
 				command_substitute(result, "%L", "");
 			}
-			free(modified_files);
 		} else {
-			command_substitute(result, "%L", "");
+			/* For file watches, use the full file path */
+			command_substitute(result, "%L", event->path);
 		}
 	}
 
@@ -714,11 +726,13 @@ void command_environment(monitor_t *monitor, watchref_t watchref, const event_t 
 	}
 
 	/* KQ_MODIFIED_FILES - recent files modified around this event */
-	time_t since_time = event->wall_time.tv_sec - 1;
-	char *modified_files = scanner_modified(watch->path, since_time, watch->recursive, true);
-	if (modified_files) {
-		setenv("KQ_MODIFIED_FILES", modified_files, 1);
-		free(modified_files);
+	if (watch->target == WATCH_DIRECTORY) {
+		time_t since_time = event->wall_time.tv_sec - 1;
+		char *modified_files = scanner_modified(watch->path, since_time, watch->recursive, true);
+		if (modified_files) {
+			setenv("KQ_MODIFIED_FILES", modified_files, 1);
+			free(modified_files);
+		}
 	}
 }
 
