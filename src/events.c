@@ -141,26 +141,36 @@ void events_deferred(monitor_t *monitor, resource_t *resource) {
 		subscription = resource->profiles->subscriptions;
 	}
 
-	/* Perform a preliminary scan here to update the stats before calculating the quiet period */
-	if (subscription) {
-		subscription_t *root = stability_root(monitor, subscription);
-		if (root && root->profile && root->profile->stability) {
-			stats_t current_stats;
-			watch_t *watch = registry_get(monitor->registry, root->watchref);
-			if (watch) {
-				scanner_scan(root->resource->path, watch, &current_stats);
-				root->profile->stability->prev_stats = root->profile->stability->stats;
-				root->profile->stability->stats = current_stats;
-				scanner_update(root->profile, root->resource->path);
-			}
-		}
-	}
-
 	resource_unlock(resource);
 
-	/* Trigger the stability check, which will now use the updated stats */
+	/* Handle files vs directories differently after coalescing */
 	if (subscription) {
-		stability_defer(monitor, subscription);
+		if (resource->kind == ENTITY_FILE) {
+			/* For files, trigger immediate command execution */
+			event_t synthetic_event = {
+				.path = resource->path,
+				.type = EVENT_CONTENT, /* Files typically have content changes */
+				.time = resource->last_time,
+				.wall_time = resource->wall_time,
+				.user_id = getuid()
+			};
+			
+			command_execute(monitor, subscription->watchref, &synthetic_event, true);
+		} else {
+			/* For directories, perform preliminary scan before using stability system */
+			subscription_t *root = stability_root(monitor, subscription);
+			if (root && root->profile && root->profile->stability) {
+				stats_t current_stats;
+				watch_t *watch = registry_get(monitor->registry, root->watchref);
+				if (watch) {
+					scanner_scan(root->resource->path, watch, &current_stats);
+					root->profile->stability->prev_stats = root->profile->stability->stats;
+					root->profile->stability->stats = current_stats;
+					scanner_update(root->profile, root->resource->path);
+				}
+			}
+			stability_defer(monitor, subscription);
+		}
 	} else {
 		log_message(WARNING, "No subscription found for %s to trigger stability check.", resource->path);
 	}
