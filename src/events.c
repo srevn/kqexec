@@ -176,7 +176,7 @@ void events_deferred(monitor_t *monitor, resource_t *resource) {
 }
 
 /* Check batch timeouts and trigger processing when activity gaps are detected */
-void events_batches(monitor_t *monitor) {
+void events_batch(monitor_t *monitor) {
 	if (!monitor || !monitor->resources || !monitor->resources->buckets) return;
 
 	struct timespec current_time;
@@ -563,8 +563,8 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 
 				kind_t kind = (watch->target == WATCH_FILE) ? ENTITY_FILE : ENTITY_DIRECTORY;
 
-				log_message(DEBUG, "Event: path=%s, flags=0x%x -> type=%s (watch: %s)", watcher->path, events[i].fflags,
-							filter_to_string(event.type), watch->name);
+				log_message(DEBUG, "Event: path=%s, flags=0x%x -> type=%s (watch: %s)", watcher->path,
+							events[i].fflags, filter_to_string(event.type), watch->name);
 
 				/* Proactive validation for directory events on NOTE_WRITE */
 				if (watch->target == WATCH_DIRECTORY && (events[i].fflags & NOTE_WRITE)) {

@@ -356,7 +356,8 @@ bool monitor_path(monitor_t *monitor, const char *path, watchref_t watchref) {
 
 	/* Check if this exact combination already exists to avoid true duplicates */
 	for (int i = 0; i < monitor->num_watches; i++) {
-		if (strcmp(monitor->watches[i]->path, path) == 0 && watchref_equal(monitor->watches[i]->watchref, watchref)) {
+		if (strcmp(monitor->watches[i]->path, path) == 0 &&
+			watchref_equal(monitor->watches[i]->watchref, watchref)) {
 			return true;
 		}
 	}
@@ -777,7 +778,7 @@ bool monitor_poll(monitor_t *monitor) {
 		}
 
 		/* Check batch timeouts only on timeout */
-		events_batches(monitor);
+		events_batch(monitor);
 	}
 
 	/* Check deferred scans */
