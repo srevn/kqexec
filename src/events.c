@@ -456,7 +456,7 @@ int events_timeout(monitor_t *monitor, struct timespec *current_time) {
 			delayed_timeout_ms = timespec_diff(&earliest, current_time);
 		}
 
-		if (delayed_timeout_ms > 0) {
+		if (delayed_timeout_ms >= 0) {
 			shortest_timeout_ms = delayed_timeout_ms;
 		}
 	}
@@ -492,7 +492,7 @@ int events_timeout(monitor_t *monitor, struct timespec *current_time) {
 				batch_timeout_ms = timespec_diff(&soonest_batch_timeout, current_time);
 			}
 
-			if (batch_timeout_ms > 0) {
+			if (batch_timeout_ms >= 0) {
 				if (shortest_timeout_ms < 0 || batch_timeout_ms < shortest_timeout_ms) {
 					shortest_timeout_ms = batch_timeout_ms;
 				}
@@ -512,14 +512,14 @@ int events_timeout(monitor_t *monitor, struct timespec *current_time) {
 			deferred_timeout_ms = timespec_diff(&next_check, current_time);
 		}
 
-		if (deferred_timeout_ms > 0) {
+		if (deferred_timeout_ms >= 0) {
 			if (shortest_timeout_ms < 0 || deferred_timeout_ms < shortest_timeout_ms) {
 				shortest_timeout_ms = deferred_timeout_ms;
 			}
 		}
 	}
 
-	return shortest_timeout_ms > 0 ? (int) shortest_timeout_ms : -1;
+	return shortest_timeout_ms >= 0 ? (int) shortest_timeout_ms : -1;
 }
 
 /* Convert kqueue flags to filter type bitmask */
@@ -614,7 +614,7 @@ struct timespec *timeout_calculate(monitor_t *monitor, struct timespec *timeout,
 	/* Get unified timeout from events_timeout() */
 	int timeout_ms = events_timeout(monitor, current_time);
 
-	if (timeout_ms > 0) {
+	if (timeout_ms >= 0) {
 		/* Convert milliseconds to timespec */
 		timeout->tv_sec = timeout_ms / 1000;
 		timeout->tv_nsec = (timeout_ms % 1000) * 1000000;
