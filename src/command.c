@@ -103,12 +103,14 @@ static char *command_escape(const char *path) {
 static char *command_escape_list(const char *paths) {
 	if (!paths || !*paths) return strdup("");
 
-	/* Calculate rough buffer size */
-	size_t total_len = strlen(paths) * 2 + 1024;
-	char *result = malloc(total_len);
+	/* Start with dynamic buffer */
+	size_t result_capacity = 4096;
+	char *result = malloc(result_capacity);
 	if (!result) return NULL;
 
 	result[0] = '\0';
+	size_t result_len = 0;
+
 	char *paths_copy = strdup(paths);
 	if (!paths_copy) {
 		free(result);
@@ -121,10 +123,33 @@ static char *command_escape_list(const char *paths) {
 	while (line != NULL) {
 		char *escaped = command_escape(line);
 		if (escaped) {
-			if (!first) {
-				strncat(result, "\n", total_len - strlen(result) - 1);
+			size_t escaped_len = strlen(escaped);
+			/* +1 for newline if not first, +1 for null */
+			size_t needed = result_len + (first ? 0 : 1) + escaped_len + 1;
+
+			/* Grow buffer if needed */
+			if (needed > result_capacity) {
+				size_t new_capacity = needed * 2; /* Double to avoid frequent reallocations */
+				char *new_result = realloc(result, new_capacity);
+				if (!new_result) {
+					free(escaped);
+					free(result);
+					free(paths_copy);
+					return NULL;
+				}
+				result = new_result;
+				result_capacity = new_capacity;
 			}
-			strncat(result, escaped, total_len - strlen(result) - 1);
+
+			/* Add newline separator if not first */
+			if (!first) {
+				result[result_len++] = '\n';
+			}
+
+			/* Copy escaped path */
+			strcpy(result + result_len, escaped);
+			result_len += escaped_len;
+
 			free(escaped);
 			first = false;
 		}
@@ -135,16 +160,63 @@ static char *command_escape_list(const char *paths) {
 	return result;
 }
 
-/* Helper function to substitute a placeholder in a string */
-static void command_substitute(char *result, const char *placeholder, const char *value) {
-	char *current_pos;
-	while ((current_pos = strstr(result, placeholder)) != NULL) {
-		char temp[MAX_CMD_LEN];
-		*current_pos = '\0';
-		strcpy(temp, result);
-		snprintf(temp + strlen(temp), MAX_CMD_LEN - strlen(temp), "%s%s", value, current_pos + strlen(placeholder));
-		strcpy(result, temp);
+/* Helper function to substitute a placeholder in a string with dynamic allocation */
+static char *command_substitute(const char *input, const char *placeholder, const char *value) {
+	if (!input || !placeholder || !value) return input ? strdup(input) : NULL;
+
+	const char *current_pos = strstr(input, placeholder);
+	if (!current_pos) {
+		return strdup(input); /* No substitution needed */
 	}
+
+	size_t placeholder_len = strlen(placeholder);
+	size_t value_len = strlen(value);
+	size_t input_len = strlen(input);
+
+	/* Calculate new length after all substitutions */
+	size_t new_len = input_len;
+	const char *search_pos = input;
+	while ((search_pos = strstr(search_pos, placeholder)) != NULL) {
+		new_len = new_len - placeholder_len + value_len;
+		search_pos += placeholder_len;
+	}
+
+	/* Allocate result buffer */
+	char *result = malloc(new_len + 1);
+	if (!result) return NULL;
+
+	/* Perform substitutions */
+	const char *src = input;
+	char *dst = result;
+
+	while ((current_pos = strstr(src, placeholder)) != NULL) {
+		/* Copy text before placeholder */
+		size_t prefix_len = current_pos - src;
+		memcpy(dst, src, prefix_len);
+		dst += prefix_len;
+
+		/* Copy replacement value */
+		memcpy(dst, value, value_len);
+		dst += value_len;
+
+		/* Move past placeholder */
+		src = current_pos + placeholder_len;
+	}
+
+	/* Copy remaining text */
+	strcpy(dst, src);
+
+	return result;
+}
+
+/* Helper function to update command string with substitution */
+static bool command_update(char **result, const char *placeholder, const char *value) {
+	char *new_result = command_substitute(*result, placeholder, value);
+	if (!new_result) return false;
+
+	free(*result);
+	*result = new_result;
+	return true;
 }
 
 /* Substitutes placeholders in the command string:
@@ -179,21 +251,20 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 		return NULL;
 	}
 
-	/* Allocate memory for the result */
-	result = malloc(MAX_CMD_LEN);
+	/* Start with a copy of the original command */
+	result = strdup(command);
 	if (result == NULL) {
 		log_message(ERROR, "Failed to allocate memory for command");
 		return NULL;
 	}
 
-	/* Initialize the result with the command */
-	strncpy(result, command, MAX_CMD_LEN - 1);
-	result[MAX_CMD_LEN - 1] = '\0';
-
 	/* Substitute %p with the path */
 	char *escaped_path = command_escape(event->path);
 	if (escaped_path) {
-		command_substitute(result, "%p", escaped_path);
+		if (!command_update(&result, "%p", escaped_path)) {
+			free(escaped_path);
+			return NULL;
+		}
 		free(escaped_path);
 	}
 
@@ -203,7 +274,11 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 		if (path_copy) {
 			char *escaped_basename = command_escape(basename(path_copy));
 			if (escaped_basename) {
-				command_substitute(result, "%n", escaped_basename);
+				if (!command_update(&result, "%n", escaped_basename)) {
+					free(escaped_basename);
+					free(path_copy);
+					return NULL;
+				}
 				free(escaped_basename);
 			}
 			free(path_copy);
@@ -216,7 +291,11 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 		if (path_copy) {
 			char *escaped_dirname = command_escape(dirname(path_copy));
 			if (escaped_dirname) {
-				command_substitute(result, "%d", escaped_dirname);
+				if (!command_update(&result, "%d", escaped_dirname)) {
+					free(escaped_dirname);
+					free(path_copy);
+					return NULL;
+				}
 				free(escaped_dirname);
 			}
 			free(path_copy);
@@ -226,12 +305,15 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 	/* Substitute %b with the base watch path */
 	char *escaped_base_path = command_escape(watch->path);
 	if (escaped_base_path) {
-		command_substitute(result, "%b", escaped_base_path);
+		if (!command_update(&result, "%b", escaped_base_path)) {
+			free(escaped_base_path);
+			return NULL;
+		}
 		free(escaped_base_path);
 	}
 
 	/* Substitute %w with the watch name */
-	command_substitute(result, "%w", watch->name);
+	if (!command_update(&result, "%w", watch->name)) return NULL;
 
 	/* Substitute %r with the relative path */
 	if (strstr(result, "%r")) {
@@ -241,7 +323,10 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 		}
 		char *escaped_relative = command_escape(relative_path);
 		if (escaped_relative) {
-			command_substitute(result, "%r", escaped_relative);
+			if (!command_update(&result, "%r", escaped_relative)) {
+				free(escaped_relative);
+				return NULL;
+			}
 			free(escaped_relative);
 		}
 	}
@@ -264,7 +349,10 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 
 		char *escaped_trigger = command_escape(trigger);
 		if (escaped_trigger) {
-			command_substitute(result, "%f", escaped_trigger);
+			if (!command_update(&result, "%f", escaped_trigger)) {
+				free(escaped_trigger);
+				return NULL;
+			}
 			free(escaped_trigger);
 		}
 
@@ -273,7 +361,11 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 			if (path_copy) {
 				char *escaped_trigger_basename = command_escape(basename(path_copy));
 				if (escaped_trigger_basename) {
-					command_substitute(result, "%F", escaped_trigger_basename);
+					if (!command_update(&result, "%F", escaped_trigger_basename)) {
+						free(escaped_trigger_basename);
+						free(path_copy);
+						return NULL;
+					}
 					free(escaped_trigger_basename);
 				}
 				free(path_copy);
@@ -290,20 +382,27 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 			if (modified_files) {
 				char *escaped_files = command_escape_list(modified_files);
 				if (escaped_files) {
-					command_substitute(result, "%l", escaped_files);
+					if (!command_update(&result, "%l", escaped_files)) {
+						free(escaped_files);
+						free(modified_files);
+						return NULL;
+					}
 					free(escaped_files);
 				} else {
-					command_substitute(result, "%l", "");
+					if (!command_update(&result, "%l", "")) {
+						free(modified_files);
+						return NULL;
+					}
 				}
 				free(modified_files);
 			} else {
-				command_substitute(result, "%l", "");
+				if (!command_update(&result, "%l", "")) return NULL;
 			}
 		} else {
 			/* For file watches, just use the file basename */
 			char *basename_str = strrchr(event->path, '/');
 			basename_str = basename_str ? basename_str + 1 : event->path;
-			command_substitute(result, "%l", basename_str);
+			if (!command_update(&result, "%l", basename_str)) return NULL;
 		}
 	}
 
@@ -316,18 +415,34 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 			if (modified_files) {
 				char *escaped_files = command_escape_list(modified_files);
 				if (escaped_files) {
-					command_substitute(result, "%L", escaped_files);
+					if (!command_update(&result, "%L", escaped_files)) {
+						free(escaped_files);
+						free(modified_files);
+						return NULL;
+					}
 					free(escaped_files);
 				} else {
-					command_substitute(result, "%L", "");
+					if (!command_update(&result, "%L", "")) {
+						free(modified_files);
+						return NULL;
+					}
 				}
 				free(modified_files);
 			} else {
-				command_substitute(result, "%L", "");
+				if (!command_update(&result, "%L", "")) return NULL;
 			}
 		} else {
 			/* For file watches, use the full file path */
-			command_substitute(result, "%L", event->path);
+			char *escaped_path = command_escape(event->path);
+			if (escaped_path) {
+				if (!command_update(&result, "%L", escaped_path)) {
+					free(escaped_path);
+					return NULL;
+				}
+				free(escaped_path);
+			} else {
+				if (!command_update(&result, "%L", "")) return NULL;
+			}
 		}
 	}
 
@@ -344,14 +459,14 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 		}
 
 		snprintf(size_str, sizeof(size_str), "%zu", size);
-		command_substitute(result, "%s", size_str);
-		command_substitute(result, "%S", format_size((ssize_t) size, false));
+		if (!command_update(&result, "%s", size_str)) return NULL;
+		if (!command_update(&result, "%S", format_size((ssize_t) size, false))) return NULL;
 	}
 
 	/* Substitute %t with the time */
 	localtime_r(&event->wall_time.tv_sec, &tm);
 	strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", &tm);
-	command_substitute(result, "%t", time_str);
+	if (!command_update(&result, "%t", time_str)) return NULL;
 
 	/* Substitute %u with the user */
 	pwd = getpwuid(event->user_id);
@@ -360,11 +475,11 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 	} else {
 		snprintf(user_str, sizeof(user_str), "%d", event->user_id);
 	}
-	command_substitute(result, "%u", user_str);
+	if (!command_update(&result, "%u", user_str)) return NULL;
 
 	/* Substitute %e with the event type */
 	event_str = (char *) filter_to_string(event->type);
-	command_substitute(result, "%e", event_str);
+	if (!command_update(&result, "%e", event_str)) return NULL;
 
 	return result;
 }
