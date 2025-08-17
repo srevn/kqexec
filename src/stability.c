@@ -443,13 +443,14 @@ bool stability_stable(subscription_t *root, const stats_t *current_stats, bool s
 	return true;
 }
 
-/* Reset stability tracking after successful command execution */
+/* Reset stability tracking to establish a new baseline */
 void stability_reset(monitor_t *monitor, subscription_t *root) {
-	if (!monitor || !root) return;
+	if (!monitor || !root || !root->profile || !root->resource) return;
 
 	/* Only process directories with stability tracking */
 	if (root->resource->kind != ENTITY_DIRECTORY || !root->profile->stability) {
-		log_message(DEBUG, "Skipping baseline reset for non-directory or non-tracked entity: %s", root->resource->path);
+		log_message(DEBUG, "Skipping baseline reset for non-directory or non-tracked entity: %s",
+					root->resource->path);
 		return;
 	}
 
@@ -485,10 +486,9 @@ void stability_reset(monitor_t *monitor, subscription_t *root) {
 	root->profile->stability->reference_init = true;
 
 	/* Clear deferred event queue */
-	resource_lock(root->resource);
 	deferred_t *deferred = root->resource->deferred_head;
 	if (deferred) {
-		log_message(DEBUG, "Clearing %d deferred events for %s after command completion",
+		log_message(DEBUG, "Clearing %d deferred events for %s after processing",
 					root->resource->deferred_count, root->resource->path);
 		while (deferred) {
 			deferred_t *next_deferred = deferred->next;
@@ -500,7 +500,6 @@ void stability_reset(monitor_t *monitor, subscription_t *root) {
 		root->resource->deferred_tail = NULL;
 		root->resource->deferred_count = 0;
 	}
-	resource_unlock(root->resource);
 
 	/* Clear activity tracking flag to mark the directory as idle */
 	if (root->profile->scanner) {
