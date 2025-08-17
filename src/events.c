@@ -111,11 +111,13 @@ void events_deferred(monitor_t *monitor, resource_t *resource) {
 
 	/* Check if there are any events to process */
 	if (!resource->deferred_head) {
+		profile_t *profiles_head = resource->profiles;
 		resource_unlock(resource);
 		log_message(DEBUG, "Batch timeout expired for %s, no events queued", resource->path);
-		profile_t *profile = resource->profiles;
-		if (profile && profile->subscriptions) {
-			stability_ready(monitor, profile->subscriptions, OP_DIR_CONTENT_CHANGED, 0);
+		for (profile_t *profile = profiles_head; profile; profile = profile->next) {
+			if (profile->subscriptions) {
+				stability_ready(monitor, profile->subscriptions, OP_DIR_CONTENT_CHANGED, 0);
+			}
 		}
 		return;
 	}
@@ -135,26 +137,37 @@ void events_deferred(monitor_t *monitor, resource_t *resource) {
 	resource->deferred_tail = NULL;
 	resource->deferred_count = 0;
 
-	/* Find a subscription on the resource to trigger the stability check */
-	subscription_t *subscription = NULL;
-	if (resource->profiles) {
-		subscription = resource->profiles->subscriptions;
-	}
+	/* Get necessary resource properties before unlocking */
+	profile_t *profiles_head = resource->profiles;
+	kind_t kind = resource->kind;
+	struct timespec last_time = resource->last_time;
+	struct timespec wall_time = resource->wall_time;
+	char *path = strdup(resource->path);
 
 	resource_unlock(resource);
 
-	/* Handle files or directories after coalescing */
-	if (subscription) {
-		if (resource->kind == ENTITY_FILE) {
-			/* For files, trigger immediate command execution */
-			event_t synthetic_event = {
-				.path = resource->path,
-				.type = EVENT_CONTENT,
-				.time = resource->last_time,
-				.wall_time = resource->wall_time,
-				.user_id = getuid()};
+	if (!path) {
+		log_message(ERROR, "Failed to copy resource path in events_deferred");
+		return;
+	}
 
-			command_execute(monitor, subscription->watchref, &synthetic_event, true);
+	/* Handle files or directories after coalescing for each profile */
+	for (profile_t *profile = profiles_head; profile; profile = profile->next) {
+		subscription_t *subscription = profile->subscriptions;
+		if (!subscription) continue;
+
+		if (kind == ENTITY_FILE) {
+			/* For files, trigger immediate command execution for all subscriptions in this profile */
+			for (subscription_t *sub_iterator = subscription; sub_iterator; sub_iterator = sub_iterator->next) {
+				event_t synthetic_event = {
+					.path = path,
+					.type = EVENT_CONTENT,
+					.time = last_time,
+					.wall_time = wall_time,
+					.user_id = getuid()};
+
+				command_execute(monitor, sub_iterator->watchref, &synthetic_event, true);
+			}
 		} else {
 			/* For directories, perform preliminary scan before using stability system */
 			subscription_t *root = stability_root(monitor, subscription);
@@ -170,9 +183,8 @@ void events_deferred(monitor_t *monitor, resource_t *resource) {
 			}
 			stability_defer(monitor, subscription);
 		}
-	} else {
-		log_message(WARNING, "No subscription found for %s to trigger stability check", resource->path);
 	}
+	free(path);
 }
 
 /* Check batch timeouts and trigger processing when activity gaps are detected */
@@ -226,16 +238,19 @@ void events_batch(monitor_t *monitor) {
 				events_deferred(monitor, resource);
 			} else {
 				/* No deferred events but batch timeout expired, trigger direct stability check */
-				log_message(DEBUG, "No deferred events for %s, triggering stability check",
-							resource->path);
+				log_message(DEBUG, "No deferred events for %s, triggering stability check", resource->path);
 
 				/* Deactivate batch timeout */
 				resource->timeout_active = false;
 
 				/* Find subscription to trigger stability verification */
 				profile_t *profile = resource->profiles;
-				if (profile && profile->subscriptions) {
-					stability_ready(monitor, profile->subscriptions, OP_DIR_CONTENT_CHANGED, 0);
+				if (profile) {
+					for (; profile; profile = profile->next) {
+						if (profile->subscriptions) {
+							stability_ready(monitor, profile->subscriptions, OP_DIR_CONTENT_CHANGED, 0);
+						}
+					}
 				} else {
 					log_message(WARNING, "No subscription found for %s", resource->path);
 				}

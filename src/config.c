@@ -181,8 +181,7 @@ bool config_add_watch(config_t *config, registry_t *registry, watch_t *watch) {
 			for (uint32_t i = 0; i < num_active; i++) {
 				watch_t *existing = registry_get(registry, watchrefs[i]);
 				if (existing && existing->name && watch->name && strcmp(existing->name, watch->name) == 0) {
-					log_message(ERROR, "Duplicate watch name '%s' found in configuration",
-								watch->name);
+					log_message(ERROR, "Duplicate watch name '%s' found in configuration", watch->name);
 					free(watchrefs);
 					return false;
 				}
