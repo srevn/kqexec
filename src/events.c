@@ -535,14 +535,6 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 
 	/* Process new events */
 	for (int i = 0; i < event_count; i++) {
-		/* Get the watcher directly from udata for O(1) access */
-		watcher_t *primary_watcher = (watcher_t *) events[i].udata;
-
-		if (!primary_watcher) {
-			log_message(WARNING, "Received kevent with NULL udata, skipping");
-			continue;
-		}
-
 		int fd = (int) events[i].ident;
 
 		/* Find all watches that share this file descriptor */
