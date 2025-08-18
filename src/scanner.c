@@ -819,26 +819,25 @@ static long scanner_adjust(subscription_t *subscription, long base_ms) {
 	return required_ms;
 }
 
-/* Apply exponential backoff for consecutive instability */
+/* Apply exponential backoff for registered instability */
 static long scanner_backoff(subscription_t *subscription, long required_ms) {
 	int unstable_count = subscription->profile->stability ? subscription->profile->stability->unstable_count : 0;
 
-	if (unstable_count < 3) {
-		/* Only apply backoff after 3 consecutive unstable counts */
+	if (unstable_count == 0) {
 		return required_ms;
 	}
 
 	/* Start with a base multiplier */
 	double backoff_factor = 1.0;
 
-	/* Increase backoff factor for repeated instability after 3 consecutive unstable counts */
-	for (int i = 3; i <= unstable_count; i++) {
-		backoff_factor *= 1.25;
+	/* Increase backoff factor for each instability occurrence */
+	for (int i = 1; i <= unstable_count; i++) {
+		backoff_factor *= 1.5;
 	}
 
 	/* Apply a cap to the backoff factor to prevent excessive delays */
-	if (backoff_factor > 5.0) {
-		backoff_factor = 5.0;
+	if (backoff_factor > 10.0) {
+		backoff_factor = 10.0;
 	}
 
 	long adjusted_ms = (long) (required_ms * backoff_factor);
@@ -853,7 +852,7 @@ static long scanner_limit(monitor_t *monitor, subscription_t *subscription, long
 	if (required_ms < 100) required_ms = 100;
 
 	/* Dynamic cap based on operation characteristics */
-	long maximum_ms = 90000; /* Default 90 seconds */
+	long maximum_ms = 120000; /* Default 120 seconds */
 
 	if (required_ms > maximum_ms) {
 		log_message(DEBUG, "Capping quiet period for %s from %ld ms to %ld ms", subscription->resource->path, required_ms, maximum_ms);
