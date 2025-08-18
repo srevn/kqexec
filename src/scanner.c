@@ -88,7 +88,7 @@ bool scanner_scan(const char *dir_path, const watch_t *watch, stats_t *stats) {
 
 	if (!dir_path || !stats) return false;
 
-	/* Extract flags from watch with correct defaults */
+	/* Extract flags from watch with sensible defaults */
 	bool recursive = watch ? watch->recursive : true; /* Default: recursive for directories */
 	bool hidden = watch ? watch->hidden : false;	  /* Default: exclude hidden files */
 
@@ -110,7 +110,13 @@ bool scanner_scan(const char *dir_path, const watch_t *watch, stats_t *stats) {
 			continue;
 		}
 
-		snprintf(path, sizeof(path), "%s/%s", dir_path, dirent->d_name);
+		int path_len = snprintf(path, sizeof(path), "%s/%s", dir_path, dirent->d_name);
+
+		/* Check for path truncation */
+		if (path_len >= (int) sizeof(path)) {
+			log_message(WARNING, "Path too long, skipping: %s/%s", dir_path, dirent->d_name);
+			continue;
+		}
 
 		/* Skip hidden files if not requested */
 		if (!hidden) {
@@ -307,14 +313,18 @@ bool scanner_stable(monitor_t *monitor, const watch_t *watch, const char *dir_pa
 			continue;
 		}
 
-		snprintf(path, sizeof(path), "%s/%s", dir_path, dirent->d_name);
+		int path_len = snprintf(path, sizeof(path), "%s/%s", dir_path, dirent->d_name);
+
+		/* Check for path truncation */
+		if (path_len >= (int) sizeof(path)) {
+			log_message(WARNING, "Path too long, skipping: %s/%s", dir_path, dirent->d_name);
+			continue;
+		}
 
 		/* Skip hidden files if not requested */
 		if (!hidden) {
 			const char *basename = strrchr(path, '/');
-			if ((basename ? basename + 1 : path)[0] == '.') {
-				continue;
-			}
+			if ((basename ? basename + 1 : path)[0] == '.') continue;
 		}
 
 		if (stat(path, &info) != 0) {

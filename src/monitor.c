@@ -511,7 +511,13 @@ bool monitor_tree(monitor_t *monitor, const char *dir_path, watchref_t watchref)
 		}
 
 		char path[MAX_PATH_LEN];
-		snprintf(path, sizeof(path), "%s/%s", dir_path, dirent->d_name);
+		int path_len = snprintf(path, sizeof(path), "%s/%s", dir_path, dirent->d_name);
+
+		/* Check for path truncation */
+		if (path_len >= (int) sizeof(path)) {
+			log_message(WARNING, "Path too long, skipping: %s/%s", dir_path, dirent->d_name);
+			continue;
+		}
 
 		/* Skip excluded paths */
 		if (config_exclude_match(watch, path)) {
