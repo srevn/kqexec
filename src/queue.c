@@ -56,7 +56,7 @@ queue_t *queue_create(registry_t *registry, int initial_capacity) {
 	/* Allocate memory for the queue items and zero it out */
 	queue->items = calloc(initial_capacity, sizeof(check_t));
 	if (!queue->items) {
-		log_message(ERROR, "Failed to allocate memory for deferred check queue");
+		log_message(ERROR, "Failed to allocate memory for queued check queue");
 		free(queue);
 		return NULL;
 	}
@@ -77,7 +77,7 @@ queue_t *queue_create(registry_t *registry, int initial_capacity) {
 		return NULL;
 	}
 
-	log_message(DEBUG, "Initialized deferred check queue with capacity %d",
+	log_message(DEBUG, "Initialized queued check queue with capacity %d",
 				initial_capacity);
 	return queue;
 }
@@ -109,7 +109,7 @@ void queue_destroy(queue_t *queue) {
 	free(queue->items);
 	free(queue);
 
-	log_message(DEBUG, "Cleaned up deferred check queue (observer unregistered)");
+	log_message(DEBUG, "Cleaned up queued check queue (observer unregistered)");
 }
 
 /* Add a watch reference to a queue entry */
@@ -289,7 +289,7 @@ void queue_upsert(queue_t *queue, const char *path, watchref_t watchref, struct 
 		int new_capacity = old_capacity == 0 ? 8 : old_capacity * 2;
 		check_t *new_items = realloc(queue->items, new_capacity * sizeof(check_t));
 		if (!new_items) {
-			log_message(ERROR, "Failed to resize deferred check queue");
+			log_message(ERROR, "Failed to resize queued check queue");
 			return;
 		}
 		queue->items = new_items;
@@ -335,7 +335,7 @@ void queue_upsert(queue_t *queue, const char *path, watchref_t watchref, struct 
 	/* Restore heap property */
 	heap_up(queue->items, new_index);
 
-	log_message(DEBUG, "Added new deferred check for %s (next check at %ld.%09ld)",
+	log_message(DEBUG, "Added new queued check for %s (next check at %ld.%09ld)",
 				path, (long) next_check.tv_sec, next_check.tv_nsec);
 }
 
@@ -413,5 +413,5 @@ void queue_remove_by_index(queue_t *queue, int queue_index) {
 		memset(&queue->items[queue_index], 0, sizeof(check_t));
 	}
 
-	log_message(DEBUG, "Removed deferred check for %s", path_copy);
+	log_message(DEBUG, "Removed queued check for %s", path_copy);
 }

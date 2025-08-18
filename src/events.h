@@ -63,16 +63,20 @@ typedef struct sync {
 	int paths_capacity;                    /* Allocated capacity */
 } sync_t;
 
-/* Event lifecycle management */
-void events_schedule(monitor_t *monitor, watchref_t watchref, event_t *event, kind_t kind);
-void events_delayed(monitor_t *monitor);
-int events_timeout(monitor_t *monitor, struct timespec *current_time);
-
-/* Event processing */
-void events_batch(monitor_t *monitor);
-void events_deferred(monitor_t *monitor, resource_t *resource);
+/* Event processing core */
 bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, struct timespec *time, sync_t *sync);
 bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kind_t kind, bool is_deferred);
+
+/* Delayed event management */
+void events_delay(monitor_t *monitor, watchref_t watchref, event_t *event, kind_t kind);
+void events_delayed(monitor_t *monitor);
+
+/* Batch event management */
+void events_batch(monitor_t *monitor);
+void events_deferred(monitor_t *monitor, resource_t *resource);
+
+/* Timeout calculation */
+int events_timeout(monitor_t *monitor, struct timespec *current_time);
 struct timespec *timeout_calculate(monitor_t *monitor, struct timespec *timeout, struct timespec *current_time);
 
 /* Sync request management */

@@ -53,7 +53,7 @@ typedef struct monitor {
 	int num_pending;                       /* Number of pending watches */
 
 	/* Queue for delayed events */
-	queue_t *check_queue;                  /* Deferred checks queue */
+	queue_t *check_queue;                  /* Queued checks queue */
 	struct delayed *delayed_events;        /* Array of delayed events */
 	int delayed_count;                     /* Current number of delayed events */
 	int delayed_capacity;                  /* Allocated capacity */

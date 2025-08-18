@@ -5,7 +5,7 @@
 
 #include "registry.h"
 
-/* Deferred directory check queue entry */
+/* Queued directory check queue entry */
 typedef struct check {
 	char *path;                            /* Path to the watched directory (unique key) */
 	struct timespec next_check;            /* When this directory needs checking */
@@ -16,9 +16,9 @@ typedef struct check {
 	long scheduled_quiet;                  /* Quiet period used when scheduling this check */
 } check_t;
 
-/* Deferred check queue structure */
+/* Queued check queue structure */
 typedef struct queue {
-	check_t *items;                        /* Min-heap of deferred checks */
+	check_t *items;                        /* Min-heap of queued checks */
 	int size;                              /* Current number of entries */
 	int items_capacity;                    /* Allocated capacity */
 	registry_t *registry;                  /* Registry reference for lookups */

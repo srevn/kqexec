@@ -86,15 +86,15 @@ bool stability_ready(monitor_t *monitor, subscription_t *subscription, optype_t 
 			}
 		}
 
-		/* Always trigger a deferred check; queue deduplicates */
+		/* Always trigger a queued check; queue deduplicates */
 		root->profile->scanner->active = true;
 		root->profile->stability->stability_lost = false;
 
 		log_message(DEBUG, "Directory content change for %s, marked root %s as active, command deferred",
 					subscription->resource->path, root->resource->path);
 
-		stability_defer(monitor, root);
-		log_message(DEBUG, "Added directory %s to deferred check queue", root->resource->path);
+		stability_queue(monitor, root);
+		log_message(DEBUG, "Added directory %s to queued check queue", root->resource->path);
 		return false; /* Decision happens later */
 	}
 
@@ -131,16 +131,16 @@ bool stability_ready(monitor_t *monitor, subscription_t *subscription, optype_t 
 	return false;
 }
 
-/* Schedule a deferred stability check for a directory */
-void stability_defer(monitor_t *monitor, subscription_t *subscription) {
+/* Queue a stability check for a directory */
+void stability_queue(monitor_t *monitor, subscription_t *subscription) {
 	if (!monitor || !subscription) {
-		log_message(WARNING, "Cannot schedule deferred check. invalid monitor or subscription");
+		log_message(WARNING, "Cannot queue stability check. invalid monitor or subscription");
 		return;
 	}
 
 	watch_t *subscription_watch = registry_get(monitor->registry, subscription->watchref);
 	if (!subscription->resource || !subscription_watch) {
-		log_message(WARNING, "Cannot schedule deferred check, subscription has null resource or watch");
+		log_message(WARNING, "Cannot queue stability check, subscription has null resource or watch");
 		return;
 	}
 
@@ -160,7 +160,7 @@ void stability_defer(monitor_t *monitor, subscription_t *subscription) {
 	if (!root->profile->scanner) {
 		root->profile->scanner = scanner_create(root->resource->path);
 		if (!root->profile->scanner) {
-			log_message(ERROR, "Failed to create scanner for root %s in stability_defer", root->resource->path);
+			log_message(ERROR, "Failed to create scanner for root %s in stability_queue", root->resource->path);
 			return;
 		}
 	}
@@ -202,7 +202,7 @@ void stability_defer(monitor_t *monitor, subscription_t *subscription) {
 			log_message(WARNING, "Failed to merge watch %s into existing check for %s",
 						root_watch ? root_watch->name : "unknown", root->resource->path);
 		} else {
-			log_message(DEBUG, "Merged watch %s into existing deferred check for %s",
+			log_message(DEBUG, "Merged watch %s into existing queued check for %s",
 						root_watch ? root_watch->name : "unknown", root->resource->path);
 		}
 
@@ -255,12 +255,12 @@ void stability_defer(monitor_t *monitor, subscription_t *subscription) {
 		monitor->check_queue->items[queue_index].scheduled_quiet = required_quiet;
 	}
 
-	log_message(DEBUG, "Scheduled deferred check for %s: in %ld ms (directory with %d files, %d dirs)",
+	log_message(DEBUG, "Queued check for %s: in %ld ms (directory with %d files, %d dirs)",
 				root->resource->path, required_quiet, root->profile->stability->stats.local_files,
 				root->profile->stability->stats.local_dirs);
 }
 
-/* Get the root subscription for a deferred check */
+/* Get the root subscription for a queued check */
 subscription_t *stability_entry(monitor_t *monitor, check_t *check) {
 	if (!monitor || !check || check->num_watches <= 0) return NULL;
 
@@ -298,7 +298,7 @@ bool stability_quiet(monitor_t *monitor, subscription_t *root, struct timespec *
 	return scanner_ready(monitor, root, current_time, required_quiet);
 }
 
-/* Reschedule a deferred check */
+/* Requeue a queued check */
 void stability_delay(monitor_t *monitor, check_t *check, subscription_t *root, struct timespec *current_time, long required_quiet) {
 	if (!monitor || !check || !root || !current_time) return;
 
@@ -573,7 +573,7 @@ bool stability_execute(monitor_t *monitor, check_t *check, subscription_t *root,
 		}
 
 		/* Execute command */
-		log_message(INFO, "Executing deferred command for %s (watch: %s)", check->path, watch->name);
+		log_message(INFO, "Executing queued command for %s (watch: %s)", check->path, watch->name);
 		if (command_execute(monitor, check->watchrefs[i], &synthetic_event, true)) {
 			executed_count++;
 			/* Update the specific subscription's command time for debouncing purposes */
@@ -618,7 +618,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 
 		item_processed = true;
 
-		log_message(DEBUG, "Processing deferred check for %s with %d watches", check->path, check->num_watches);
+		log_message(DEBUG, "Processing queued check for %s with %d watches", check->path, check->num_watches);
 
 		/* Get the root subscription state */
 		subscription_t *root = stability_entry(monitor, check);
@@ -823,7 +823,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 	}
 
 	if (item_processed) {
-		log_message(DEBUG, "Processed deferred check. Commands attempted: %d, executed: %d. Remaining queue size: %d",
+		log_message(DEBUG, "Processed queued check. Commands attempted: %d, executed: %d. Remaining queue size: %d",
 					commands_attempted, commands_executed, monitor->check_queue->size);
 	}
 }

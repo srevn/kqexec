@@ -49,7 +49,7 @@ subscription_t* stability_root(monitor_t *monitor, subscription_t *subscription)
 subscription_t *stability_entry(monitor_t *monitor, check_t *check);
 
 /* Quiet period checking */
-void stability_defer(monitor_t *monitor, subscription_t *subscription);
+void stability_queue(monitor_t *monitor, subscription_t *subscription);
 void stability_delay(monitor_t *monitor, check_t *check, subscription_t *root, struct timespec *current_time, long required_quiet);
 bool stability_quiet(monitor_t *monitor, subscription_t *root, struct timespec *current_time, long required_quiet);
 bool stability_ready(monitor_t *monitor, subscription_t *subscription, optype_t optype, int base_debounce_ms);

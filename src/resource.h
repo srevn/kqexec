@@ -60,9 +60,9 @@ typedef struct resource {
 	int deferred_count;                    /* Number of events in the queue */
 	
 	/* Batch timeout detection */
-	bool timeout_active;                   /* Whether we're in a batch timeout */
-	int current_timeout;                   /* Active batch timeout duration */
-	struct timespec timeout_start;         /* When current batch timeout began */
+	bool batch_active;                     /* Whether batch processing is active */
+	int batch_duration;                    /* Active batch timeout duration */
+	struct timespec batch_start;           /* When current batch timeout began */
 	struct timespec last_event;            /* Timestamp of most recent event */
 	
 	struct resource *next;                 /* Next resource in the hash bucket */

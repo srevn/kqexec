@@ -28,11 +28,11 @@ static void events_defer(monitor_t *monitor, resource_t *resource, watchref_t wa
 			struct timespec current_time;
 			clock_gettime(CLOCK_MONOTONIC, &current_time);
 
-			if (!resource->timeout_active) {
+			if (!resource->batch_active) {
 				/* Start new batch timeout */
-				resource->timeout_start = current_time;
-				resource->timeout_active = true;
-				resource->current_timeout = watch->batch_timeout;
+				resource->batch_start = current_time;
+				resource->batch_active = true;
+				resource->batch_duration = watch->batch_timeout;
 				log_message(DEBUG, "Started event batching (%dms timeout) for %s", watch->batch_timeout,
 							resource->path);
 
@@ -44,8 +44,8 @@ static void events_defer(monitor_t *monitor, resource_t *resource, watchref_t wa
 				}
 			} else {
 				/* Batch timeout already active, apply longest timeout */
-				if (watch->batch_timeout > resource->current_timeout) {
-					resource->current_timeout = watch->batch_timeout;
+				if (watch->batch_timeout > resource->batch_duration) {
+					resource->batch_duration = watch->batch_timeout;
 					log_message(DEBUG, "Extended batch timeout to %dms for %s (multiple watches)",
 								watch->batch_timeout, resource->path);
 				}
@@ -107,7 +107,7 @@ void events_deferred(monitor_t *monitor, resource_t *resource) {
 	if (!monitor || !resource) return;
 
 	resource_lock(resource);
-	resource->timeout_active = false;
+	resource->batch_active = false;
 
 	/* Check if there are any events to process */
 	if (!resource->deferred_head) {
@@ -181,7 +181,7 @@ void events_deferred(monitor_t *monitor, resource_t *resource) {
 					scanner_update(root->profile, root->resource->path);
 				}
 			}
-			stability_defer(monitor, subscription);
+			stability_queue(monitor, subscription);
 		}
 	}
 	free(path);
@@ -198,36 +198,36 @@ void events_batch(monitor_t *monitor) {
 	for (size_t i = 0; i < monitor->resources->bucket_count; i++) {
 		resource_t *resource = monitor->resources->buckets[i];
 		while (resource) {
-			if (!resource->timeout_active) {
+			if (!resource->batch_active) {
 				resource = resource->next;
 				continue;
 			}
 
 			/* Check if batch timeout has expired using current active duration */
-			struct timespec timeout_end = resource->timeout_start;
-			timespec_add(&timeout_end, resource->current_timeout);
+			struct timespec batch_end = resource->batch_start;
+			timespec_add(&batch_end, resource->batch_duration);
 
-			bool timeout_expired = timespec_after(&current_time, &timeout_end);
-			if (!timeout_expired) {
+			bool batch_expired = timespec_after(&current_time, &batch_end);
+			if (!batch_expired) {
 				resource = resource->next;
 				continue;
 			}
 
-			/* Timeout window expired, check if activity gap exceeds threshold */
+			/* Batch timeout window expired, check if activity gap exceeds threshold */
 			long gap_ms = timespec_diff(&current_time, &resource->last_event);
-			long threshold_ms = (resource->current_timeout * 60) / 100; /* 60% hardcoded */
+			long threshold_ms = (resource->batch_duration * 60) / 100; /* 60% hardcoded */
 
 			if (gap_ms < threshold_ms) {
 				/* Activity gap too small, reset batch timeout start time to last event */
-				resource->timeout_start = resource->last_event;
+				resource->batch_start = resource->last_event;
 				log_message(DEBUG, "Activity continues for %s, resetting batch timeout (gap: %ldms < %ldms)",
 							resource->path, gap_ms, threshold_ms);
 				resource = resource->next;
 				continue;
 			}
 
-			log_message(DEBUG, "Activity gap detected (%ldms >= %ldms) for %s (timeout: %dms)",
-						gap_ms, threshold_ms, resource->path, resource->current_timeout);
+			log_message(DEBUG, "Activity gap detected (%ldms >= %ldms) for %s (batch duration: %dms)",
+						gap_ms, threshold_ms, resource->path, resource->batch_duration);
 
 			resource_lock(resource);
 			bool has_deferred_events = resource->deferred_count > 0;
@@ -241,7 +241,7 @@ void events_batch(monitor_t *monitor) {
 				log_message(DEBUG, "No deferred events for %s, triggering stability check", resource->path);
 
 				/* Deactivate batch timeout */
-				resource->timeout_active = false;
+				resource->batch_active = false;
 
 				/* Find subscription to trigger stability verification */
 				profile_t *profile = resource->profiles;
@@ -322,7 +322,7 @@ void events_sync_cleanup(sync_t *sync) {
 }
 
 /* Schedule an event for delayed processing */
-void events_schedule(monitor_t *monitor, watchref_t watchref, event_t *event, kind_t kind) {
+void events_delay(monitor_t *monitor, watchref_t watchref, event_t *event, kind_t kind) {
 	if (!monitor || !event || !watchref_valid(watchref)) return;
 
 	/* Resolve watch to get processing delay */
@@ -430,7 +430,7 @@ void events_delayed(monitor_t *monitor) {
 	}
 }
 
-/* Calculate timeout for delayed events, deferred events, and deferred checks */
+/* Calculate timeout for delayed events, deferred events, and queued checks */
 int events_timeout(monitor_t *monitor, struct timespec *current_time) {
 	if (!monitor || !current_time) return -1; /* No timeout needed */
 
@@ -465,33 +465,33 @@ int events_timeout(monitor_t *monitor, struct timespec *current_time) {
 
 	/* Check batch timeout expiration for deferred events */
 	if (monitor->resources && monitor->resources->buckets) {
-		struct timespec earliest_timeout = {0};
-		bool has_timeouts = false;
+		struct timespec earliest_batch = {0};
+		bool has_batches = false;
 
 		/* Iterate through resources with active batch timeouts */
 		for (size_t i = 0; i < monitor->resources->bucket_count; i++) {
 			resource_t *resource = monitor->resources->buckets[i];
 			while (resource) {
-				if (resource->timeout_active) {
+				if (resource->batch_active) {
 					/* Calculate when this batch timeout should expire */
-					struct timespec timeout_expires = resource->timeout_start;
-					timespec_add(&timeout_expires, resource->current_timeout);
+					struct timespec batch_expires = resource->batch_start;
+					timespec_add(&batch_expires, resource->batch_duration);
 
-					if (!has_timeouts || timespec_before(&timeout_expires, &earliest_timeout)) {
-						earliest_timeout = timeout_expires;
-						has_timeouts = true;
+					if (!has_batches || timespec_before(&batch_expires, &earliest_batch)) {
+						earliest_batch = batch_expires;
+						has_batches = true;
 					}
 				}
 				resource = resource->next;
 			}
 		}
 
-		if (has_timeouts) {
+		if (has_batches) {
 			long batch_timeout_ms;
-			if (timespec_after(current_time, &earliest_timeout)) {
+			if (timespec_after(current_time, &earliest_batch)) {
 				batch_timeout_ms = 1; /* Already overdue */
 			} else {
-				batch_timeout_ms = timespec_diff(&earliest_timeout, current_time);
+				batch_timeout_ms = timespec_diff(&earliest_batch, current_time);
 			}
 
 			if (batch_timeout_ms >= 0) {
@@ -503,29 +503,29 @@ int events_timeout(monitor_t *monitor, struct timespec *current_time) {
 		}
 	}
 
-	/* Check deferred checks timeout from queue */
+	/* Check queued checks timeout from queue */
 	if (monitor->check_queue && monitor->check_queue->size > 0) {
 		/* Get the earliest check time */
 		struct timespec next_check = monitor->check_queue->items[0].next_check;
 
-		long deferred_timeout_ms;
+		long queued_timeout_ms;
 		if (timespec_after(current_time, &next_check)) {
-			deferred_timeout_ms = 1; /* Already overdue */
+			queued_timeout_ms = 1; /* Already overdue */
 		} else {
-			deferred_timeout_ms = timespec_diff(&next_check, current_time);
+			queued_timeout_ms = timespec_diff(&next_check, current_time);
 		}
 
-		if (deferred_timeout_ms >= 0) {
-			if (shortest_timeout_ms < 0 || deferred_timeout_ms < shortest_timeout_ms) {
-				shortest_timeout_ms = deferred_timeout_ms;
-				timeout_source = "deferred";
+		if (queued_timeout_ms >= 0) {
+			if (shortest_timeout_ms < 0 || queued_timeout_ms < shortest_timeout_ms) {
+				shortest_timeout_ms = queued_timeout_ms;
+				timeout_source = "queued";
 			}
 		}
 	}
 
 	/* Log the selected timeout source for debugging */
 	if (shortest_timeout_ms >= 0) {
-		log_message(DEBUG, "Next wake-up in %ld ms for %s processing", shortest_timeout_ms,
+		log_message(DEBUG, "Next timeout in %ld ms for %s processing", shortest_timeout_ms,
 					timeout_source);
 	}
 
@@ -602,7 +602,7 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 				/* Check if this watch has a processing delay configured */
 				if (watch->processing_delay > 0) {
 					/* Schedule the event for delayed processing */
-					events_schedule(monitor, savedref, &event, kind);
+					events_delay(monitor, savedref, &event, kind);
 				} else {
 					/* Process the event immediately */
 					events_process(monitor, savedref, &event, kind, false);
@@ -614,7 +614,7 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 	return true;
 }
 
-/* Calculate timeouts for monitor based on deferred checks and delayed events */
+/* Calculate timeouts for monitor based on queued checks and delayed events */
 struct timespec *timeout_calculate(monitor_t *monitor, struct timespec *timeout, struct timespec *current_time) {
 	if (!monitor || !timeout || !current_time) return NULL;
 
@@ -634,9 +634,9 @@ struct timespec *timeout_calculate(monitor_t *monitor, struct timespec *timeout,
 			timeout->tv_nsec = 10000000; /* 10ms minimum */
 		}
 
-		/* Debug output for the queue status if we have deferred checks */
+		/* Debug output for the queue status if we have queued checks */
 		if (monitor->check_queue && monitor->check_queue->size > 0 && monitor->check_queue->items[0].path) {
-			log_message(DEBUG, "Deferred queue status: %d entries, next check for path %s, timeout: %d ms",
+			log_message(DEBUG, "Queued check status: %d entries, next check for path %s, timeout: %d ms",
 						monitor->check_queue->size, monitor->check_queue->items[0].path, timeout_ms);
 		}
 

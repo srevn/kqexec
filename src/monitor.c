@@ -181,7 +181,7 @@ monitor_t *monitor_create(config_t *config, registry_t *registry) {
 		monitor->config_path = strdup(config->config_path);
 	}
 
-	/* Initialize the deferred check queue with registry observer */
+	/* Initialize the queued check queue with registry observer */
 	monitor->check_queue = queue_create(monitor->registry, 16); /* Initial capacity of 16 */
 
 	/* Initialize resource table */
@@ -730,7 +730,7 @@ bool monitor_poll(monitor_t *monitor) {
 		return false;
 	}
 
-	/* Calculate timeout based on pending deferred scans and delayed events */
+	/* Calculate timeout based on pending queued scans and delayed events */
 	struct timespec now_monotonic;
 	clock_gettime(CLOCK_MONOTONIC, &now_monotonic);
 
@@ -777,17 +777,17 @@ bool monitor_poll(monitor_t *monitor) {
 	} else {
 		/* nev == 0 means timeout occurred */
 		if (p_timeout) {
-			log_message(DEBUG, "Timeout occurred after %ld.%09ld seconds, checking deferred scans",
+			log_message(DEBUG, "Timeout occurred after %ld.%09ld seconds, checking queued scans",
 						p_timeout->tv_sec, p_timeout->tv_nsec);
 		} else {
-			log_message(DEBUG, "Timeout occurred, checking deferred scans");
+			log_message(DEBUG, "Timeout occurred, checking queued scans");
 		}
 
 		/* Check batch timeouts only on timeout */
 		events_batch(monitor);
 	}
 
-	/* Check deferred scans */
+	/* Check queued scans */
 	stability_process(monitor, &kevent_time);
 
 	/* Process delayed events */
@@ -1086,7 +1086,7 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 			watchref_t file_watchref = watcher->watchref;
 			bool file_watch = (target_watch && target_watch->target == WATCH_FILE);
 
-			/* Clear any pending deferred checks to prevent use-after-free */
+			/* Clear any pending queued checks to prevent use-after-free */
 			queue_remove(monitor->check_queue, path);
 
 			/* Remove subdirectory watchers if this was a recursive directory */
