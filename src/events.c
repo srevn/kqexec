@@ -97,8 +97,8 @@ static void events_defer(monitor_t *monitor, resource_t *resource, watchref_t wa
 	}
 
 	resource->deferred_count++;
-	log_message(DEBUG, "Queued deferred event for %s, total deferred: %d",
-				resource->path, resource->deferred_count);
+	log_message(DEBUG, "Queued deferred event for %s, total deferred: %d", resource->path,
+				resource->deferred_count);
 	resource_unlock(resource);
 }
 
@@ -797,24 +797,33 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 		return false; /* Error already logged by resources_subscription */
 	}
 
+	subscription_t *root = stability_root(monitor, subscription);
+	resource_t *root_resource = root ? root->resource : subscription->resource;
+
+	/* If already in the stability queue, reset the quiet period timer */
+	if (queue_find(monitor->check_queue, root_resource->path) != -1) {
+		log_message(DEBUG, "Event for %s while in stability queue, updating activity time",
+					root_resource->path);
+		optype_t optype = events_operation(monitor, subscription, event->type);
+		if (optype != OP_NONE) {
+			scanner_track(monitor, subscription, optype);
+		}
+		return true; /* Event handled by resetting timer, skip batching/deferral logic */
+	}
+
 	/* Check if this watch has batch timeout configured */
 	if (watch->batch_timeout > 0 && !is_deferred) {
 		/* Get root resource to ensure consistent gating across watch hierarchies */
-		subscription_t *root = stability_root(monitor, subscription);
-		resource_t *resource = root ? root->resource : subscription->resource;
-
-		events_defer(monitor, resource, watchref, event, kind);
+		events_defer(monitor, root_resource, watchref, event, kind);
 		return false; /* Stop further processing */
 	}
 
-	/* Check if command is executing for this path or its root - defer events during execution */
-	subscription_t *root = stability_root(monitor, subscription);
-	resource_t *executing_resource = root ? root->resource : subscription->resource;
-	if (executing_resource->executing) {
+	/* Check if command is executing for this path or its root, defer events during execution */
+	if (root_resource->executing) {
 		log_message(DEBUG, "Deferring event for %s, command is currently executing for %s",
-					event->path, executing_resource->path);
+					event->path, root_resource->path);
 		/* Defer event on the resource itself until the current command completes */
-		events_defer(monitor, executing_resource, watchref, event, kind);
+		events_defer(monitor, root_resource, watchref, event, kind);
 		return false;
 	}
 
