@@ -481,10 +481,10 @@ void stability_reset(monitor_t *monitor, subscription_t *root) {
 	root->profile->stability->reference_init = true;
 
 	/* Clear deferred event queue */
-	deferred_t *deferred = root->resource->deferred_head;
-	if (deferred) {
+	if (root->resource->deferred_head) {
 		log_message(DEBUG, "Clearing %d deferred events for %s after processing",
 					root->resource->deferred_count, root->resource->path);
+		deferred_t *deferred = root->resource->deferred_head;
 		while (deferred) {
 			deferred_t *next_deferred = deferred->next;
 			free(deferred->event.path);
@@ -495,6 +495,9 @@ void stability_reset(monitor_t *monitor, subscription_t *root) {
 		root->resource->deferred_tail = NULL;
 		root->resource->deferred_count = 0;
 	}
+
+	/* Deactivate any pending batch timeout to prevent duplicate triggers */
+	root->resource->batch_active = false;
 
 	/* Clear activity tracking flag to mark the directory as idle */
 	if (root->profile->scanner) {
