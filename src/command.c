@@ -342,8 +342,12 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 		const char *trigger = event->path; /* Default to event path */
 		if (subscription) {
 			subscription_t *root = stability_root(monitor, subscription);
-			if (root && root->trigger) {
-				trigger = root->trigger;
+			if (root) {
+				resource_lock(root->resource);
+				if (root->trigger) {
+					trigger = root->trigger;
+				}
+				resource_unlock(root->resource);
 			}
 		}
 
@@ -451,9 +455,13 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 		size_t size = 0;
 		if (subscription && subscription->resource->kind == ENTITY_DIRECTORY) {
 			subscription_t *size_subscription = stability_root(monitor, subscription);
-			pthread_mutex_lock(&subscription->resource->mutex);
-			size = size_subscription ? size_subscription->profile->stability->stats.tree_size : subscription->profile->stability->stats.tree_size;
-			pthread_mutex_unlock(&subscription->resource->mutex);
+			if (size_subscription) {
+				resource_lock(size_subscription->resource);
+				if (size_subscription->profile && size_subscription->profile->stability) {
+					size = size_subscription->profile->stability->stats.tree_size;
+				}
+				resource_unlock(size_subscription->resource);
+			}
 		} else if (stat(event->path, &info) == 0) {
 			size = info.st_size;
 		}
@@ -815,8 +823,12 @@ void command_environment(monitor_t *monitor, watchref_t watchref, const event_t 
 	}
 	if (subscription) {
 		subscription_t *root = stability_root(monitor, subscription);
-		if (root && root->trigger) {
-			trigger_file = root->trigger;
+		if (root) {
+			resource_lock(root->resource);
+			if (root->trigger) {
+				trigger_file = root->trigger;
+			}
+			resource_unlock(root->resource);
 		}
 	}
 	setenv("KQ_TRIGGER_FILE_PATH", trigger_file, 1);
