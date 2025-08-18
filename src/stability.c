@@ -420,11 +420,6 @@ int stability_require(subscription_t *root, const stats_t *current_stats) {
 		if (tree_depth >= 5 || tree_entries > 1000) checks_required = 4;
 	}
 
-	/* Consider previous stability for check reduction */
-	if (root->profile->stability->stability_lost && checks_required > 1) {
-		log_message(DEBUG, "Stability was lost, maintaining required checks at %d", checks_required);
-	}
-
 	/* Ensure at least one check is required */
 	if (checks_required < 1) checks_required = 1;
 

@@ -17,7 +17,7 @@
 #include "stability.h"
 #include "utilities.h"
 
-/* Defer an event on a resource that is currently executing a command */
+/* Defer an event on a resource during timeouts or that is executing a command */
 static void events_defer(monitor_t *monitor, resource_t *resource, watchref_t watchref, const event_t *event, kind_t kind) {
 	if (!resource || !event) return;
 
@@ -463,8 +463,8 @@ int events_timeout(monitor_t *monitor, struct timespec *current_time) {
 
 	/* Check batch timeout expiration for deferred events */
 	if (monitor->resources && monitor->resources->buckets) {
-		struct timespec soonest_batch_timeout = {0};
-		bool has_batch_timeouts = false;
+		struct timespec earliest_timeout = {0};
+		bool has_timeouts = false;
 
 		/* Iterate through resources with active batch timeouts */
 		for (size_t i = 0; i < monitor->resources->bucket_count; i++) {
@@ -475,21 +475,21 @@ int events_timeout(monitor_t *monitor, struct timespec *current_time) {
 					struct timespec timeout_expires = resource->timeout_start;
 					timespec_add(&timeout_expires, resource->current_timeout);
 
-					if (!has_batch_timeouts || timespec_before(&timeout_expires, &soonest_batch_timeout)) {
-						soonest_batch_timeout = timeout_expires;
-						has_batch_timeouts = true;
+					if (!has_timeouts || timespec_before(&timeout_expires, &earliest_timeout)) {
+						earliest_timeout = timeout_expires;
+						has_timeouts = true;
 					}
 				}
 				resource = resource->next;
 			}
 		}
 
-		if (has_batch_timeouts) {
+		if (has_timeouts) {
 			long batch_timeout_ms;
-			if (timespec_after(current_time, &soonest_batch_timeout)) {
+			if (timespec_after(current_time, &earliest_timeout)) {
 				batch_timeout_ms = 1; /* Already overdue */
 			} else {
-				batch_timeout_ms = timespec_diff(&soonest_batch_timeout, current_time);
+				batch_timeout_ms = timespec_diff(&earliest_timeout, current_time);
 			}
 
 			if (batch_timeout_ms >= 0) {
@@ -778,7 +778,6 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 	if (strcmp(watch->name, "__config_file__") == 0) {
 		log_message(NOTICE, "Configuration changed: %s", event->path);
 		monitor->reload = true;
-		log_message(DEBUG, "Configuration reload requested");
 		return true;
 	}
 

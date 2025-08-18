@@ -38,8 +38,7 @@ void queue_remove_by_index(queue_t *queue, int index);
 /* Check entry management */
 bool queue_add(check_t *check, watchref_t watchref);
 
-/* Time comparison and heap operations */
-int time_compare(struct timespec *a, struct timespec *b);
+/* Heap operations */
 void heap_up(check_t *queue, int heap_index);
 void heap_down(check_t *queue, int queue_size, int heap_index);
 
