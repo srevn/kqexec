@@ -609,8 +609,8 @@ static void scanner_recursive(monitor_t *monitor, subscription_t *subscription, 
 			root->profile->stability = stability_create();
 		}
 		if (root->profile->stability) {
-			root->profile->stability->stability_lost = false;
 			root->profile->stability->checks_count = 0;
+			root->profile->stability->stability_lost = false;
 		}
 
 		/* For directory operations, update directory stats immediately */
@@ -645,8 +645,7 @@ void scanner_track(monitor_t *monitor, subscription_t *subscription, optype_t op
 	/* Check for duplicate tracking to avoid re-processing the same event */
 	if (subscription->resource->op_time.tv_sec == subscription->resource->last_time.tv_sec &&
 		subscription->resource->op_time.tv_nsec == subscription->resource->last_time.tv_nsec) {
-		log_message(DEBUG, "Skipping duplicate track for %s (optype=%d)",
-					subscription->resource->path, optype);
+		log_message(DEBUG, "Skipping duplicate track for %s (optype=%d)", subscription->resource->path, optype);
 		return;
 	}
 
@@ -724,6 +723,16 @@ static void scanner_recent(subscription_t *subscription, int *recent_files, int 
 		*recent_files = 0;
 		*recent_dirs = 0;
 		*recent_size = 0;
+	}
+
+	/* No recent activity, consider cumulative changes to maintain a stable quiet period */
+	bool has_recent_activity = (*recent_files > 0 || *recent_dirs > 0 || *recent_depth > 0 || *recent_size > 0);
+	if (!has_recent_activity && subscription->profile->stability) {
+		log_message(DEBUG, "No recent activity detected, using cumulative changes for quiet period base");
+		*recent_files = abs(subscription->profile->stability->delta_files);
+		*recent_dirs = abs(subscription->profile->stability->delta_dirs);
+		*recent_depth = abs(subscription->profile->stability->delta_depth);
+		*recent_size = subscription->profile->stability->delta_size > 0 ? subscription->profile->stability->delta_size : 0;
 	}
 }
 
@@ -909,16 +918,7 @@ long scanner_delay(monitor_t *monitor, subscription_t *subscription) {
 	ssize_t recent_size;
 	scanner_recent(subscription, &recent_files, &recent_dirs, &recent_depth, &recent_size);
 
-	/* No recent activity, consider cumulative changes to maintain a stable quiet period */
-	bool has_recent_activity = (recent_files > 0 || recent_dirs > 0 || recent_depth > 0 || recent_size > 0);
-	if (!has_recent_activity && subscription->profile->stability) {
-		log_message(DEBUG, "No recent activity detected, using cumulative changes for quiet period base");
-		recent_files = abs(subscription->profile->stability->delta_files);
-		recent_dirs = abs(subscription->profile->stability->delta_dirs);
-		recent_depth = abs(subscription->profile->stability->delta_depth);
-		recent_size = subscription->profile->stability->delta_size > 0 ? subscription->profile->stability->delta_size : 0;
-	}
-
+	/* Check for temporary files that indicate instability */
 	bool temp_files = subscription->profile->stability ? subscription->profile->stability->stats.temp_files : false;
 
 	/* Calculate base period from recent change magnitude */

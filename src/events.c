@@ -802,8 +802,7 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 
 	/* If already in the stability queue, reset the quiet period timer */
 	if (queue_find(monitor->check_queue, root_resource->path) != -1) {
-		log_message(DEBUG, "Event for %s while in stability queue, updating activity time",
-					root_resource->path);
+		log_message(DEBUG, "Event for %s while in stability queue, updating activity time", root_resource->path);
 		optype_t optype = events_operation(monitor, subscription, event->type);
 		if (optype != OP_NONE) {
 			scanner_track(monitor, subscription, optype);
