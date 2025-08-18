@@ -434,7 +434,8 @@ void events_delayed(monitor_t *monitor) {
 int events_timeout(monitor_t *monitor, struct timespec *current_time) {
 	if (!monitor || !current_time) return -1; /* No timeout needed */
 
-	long shortest_timeout_ms = -1; /* No timeout by default */
+	long shortest_timeout_ms = -1;		 /* No timeout by default */
+	const char *timeout_source = "none"; /* Track which timeout type is selected */
 
 	/* Check delayed events timeout */
 	if (monitor->delayed_events && monitor->delayed_count > 0) {
@@ -458,6 +459,7 @@ int events_timeout(monitor_t *monitor, struct timespec *current_time) {
 
 		if (delayed_timeout_ms >= 0) {
 			shortest_timeout_ms = delayed_timeout_ms;
+			timeout_source = "delayed";
 		}
 	}
 
@@ -495,6 +497,7 @@ int events_timeout(monitor_t *monitor, struct timespec *current_time) {
 			if (batch_timeout_ms >= 0) {
 				if (shortest_timeout_ms < 0 || batch_timeout_ms < shortest_timeout_ms) {
 					shortest_timeout_ms = batch_timeout_ms;
+					timeout_source = "batch";
 				}
 			}
 		}
@@ -515,8 +518,15 @@ int events_timeout(monitor_t *monitor, struct timespec *current_time) {
 		if (deferred_timeout_ms >= 0) {
 			if (shortest_timeout_ms < 0 || deferred_timeout_ms < shortest_timeout_ms) {
 				shortest_timeout_ms = deferred_timeout_ms;
+				timeout_source = "deferred";
 			}
 		}
+	}
+
+	/* Log the selected timeout source for debugging */
+	if (shortest_timeout_ms >= 0) {
+		log_message(DEBUG, "Next wake-up in %ld ms for %s processing", shortest_timeout_ms,
+					timeout_source);
 	}
 
 	return shortest_timeout_ms >= 0 ? (int) shortest_timeout_ms : -1;
