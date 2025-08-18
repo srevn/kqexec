@@ -681,13 +681,13 @@ void scanner_track(monitor_t *monitor, subscription_t *subscription, optype_t op
 }
 
 /* Calculate base quiet period based on recent change magnitude */
-static long scanner_base(int recent_files, int recent_dirs, int recent_depth, ssize_t recent_size) {
+static long scanner_base(int recent_files, int recent_dirs, int recent_depth, ssize_t recent_size, bool temp_files) {
 	int total_change = recent_files + recent_dirs;
 
 	/* Start with a base quiet period based primarily on change magnitude */
 	if (total_change == 0 && recent_depth == 0 && recent_size == 0) {
-		/* No change - minimal quiet period */
-		return 250;
+		/* No change - minimal quiet period, unless temp files were detected */
+		return temp_files ? 1000 : 250;
 	} else if (total_change < 5 && recent_depth == 0 && recent_size < 1024 * 1024) {
 		/* Few files change with no structural changes and small size changes - short quiet period */
 		return 500;
@@ -909,8 +909,10 @@ long scanner_delay(monitor_t *monitor, subscription_t *subscription) {
 	ssize_t recent_size;
 	scanner_recent(subscription, &recent_files, &recent_dirs, &recent_depth, &recent_size);
 
+	bool temp_files = subscription->profile->stability ? subscription->profile->stability->stats.temp_files : false;
+
 	/* Calculate base period from recent change magnitude */
-	required_ms = scanner_base(recent_files, recent_dirs, recent_depth, recent_size);
+	required_ms = scanner_base(recent_files, recent_dirs, recent_depth, recent_size, temp_files);
 
 	/* Apply stability adjustments (depth, size, stability loss) */
 	required_ms = scanner_adjust(subscription, required_ms);
