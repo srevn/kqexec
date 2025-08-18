@@ -909,6 +909,16 @@ long scanner_delay(monitor_t *monitor, subscription_t *subscription) {
 	ssize_t recent_size;
 	scanner_recent(subscription, &recent_files, &recent_dirs, &recent_depth, &recent_size);
 
+	/* No recent activity, consider cumulative changes to maintain a stable quiet period */
+	bool has_recent_activity = (recent_files > 0 || recent_dirs > 0 || recent_depth > 0 || recent_size > 0);
+	if (!has_recent_activity && subscription->profile->stability) {
+		log_message(DEBUG, "No recent activity detected, using cumulative changes for quiet period base");
+		recent_files = abs(subscription->profile->stability->delta_files);
+		recent_dirs = abs(subscription->profile->stability->delta_dirs);
+		recent_depth = abs(subscription->profile->stability->delta_depth);
+		recent_size = subscription->profile->stability->delta_size > 0 ? subscription->profile->stability->delta_size : 0;
+	}
+
 	bool temp_files = subscription->profile->stability ? subscription->profile->stability->stats.temp_files : false;
 
 	/* Calculate base period from recent change magnitude */
