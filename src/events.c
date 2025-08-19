@@ -102,89 +102,146 @@ static void events_defer(monitor_t *monitor, resource_t *resource, watchref_t wa
 	resource_unlock(resource);
 }
 
-/* Process deferred events when batch timeout expires */
+/* Process deferred events while preserving event type specificity during batching */
 void events_deferred(monitor_t *monitor, resource_t *resource) {
 	if (!monitor || !resource) return;
 
-	resource_lock(resource);
-	resource->batch_active = false;
+	/* Per-watch event aggregation structure to preserve event type specificity */
+	typedef struct deferred_group {
+		uid_t user_id;				 /* User ID from the most recent event */
+		kind_t kind;				 /* ENTITY_FILE or ENTITY_DIRECTORY */
+		watchref_t watchref;		 /* Watch that will process these events */
+		filter_t events_aggregated;	 /* Bitwise OR of all event types for this watch */
+		struct timespec latest_time; /* Timestamp of the most recent event */
+		struct timespec latest_wall; /* Wall clock time of the most recent event */
+	} deferred_group_t;
 
-	/* Check if there are any events to process */
+	resource_lock(resource);
+
+	/* Early return if no deferred events to process */
 	if (!resource->deferred_head) {
-		profile_t *profiles_head = resource->profiles;
 		resource_unlock(resource);
-		log_message(DEBUG, "Batch timeout expired for %s, no events queued", resource->path);
-		for (profile_t *profile = profiles_head; profile; profile = profile->next) {
-			if (profile->subscriptions) {
-				stability_ready(monitor, profile->subscriptions, OP_DIR_CONTENT_CHANGED, 0);
-			}
-		}
 		return;
 	}
 
-	log_message(DEBUG, "Coalescing %d deferred events for %s", resource->deferred_count,
-				resource->path);
+	log_message(DEBUG, "Processing %d deferred events for %s by grouping per watch reference",
+				resource->deferred_count, resource->path);
 
-	/* Clear deferred queue to coalesce into single stability check */
-	deferred_t *current = resource->deferred_head;
-	while (current) {
-		deferred_t *next = current->next;
-		free(current->event.path);
-		free(current);
-		current = next;
-	}
+	/* Detach the entire deferred event list from the resource for local processing */
+	deferred_t *detached_events = resource->deferred_head;
 	resource->deferred_head = NULL;
 	resource->deferred_tail = NULL;
 	resource->deferred_count = 0;
+	resource->batch_active = false;
 
-	/* Get necessary resource properties before unlocking */
-	profile_t *profiles_head = resource->profiles;
-	kind_t kind = resource->kind;
-	struct timespec last_time = resource->last_time;
-	struct timespec wall_time = resource->wall_time;
-	char *path = strdup(resource->path);
-
-	resource_unlock(resource);
-
-	if (!path) {
+	/* Copy resource path before unlocking to avoid accessing freed memory */
+	char *resource_path = strdup(resource->path);
+	if (!resource_path) {
 		log_message(ERROR, "Failed to copy resource path in events_deferred");
+		resource_unlock(resource);
+		/* Cleanup detached events to prevent memory leak */
+		deferred_t *current_event = detached_events;
+		while (current_event) {
+			deferred_t *next_event = current_event->next;
+			free(current_event->event.path);
+			free(current_event);
+			current_event = next_event;
+		}
 		return;
 	}
 
-	/* Handle files or directories after coalescing for each profile */
-	for (profile_t *profile = profiles_head; profile; profile = profile->next) {
-		subscription_t *subscription = profile->subscriptions;
-		if (!subscription) continue;
+	resource_unlock(resource);
 
-		if (kind == ENTITY_FILE) {
-			/* For files, trigger immediate command execution for all subscriptions in this profile */
-			for (subscription_t *sub_iterator = subscription; sub_iterator; sub_iterator = sub_iterator->next) {
-				event_t synthetic_event = {
-					.path = path,
-					.type = EVENT_CONTENT,
-					.time = last_time,
-					.wall_time = wall_time,
-					.user_id = getuid()};
+	/* Group events by watch reference and aggregate their types */
+	deferred_group_t *deferred_groups = NULL;
+	int num_groups = 0;
+	int groups_capacity = 0;
+	deferred_t *current_event = detached_events;
 
-				command_execute(monitor, sub_iterator->watchref, &synthetic_event, true);
-			}
-		} else {
-			/* For directories, perform preliminary scan before using stability system */
-			subscription_t *root = stability_root(monitor, subscription);
-			if (root && root->profile && root->profile->stability) {
-				stats_t current_stats;
-				watch_t *watch = registry_get(monitor->registry, root->watchref);
-				if (watch) {
-					scanner_scan(root->resource->path, watch, &current_stats);
-					root->profile->stability->prev_stats = root->profile->stability->stats;
-					root->profile->stability->stats = current_stats;
-					scanner_update(root->profile, root->resource->path);
+	while (current_event) {
+		bool existing_group_found = false;
+
+		/* Search for existing group with matching watch reference */
+		for (int i = 0; i < num_groups; i++) {
+			if (watchref_equal(deferred_groups[i].watchref, current_event->watchref)) {
+				/* Aggregate event type using bitwise OR to preserve all event types */
+				deferred_groups[i].events_aggregated |= current_event->event.type;
+
+				/* Update to latest timestamp to maintain temporal accuracy */
+				if (timespec_after(&current_event->event.time, &deferred_groups[i].latest_time)) {
+					deferred_groups[i].latest_time = current_event->event.time;
+					deferred_groups[i].latest_wall = current_event->event.wall_time;
+					deferred_groups[i].user_id = current_event->event.user_id;
 				}
+				existing_group_found = true;
+				break;
 			}
-			stability_queue(monitor, subscription);
 		}
+
+		/* Create new group if no existing group found for this watch reference */
+		if (!existing_group_found) {
+			/* Expand groups array if needed */
+			if (num_groups >= groups_capacity) {
+				int new_capacity = groups_capacity == 0 ? 4 : groups_capacity * 2;
+				deferred_group_t *new_group = realloc(deferred_groups, new_capacity * sizeof(deferred_group_t));
+				if (!new_group) {
+					log_message(ERROR, "Failed to allocate memory for watch event groups");
+					/* Cleanup all allocated resources */
+					free(deferred_groups);
+					free(resource_path);
+					deferred_t *cleanup_event = detached_events;
+					while (cleanup_event) {
+						deferred_t *next_event = cleanup_event->next;
+						free(cleanup_event->event.path);
+						free(cleanup_event);
+						cleanup_event = next_event;
+					}
+					return;
+				}
+				deferred_groups = new_group;
+				groups_capacity = new_capacity;
+			}
+
+			/* Initialize new group with current event data */
+			deferred_groups[num_groups].watchref = current_event->watchref;
+			deferred_groups[num_groups].events_aggregated = current_event->event.type;
+			deferred_groups[num_groups].latest_time = current_event->event.time;
+			deferred_groups[num_groups].latest_wall = current_event->event.wall_time;
+			deferred_groups[num_groups].user_id = current_event->event.user_id;
+			deferred_groups[num_groups].kind = current_event->kind;
+			num_groups++;
+		}
+		current_event = current_event->next;
 	}
-	free(path);
+
+	/* Free the original deferred event list */
+	current_event = detached_events;
+	while (current_event) {
+		deferred_t *next_event = current_event->next;
+		free(current_event->event.path);
+		free(current_event);
+		current_event = next_event;
+	}
+
+	/* Process aggregated events per watch */
+	for (int i = 0; i < num_groups; i++) {
+		deferred_group_t *deferred_group = &deferred_groups[i];
+
+		/* Create synthetic event with aggregated types for this watch */
+		event_t aggregated_event = {
+			.path = resource_path,
+			.type = deferred_group->events_aggregated,
+			.time = deferred_group->latest_time,
+			.wall_time = deferred_group->latest_wall,
+			.user_id = deferred_group->user_id};
+
+		/* Delegate to events_process() for consistent handling */
+		events_process(monitor, deferred_group->watchref, &aggregated_event, deferred_group->kind, true);
+	}
+
+	/* Final cleanup of allocated resources */
+	free(deferred_groups);
+	free(resource_path);
 }
 
 /* Check batch timeouts and trigger processing when activity gaps are detected */
