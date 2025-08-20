@@ -86,7 +86,7 @@ command = command to execute  # Command to run when events occur
 environment = false           # Whether to set KQ_* environment variables (default: false)
 processing_delay = 5000       # Delay in milliseconds before processing events (default: 0)
 batch_timeout = 30000         # Batch events and process them when filesystem activity settles (default: 0)
-complexity = 2.5              # Higher values reduce I/O by waiting longer for stability checks (default: 1.0)
+complexity = 2.5              # System responsiveness with 0.1-5.0 range, higher = more cautious (default: 1.0)
 log_output = false            # Whether to capture and log command output (default: false)
 buffer_output = false         # Whether to buffer log output until command completes (default: false)
 recursive = true              # For recursive directory monitoring (default: true)
@@ -304,9 +304,17 @@ kqexec can optionally monitor hidden files and directories (those starting with 
 
 Commands can span multiple lines using backslash continuation or proper quoting, allowing for complex command structures and shell scripts.
 
-#### Complexity-Based Stability Control
+#### Complexity-Based Responsiveness Control
 
-The `complexity` option allows fine-tuning of stability verification for heavy filesystem operations. Higher values increase wait times for stability checks, reducing I/O overhead during intensive operations.
+The `complexity` option (range 0.1-5.0) provides fine-grained control over system responsiveness versus stability. Higher complexity values make the system more cautious and less responsive, while lower values prioritize speed:
+
+- **Stability Verification**: More checks required before executing commands
+- **Quiet Period Scaling**: Longer wait times before considering directories stable  
+- **Backoff Behavior**: More aggressive delays during filesystem instability
+- **Batch Processing**: Higher thresholds for detecting activity gaps
+- **Depth/Size Sensitivity**: Complexity-scaled delays for deep or large directory structures
+
+This allows tuning from very responsive (0.1) for simple workflows to highly cautious (5.0) for complex build systems or intensive I/O operations.
 
 #### Delayed Event Processing
 
@@ -314,7 +322,7 @@ The `processing_delay`/`delay` option introduces an initial fixed delay before p
 
 #### Batch Event Processing
 
-The `batch_timeout`/`timeout` option defers events during active filesystem operations and processes them as a single operation when activity settles. Rather than a simple timer, it uses activity gap detection - the timeout window resets if events continue arriving, only triggering when there's been no activity for 60% of the configured duration. This prevents command flooding during intensive or chaotic operations like git operations, builds, or large file transfers.
+The `batch_timeout`/`timeout` option defers events during active filesystem operations and processes them as a single operation when activity settles. Rather than a simple timer, it uses activity gap detection - the timeout window resets if events continue arriving, only triggering when there's been no activity for a complexity-determined threshold of the configured duration (by default 50%). This prevents command flooding during intensive or chaotic operations like indexing, builds, or large file transfers.
 
 #### Buffered Command Output
 
