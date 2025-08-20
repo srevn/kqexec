@@ -711,7 +711,7 @@ static long scanner_base(int recent_files, int recent_dirs, int recent_depth, ss
 	}
 }
 
-/* Calculate current activity magnitude (changes from reference state) for responsive adjustments */
+/* Calculate current activity magnitude (changes from reference state) */
 static void scanner_recent(subscription_t *subscription, int *recent_files, int *recent_dirs, int *recent_depth, ssize_t *recent_size) {
 	/* Calculate changes from the previous scan state to measure the current rate of change */
 	if (subscription->profile->stability) {
@@ -726,20 +726,10 @@ static void scanner_recent(subscription_t *subscription, int *recent_files, int 
 		*recent_dirs = 0;
 		*recent_size = 0;
 	}
-
-	/* No recent activity, consider cumulative changes to maintain a stable quiet period */
-	bool has_recent_activity = (*recent_files > 0 || *recent_dirs > 0 || *recent_depth > 0 || *recent_size > 0);
-	if (!has_recent_activity && subscription->profile->stability) {
-		log_message(DEBUG, "No recent activity detected, using cumulative changes for quiet period base");
-		*recent_files = abs(subscription->profile->stability->delta_files);
-		*recent_dirs = abs(subscription->profile->stability->delta_dirs);
-		*recent_depth = abs(subscription->profile->stability->delta_depth);
-		*recent_size = subscription->profile->stability->delta_size > 0 ? subscription->profile->stability->delta_size : 0;
-	}
 }
 
 /* Apply stability, depth, and size adjustments to quiet period */
-static long scanner_adjust(monitor_t *monitor, subscription_t *subscription, long base_ms) {
+static long scanner_adjust(monitor_t *monitor, subscription_t *subscription, long base_ms, int recent_change) {
 	long required_ms = base_ms;
 	int tree_entries = 0;
 	int tree_depth = 0;
@@ -750,26 +740,36 @@ static long scanner_adjust(monitor_t *monitor, subscription_t *subscription, lon
 																			 subscription->profile->stability->stats.depth;
 	}
 
-	/* Use current activity magnitude for responsiveness */
-	int recent_files, recent_dirs, recent_depth;
-	ssize_t recent_size;
-	scanner_recent(subscription, &recent_files, &recent_dirs, &recent_depth, &recent_size);
-
-	/* Calculate comprehensive activity magnitude including depth and size changes */
-	int size_weight = 0;
-	if (recent_size > 100 * 1024 * 1024) {
-		size_weight = (int) (recent_size / (100 * 1024 * 1024)); /* 1 point per 100MB */
-	} else if (recent_size > 10 * 1024 * 1024) {
-		size_weight = 1; /* 1 point for 10-100MB */
-	} else if (recent_size > 1024 * 1024) {
-		size_weight = 0; /* No weight for 1-10MB */
+	/* If stability was previously achieved and then lost, increase quiet period */
+	if (subscription->profile->stability && subscription->profile->stability->stability_lost) {
+		/* We need a more careful check for resumed activity */
+		long pre_stability = required_ms;
+		required_ms = (long) (required_ms * 1.25); /* 25% increase */
+		log_message(DEBUG, "Applied stability loss penalty: %ld ms -> %ld ms", pre_stability, required_ms);
 	}
-	int recent_change = recent_files + recent_dirs + recent_depth + size_weight;
 
-	/* Log recent activity calculation */
-	log_message(DEBUG, "Recent activity for %s: files=%d, dirs=%d, depth=%d, size=%s, size_weight=%d (total_change=%d)",
-				subscription->resource->path, recent_files, recent_dirs, recent_depth, format_size(recent_size, true),
-				size_weight, recent_change);
+	/* Get complexity from watch for sensitivity calculations */
+	watch_t *watch = registry_get(monitor->registry, subscription->watchref);
+	double complexity = watch ? watch->complexity : 1.0;
+
+	/* Tree depth multiplier, based on recent activity rate and complexity */
+	if (tree_depth > 0) {
+		/* Use complexity-based sensitivity factor */
+		int change_level = (recent_change <= 1) ? 0 : 1;
+		float depth_factor = (float) complexity_sensitivity(complexity, change_level);
+		required_ms += tree_depth * 150 * depth_factor; /* 150ms per level */
+	}
+
+	/* Directory size complexity factor, based on recent activity and complexity */
+	if (tree_entries > 100) {
+		/* Use complexity-based sensitivity factor */
+		int change_level = (recent_change <= 3) ? 0 : 1;
+		float size_factor = (float) complexity_sensitivity(complexity, change_level);
+		int size_addition = (int) (250 * size_factor * (tree_entries / 200.0));
+		/* Cap the size adjustment for small operations */
+		if (recent_change <= 1 && size_addition > 300) size_addition = 300;
+		required_ms += size_addition;
+	}
 
 	if (subscription->profile->stability) {
 		/* Calculate a cumulative magnitude factor to scale the quiet period */
@@ -792,37 +792,6 @@ static long scanner_adjust(monitor_t *monitor, subscription_t *subscription, lon
 			required_ms = (long) (required_ms * magnitude_factor);
 			log_message(DEBUG, "Applied magnitude factor %.2f: %ld ms -> %ld ms", magnitude_factor, pre_magnitude, required_ms);
 		}
-	}
-
-	/* If stability was previously achieved and then lost, increase quiet period */
-	if (subscription->profile->stability && subscription->profile->stability->stability_lost) {
-		/* We need a more careful check for resumed activity */
-		long pre_stability = required_ms;
-		required_ms = (long) (required_ms * 1.25); /* 25% increase */
-		log_message(DEBUG, "Applied stability loss penalty: %ld ms -> %ld ms", pre_stability, required_ms);
-	}
-
-	/* Get complexity from watch for sensitivity calculations */
-	watch_t *watch = registry_get(monitor->registry, subscription->watchref);
-	double complexity = watch ? watch->complexity : 1.0;
-
-	/* Tree depth multiplier - based on recent activity rate and complexity */
-	if (tree_depth > 0) {
-		/* Use complexity-based sensitivity factor instead of hardcoded values */
-		int change_level = (recent_change <= 1) ? 0 : 1;
-		float depth_factor = (float) complexity_sensitivity(complexity, change_level);
-		required_ms += tree_depth * 150 * depth_factor; /* 150ms per level */
-	}
-
-	/* Directory size complexity factor - based on recent activity and complexity */
-	if (tree_entries > 100) {
-		/* Use complexity-based sensitivity factor instead of hardcoded values */
-		int change_level = (recent_change <= 3) ? 0 : 1;
-		float size_factor = (float) complexity_sensitivity(complexity, change_level);
-		int size_addition = (int) (250 * size_factor * (tree_entries / 200.0));
-		/* Cap the size adjustment for small operations */
-		if (recent_change <= 1 && size_addition > 300) size_addition = 300;
-		required_ms += size_addition;
 	}
 
 	return required_ms;
@@ -934,6 +903,32 @@ long scanner_delay(monitor_t *monitor, subscription_t *subscription) {
 	ssize_t recent_size;
 	scanner_recent(subscription, &recent_files, &recent_dirs, &recent_depth, &recent_size);
 
+	/* No recent activity, consider cumulative changes to maintain a stable quiet period */
+	bool has_recent_activity = (recent_files > 0 || recent_dirs > 0 || recent_depth > 0 || recent_size > 0);
+	if (!has_recent_activity && subscription->profile->stability) {
+		log_message(DEBUG, "No recent activity detected, using cumulative changes for quiet period base");
+		recent_files = abs(subscription->profile->stability->delta_files);
+		recent_dirs = abs(subscription->profile->stability->delta_dirs);
+		recent_depth = abs(subscription->profile->stability->delta_depth);
+		recent_size = subscription->profile->stability->delta_size > 0 ? subscription->profile->stability->delta_size : 0;
+	}
+
+	/* Calculate comprehensive activity magnitude including depth and size changes */
+	int size_weight = 0;
+	if (recent_size > 100 * 1024 * 1024) {
+		size_weight = (int) (recent_size / (100 * 1024 * 1024)); /* 1 point per 100MB */
+	} else if (recent_size > 10 * 1024 * 1024) {
+		size_weight = 1; /* 1 point for 10-100MB */
+	} else if (recent_size > 1024 * 1024) {
+		size_weight = 0; /* No weight for 1-10MB */
+	}
+	int recent_change = recent_files + recent_dirs + recent_depth + size_weight;
+
+	/* Log recent activity calculation */
+	log_message(DEBUG, "Recent activity for %s: files=%d, dirs=%d, depth=%d, size=%s, size_weight=%d (total_change=%d)",
+				subscription->resource->path, recent_files, recent_dirs, recent_depth, format_size(recent_size, true),
+				size_weight, recent_change);
+
 	/* Check for temporary files that indicate instability */
 	bool temp_files = subscription->profile->stability ? subscription->profile->stability->stats.temp_files : false;
 
@@ -941,7 +936,7 @@ long scanner_delay(monitor_t *monitor, subscription_t *subscription) {
 	required_ms = scanner_base(recent_files, recent_dirs, recent_depth, recent_size, temp_files);
 
 	/* Apply stability adjustments (depth, size, stability loss) */
-	required_ms = scanner_adjust(monitor, subscription, required_ms);
+	required_ms = scanner_adjust(monitor, subscription, required_ms, recent_change);
 
 	/* Apply exponential backoff for consecutive instability */
 	required_ms = scanner_backoff(monitor, subscription, required_ms);
