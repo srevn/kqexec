@@ -218,8 +218,9 @@ void stability_queue(monitor_t *monitor, subscription_t *subscription) {
 		long current_complexity = scanner_delay(monitor, root);
 
 		/* Allow responsive drops if new period is significantly lower */
+		double responsiveness_factor = complexity_responsiveness(root_watch ? root_watch->complexity : 1.0);
 		long effective_quiet;
-		if (current_complexity < locked_quiet && current_complexity < (locked_quiet * 0.7)) {
+		if (current_complexity < locked_quiet && current_complexity < (long) (locked_quiet * responsiveness_factor)) {
 			/* Significant drop - use calculated period for responsiveness */
 			effective_quiet = current_complexity;
 		} else {
@@ -389,8 +390,8 @@ failure_t stability_fail(monitor_t *monitor, check_t *check, subscription_t *roo
 }
 
 /* Calculate required stability checks based on complexity */
-int stability_require(subscription_t *root, const stats_t *current_stats) {
-	if (!root || !current_stats) return 1;
+int stability_require(monitor_t *monitor, subscription_t *root, const stats_t *current_stats) {
+	if (!monitor || !root || !current_stats) return 1;
 
 	int tree_entries = current_stats->tree_files + current_stats->tree_dirs;
 	int tree_depth = current_stats->max_depth > 0 ? current_stats->max_depth : current_stats->depth;
@@ -401,27 +402,35 @@ int stability_require(subscription_t *root, const stats_t *current_stats) {
 	int abs_depth_change = abs(root->profile->stability->delta_depth);
 	int abs_change = abs_file_change + abs_dir_change;
 
-	int checks_required;
+	/* Get complexity from watch configuration */
+	watch_t *watch = registry_get(monitor->registry, root->watchref);
+	double complexity = watch ? watch->complexity : 1.0;
 
-	/* Determine required checks based on change magnitude and complexity */
+	/* Base check requirements determined by change magnitude */
+	int base_checks;
 	if (abs_change <= 1 && abs_depth_change == 0) {
-		checks_required = 1;
-		if (tree_depth >= 5 || tree_entries > 1000) checks_required = 2;
+		base_checks = 1;
+		if (tree_depth >= 5 || tree_entries > 1000) base_checks = 2;
 	} else if (abs_change <= 5 && abs_depth_change == 0) {
-		checks_required = 2;
+		base_checks = 2;
 	} else if (abs_depth_change > 0) {
-		checks_required = 2;
-		if (abs_depth_change > 1) checks_required = 3;
+		base_checks = 2;
+		if (abs_depth_change > 1) base_checks = 3;
 	} else if (abs_change < 20) {
-		checks_required = 2;
-		if (tree_depth >= 4 || tree_entries > 500) checks_required = 3;
+		base_checks = 2;
+		if (tree_depth >= 4 || tree_entries > 500) base_checks = 3;
 	} else {
-		checks_required = 3;
-		if (tree_depth >= 5 || tree_entries > 1000) checks_required = 4;
+		base_checks = 3;
+		if (tree_depth >= 5 || tree_entries > 1000) base_checks = 4;
 	}
 
-	/* Ensure at least one check is required */
+	/* Apply complexity scaling to check requirements */
+	double check_multiplier = complexity_sensitivity(complexity, 0); /* Use max sensitivity */
+	int checks_required = (int) (base_checks * check_multiplier);
+
+	/* Ensure reasonable bounds */
 	if (checks_required < 1) checks_required = 1;
+	if (checks_required > 6) checks_required = 6; /* Cap at 6 checks */
 
 	return checks_required;
 }
@@ -757,7 +766,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 
 		/* Calculate required checks based on complexity factors (only if not already set) */
 		if (root->profile->stability->checks_required == 0) {
-			root->profile->stability->checks_required = stability_require(root, &current_stats);
+			root->profile->stability->checks_required = stability_require(monitor, root, &current_stats);
 		}
 		int checks_required = root->profile->stability->checks_required;
 

@@ -593,9 +593,9 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 				}
 			} else if (strcasecmp(key, "complexity") == 0) {
 				double complexity_value = atof(value);
-				if (complexity_value <= 0) {
-					log_message(ERROR, "Invalid %s value at line %d: %s (must be > 0)", key,
-								line_number, value);
+				if (complexity_value < 0.1 || complexity_value > 5.0) {
+					log_message(ERROR, "Invalid %s value at line %d: %s, must be between 0.1 and 5.0",
+								key, line_number, value);
 					config_destroy_watch(current_watch);
 					fclose(fp);
 					return false;

@@ -33,21 +33,24 @@ static void events_defer(monitor_t *monitor, resource_t *resource, watchref_t wa
 				resource->batch_start = current_time;
 				resource->batch_active = true;
 				resource->batch_duration = watch->batch_timeout;
-				log_message(DEBUG, "Started event batching (%dms timeout) for %s", watch->batch_timeout,
-							resource->path);
+				resource->batch_complexity = watch->complexity;
+				log_message(DEBUG, "Started event batching (%dms timeout) for %s", watch->batch_timeout, resource->path);
 
 				/* Proactively add watches to subdirectories to detect ongoing activity */
 				if (resource->kind == ENTITY_DIRECTORY && watch->recursive) {
-					log_message(DEBUG, "Proactively scanning %s to add watches for batch timeout",
-								resource->path);
+					log_message(DEBUG, "Proactively scanning %s to add watches for batch timeout", resource->path);
 					monitor_tree(monitor, resource->path, watchref);
 				}
 			} else {
 				/* Batch timeout already active, apply longest timeout */
 				if (watch->batch_timeout > resource->batch_duration) {
 					resource->batch_duration = watch->batch_timeout;
-					log_message(DEBUG, "Extended batch timeout to %dms for %s (multiple watches)",
-								watch->batch_timeout, resource->path);
+					resource->batch_complexity = watch->complexity;
+					log_message(DEBUG, "Extended batch timeout to %dms for %s", watch->batch_timeout, resource->path);
+				} else if (watch->batch_timeout == resource->batch_duration && watch->complexity > resource->batch_complexity) {
+					/* Same timeout but higher complexity, apply highest complexity */
+					resource->batch_complexity = watch->complexity;
+					log_message(DEBUG, "Updated batch threshold for %s (higher complexity watch)", resource->path);
 				}
 			}
 
@@ -272,7 +275,8 @@ void events_batch(monitor_t *monitor) {
 
 			/* Batch timeout window expired, check if activity gap exceeds threshold */
 			long gap_ms = timespec_diff(&current_time, &resource->last_event);
-			long threshold_ms = (resource->batch_duration * 60) / 100; /* 60% hardcoded */
+			double threshold_factor = complexity_batch(resource->batch_complexity);
+			long threshold_ms = (long) (resource->batch_duration * threshold_factor);
 
 			if (gap_ms < threshold_ms) {
 				/* Activity gap too small, reset batch timeout start time to last event */
@@ -283,8 +287,8 @@ void events_batch(monitor_t *monitor) {
 				continue;
 			}
 
-			log_message(DEBUG, "Activity gap detected (%ldms >= %ldms) for %s (batch duration: %dms)",
-						gap_ms, threshold_ms, resource->path, resource->batch_duration);
+			log_message(DEBUG, "Activity gap detected (%ldms >= %ldms) for %s (batch duration: %dms, threshold factor: %.2f)",
+						gap_ms, threshold_ms, resource->path, resource->batch_duration, threshold_factor);
 
 			resource_lock(resource);
 			bool has_deferred_events = resource->deferred_count > 0;

@@ -62,6 +62,7 @@ typedef struct resource {
 	/* Batch timeout detection */
 	bool batch_active;                     /* Whether batch processing is active */
 	int batch_duration;                    /* Active batch timeout duration */
+	double batch_complexity;               /* Batch threshold calculation */
 	struct timespec batch_start;           /* When current batch timeout began */
 	struct timespec last_event;            /* Timestamp of most recent event */
 	

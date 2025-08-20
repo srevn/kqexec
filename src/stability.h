@@ -60,7 +60,7 @@ bool stability_new(monitor_t *monitor, check_t *check);
 failure_t stability_fail(monitor_t *monitor, check_t *check, subscription_t *root, struct timespec *current_time);
 
 /* Stability calculation */
-int stability_require(subscription_t *root, const stats_t *current_stats);
+int stability_require(monitor_t *monitor, subscription_t *root, const stats_t *current_stats);
 bool stability_stable(subscription_t *root, const stats_t *current_stats, bool scan_completed);
 
 /* Command execution */

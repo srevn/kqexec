@@ -737,7 +737,7 @@ static void scanner_recent(subscription_t *subscription, int *recent_files, int 
 }
 
 /* Apply stability, depth, and size adjustments to quiet period */
-static long scanner_adjust(subscription_t *subscription, long base_ms) {
+static long scanner_adjust(monitor_t *monitor, subscription_t *subscription, long base_ms) {
 	long required_ms = base_ms;
 	int tree_entries = 0;
 	int tree_depth = 0;
@@ -800,16 +800,23 @@ static long scanner_adjust(subscription_t *subscription, long base_ms) {
 		log_message(DEBUG, "Applied stability loss penalty: %ld ms -> %ld ms", pre_stability, required_ms);
 	}
 
-	/* Tree depth multiplier - based on recent activity rate */
+	/* Get complexity from watch for sensitivity calculations */
+	watch_t *watch = registry_get(monitor->registry, subscription->watchref);
+	double complexity = watch ? watch->complexity : 1.0;
+
+	/* Tree depth multiplier - based on recent activity rate and complexity */
 	if (tree_depth > 0) {
-		/* Scale down the depth impact for simple operations */
-		float depth_factor = (recent_change <= 1) ? 0.5 : 1.0;
+		/* Use complexity-based sensitivity factor instead of hardcoded values */
+		int change_level = (recent_change <= 1) ? 0 : 1;
+		float depth_factor = (float) complexity_sensitivity(complexity, change_level);
 		required_ms += tree_depth * 150 * depth_factor; /* 150ms per level */
 	}
 
-	/* Directory size complexity factor - based on recent activity */
+	/* Directory size complexity factor - based on recent activity and complexity */
 	if (tree_entries > 100) {
-		float size_factor = (recent_change <= 3) ? 0.3 : 0.7;
+		/* Use complexity-based sensitivity factor instead of hardcoded values */
+		int change_level = (recent_change <= 3) ? 0 : 1;
+		float size_factor = (float) complexity_sensitivity(complexity, change_level);
 		int size_addition = (int) (250 * size_factor * (tree_entries / 200.0));
 		/* Cap the size adjustment for small operations */
 		if (recent_change <= 1 && size_addition > 300) size_addition = 300;
@@ -820,19 +827,24 @@ static long scanner_adjust(subscription_t *subscription, long base_ms) {
 }
 
 /* Apply exponential backoff for registered instability */
-static long scanner_backoff(subscription_t *subscription, long required_ms) {
+static long scanner_backoff(monitor_t *monitor, subscription_t *subscription, long required_ms) {
 	int unstable_count = subscription->profile->stability ? subscription->profile->stability->unstable_count : 0;
 
 	if (unstable_count == 0) {
 		return required_ms;
 	}
 
+	/* Get watch complexity for backoff calculation */
+	watch_t *watch = registry_get(monitor->registry, subscription->watchref);
+	double complexity = watch ? watch->complexity : 1.0;
+	double complexity_multiplier = complexity_backoff(complexity);
+
 	/* Start with a base multiplier */
 	double backoff_factor = 1.0;
 
-	/* Increase backoff factor for each instability occurrence */
+	/* Increase backoff factor for each instability occurrence using complexity-based multiplier */
 	for (int i = 1; i <= unstable_count; i++) {
-		backoff_factor *= 1.5;
+		backoff_factor *= complexity_multiplier;
 	}
 
 	/* Apply a cap to the backoff factor to prevent excessive delays */
@@ -841,7 +853,8 @@ static long scanner_backoff(subscription_t *subscription, long required_ms) {
 	}
 
 	long adjusted_ms = (long) (required_ms * backoff_factor);
-	log_message(DEBUG, "Applied backoff factor %.2f: %ld ms -> %ld ms", backoff_factor, required_ms, adjusted_ms);
+	log_message(DEBUG, "Applied backoff factor %.2f: %ld ms -> %ld ms", backoff_factor,
+				required_ms, adjusted_ms);
 
 	return adjusted_ms;
 }
@@ -855,16 +868,18 @@ static long scanner_limit(monitor_t *monitor, subscription_t *subscription, long
 	long maximum_ms = 120000; /* Default 120 seconds */
 
 	if (required_ms > maximum_ms) {
-		log_message(DEBUG, "Capping quiet period for %s from %ld ms to %ld ms", subscription->resource->path, required_ms, maximum_ms);
+		log_message(DEBUG, "Capping quiet period for %s from %ld ms to %ld ms", subscription->resource->path,
+					required_ms, maximum_ms);
 		required_ms = maximum_ms;
 	}
 
-	/* Apply complexity multiplier from watch config */
+	/* Apply complexity-based stability factor from watch config */
 	watch_t *subscription_watch = registry_get(monitor->registry, subscription->watchref);
 	if (subscription_watch && subscription_watch->complexity > 0) {
 		long pre_multiplier = required_ms;
-		required_ms = (long) (required_ms * subscription_watch->complexity);
-		log_message(DEBUG, "Applied complexity multiplier %.2f to %s: %ld ms -> %ld ms", subscription_watch->complexity,
+		double stability_factor = complexity_stability(subscription_watch->complexity);
+		required_ms = (long) (required_ms * stability_factor);
+		log_message(DEBUG, "Applied stability factor %.2f to %s: %ld ms -> %ld ms", stability_factor,
 					subscription->resource->path, pre_multiplier, required_ms);
 	}
 
@@ -924,10 +939,10 @@ long scanner_delay(monitor_t *monitor, subscription_t *subscription) {
 	required_ms = scanner_base(recent_files, recent_dirs, recent_depth, recent_size, temp_files);
 
 	/* Apply stability adjustments (depth, size, stability loss) */
-	required_ms = scanner_adjust(subscription, required_ms);
+	required_ms = scanner_adjust(monitor, subscription, required_ms);
 
 	/* Apply exponential backoff for consecutive instability */
-	required_ms = scanner_backoff(subscription, required_ms);
+	required_ms = scanner_backoff(monitor, subscription, required_ms);
 
 	int delta_files = subscription->profile->stability ? subscription->profile->stability->delta_files : 0;
 	int delta_dirs = subscription->profile->stability ? subscription->profile->stability->delta_dirs : 0;
