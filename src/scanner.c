@@ -357,10 +357,12 @@ bool scanner_stable(monitor_t *monitor, const watch_t *watch, const char *dir_pa
 				stats->last_mtime = info.st_mtime;
 			}
 
-			/* Check for very recent file modifications (< 1 seconds) */
-			if (difftime(current_time, info.st_mtime) < 1.0) {
-				log_message(DEBUG, "Directory %s unstable: recent file modification (%s, %.1f seconds ago)",
-							dir_path, dirent->d_name, difftime(current_time, info.st_mtime));
+			/* Check for very recent file modifications using complexity-based threshold */
+			double temp_threshold = complexity_temporary(watch ? watch->complexity : 1.0);
+			double file_age = difftime(current_time, info.st_mtime);
+			if (file_age < temp_threshold) {
+				log_message(DEBUG, "Directory %s unstable: recent file modification (%s, %.1f seconds ago, threshold: %.2fs)",
+							dir_path, dirent->d_name, file_age, temp_threshold);
 				stats->temp_files = true;
 				is_stable = false; /* Mark as unstable but continue scanning */
 			}
