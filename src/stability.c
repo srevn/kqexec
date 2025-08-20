@@ -156,11 +156,15 @@ void stability_queue(monitor_t *monitor, subscription_t *subscription) {
 		}
 	}
 
+	/* Lock the resource to ensure atomic updates to its state */
+	resource_lock(root->resource);
+
 	/* Ensure the root subscription has a scanner before we use it */
 	if (!root->profile->scanner) {
 		root->profile->scanner = scanner_create(root->resource->path);
 		if (!root->profile->scanner) {
 			log_message(ERROR, "Failed to create scanner for root %s in stability_queue", root->resource->path);
+			resource_unlock(root->resource);
 			return;
 		}
 	}
@@ -236,6 +240,7 @@ void stability_queue(monitor_t *monitor, subscription_t *subscription) {
 
 		log_message(DEBUG, "Event received, quiet period of %ld ms for %s (locked: %ld ms, calculated: %ld ms)",
 					effective_quiet, root->resource->path, locked_quiet, current_complexity);
+		resource_unlock(root->resource);
 		return;
 	}
 
@@ -259,6 +264,8 @@ void stability_queue(monitor_t *monitor, subscription_t *subscription) {
 	log_message(DEBUG, "Queued check for %s: in %ld ms (directory with %d files, %d dirs)",
 				root->resource->path, required_quiet, root->profile->stability->stats.local_files,
 				root->profile->stability->stats.local_dirs);
+
+	resource_unlock(root->resource);
 }
 
 /* Get the root subscription for a queued check */

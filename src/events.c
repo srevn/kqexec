@@ -29,17 +29,20 @@ static void events_defer(monitor_t *monitor, resource_t *resource, watchref_t wa
 			clock_gettime(CLOCK_MONOTONIC, &current_time);
 
 			if (!resource->batch_active) {
-				/* Start new batch timeout */
-				resource->batch_start = current_time;
-				resource->batch_active = true;
-				resource->batch_duration = watch->batch_timeout;
-				resource->batch_complexity = watch->complexity;
-				log_message(DEBUG, "Started event batching (%dms timeout) for %s", watch->batch_timeout, resource->path);
+				if ((monitor->check_queue && queue_find(monitor->check_queue, resource->path) >= 0) || resource->executing) {
+				} else {
+					/* Start new batch timeout */
+					resource->batch_start = current_time;
+					resource->batch_active = true;
+					resource->batch_duration = watch->batch_timeout;
+					resource->batch_complexity = watch->complexity;
+					log_message(DEBUG, "Started event batching (%dms timeout) for %s", watch->batch_timeout, resource->path);
 
-				/* Proactively add watches to subdirectories to detect ongoing activity */
-				if (resource->kind == ENTITY_DIRECTORY && watch->recursive) {
-					log_message(DEBUG, "Proactively scanning %s to add watches for batch timeout", resource->path);
-					monitor_tree(monitor, resource->path, watchref);
+					/* Proactively add watches to subdirectories to detect ongoing activity */
+					if (resource->kind == ENTITY_DIRECTORY && watch->recursive) {
+						log_message(DEBUG, "Proactively scanning %s to add watches for batch timeout", resource->path);
+						monitor_tree(monitor, resource->path, watchref);
+					}
 				}
 			} else {
 				/* Batch timeout already active, apply longest timeout */
@@ -860,16 +863,6 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 
 	subscription_t *root = stability_root(monitor, subscription);
 	resource_t *root_resource = root ? root->resource : subscription->resource;
-
-	/* If already in the stability queue, reset the quiet period timer */
-	if (queue_find(monitor->check_queue, root_resource->path) != -1) {
-		log_message(DEBUG, "Event for %s while in stability queue, updating activity time", root_resource->path);
-		optype_t optype = events_operation(monitor, subscription, event->type);
-		if (optype != OP_NONE) {
-			scanner_track(monitor, subscription, optype);
-		}
-		return true; /* Event handled by resetting timer, skip batching/deferral logic */
-	}
 
 	/* Check if this watch has batch timeout configured */
 	if (watch->batch_timeout > 0 && !is_deferred) {
