@@ -478,6 +478,9 @@ void stability_reset(monitor_t *monitor, subscription_t *root) {
 	log_message(INFO, "Resetting baseline for %s: %d files, %d dirs, depth %d", root->resource->path,
 				new_baseline.tree_files, new_baseline.tree_dirs, new_baseline.max_depth);
 
+	/* Multiple threads may call stability_reset on same resource */
+	resource_lock(root->resource);
+
 	/* Reset stability state to reflect new baseline as authoritative */
 	root->profile->stability->stats = new_baseline;
 	root->profile->stability->prev_stats = new_baseline;
@@ -506,6 +509,8 @@ void stability_reset(monitor_t *monitor, subscription_t *root) {
 	root->profile->stability->unstable_count = 0;
 	root->profile->stability->stability_lost = false;
 	root->profile->stability->reference_init = true;
+
+	resource_unlock(root->resource);
 
 	/* Clear deferred event queue */
 	if (root->resource->deferred_head) {
