@@ -11,6 +11,8 @@
 
 /* Forward declarations */
 typedef struct stability stability_t;
+typedef struct snapshot snapshot_t;
+typedef struct diff diff_t;
 
 /* Resource table configuration */
 #define PATH_HASH_SIZE 1024
@@ -23,6 +25,9 @@ typedef struct profile {
 	/* Configuration-specific state */
 	stability_t *stability;                /* Shared stability state for this profile */
 	scanner_t *scanner;                    /* Shared scanner state for this profile */
+	
+	/* Snapshot state for accurate change detection */
+	snapshot_t *baseline_snapshot;         /* Baseline directory state */
 	
 	/* Subscriptions using this configuration */
 	subscription_t *subscriptions;         /* Head of list of subscriptions with this profile */
@@ -85,9 +90,8 @@ typedef struct subscription {
 	resource_t *resource;                  /* Back-pointer to the parent resource */
 	watchref_t watchref;                   /* Watch reference for this subscription */
 
-	/* Command & Trigger tracking */
+	/* Command tracking */
 	time_t command_time;                   /* When a command was last triggered */
-	char *trigger;                         /* Path of the specific file that triggered a directory event */
 	
 	/* Profile association */
 	profile_t *profile;                    /* The scanning profile this subscription belongs to */

@@ -6,6 +6,7 @@
 #include "command.h"
 #include "logger.h"
 #include "registry.h"
+#include "snapshot.h"
 
 /* Deep copy a file event for thread safety */
 static event_t *threads_copy_event(const event_t *event) {
@@ -19,6 +20,7 @@ static event_t *threads_copy_event(const event_t *event) {
 	copy->time = event->time;
 	copy->wall_time = event->wall_time;
 	copy->user_id = event->user_id;
+	copy->diff = diff_copy(event->diff);
 
 	return copy;
 }
@@ -28,6 +30,7 @@ static void threads_free_event(event_t *event) {
 	if (!event) return;
 
 	free((char *) event->path);
+	diff_destroy(event->diff);
 	free(event);
 }
 

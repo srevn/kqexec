@@ -13,6 +13,7 @@
 #include "registry.h"
 #include "resource.h"
 #include "scanner.h"
+#include "snapshot.h"
 #include "utilities.h"
 
 /* Create a stability state */
@@ -482,6 +483,16 @@ void stability_reset(monitor_t *monitor, subscription_t *root) {
 	root->profile->stability->prev_stats = new_baseline;
 	root->profile->stability->ref_stats = new_baseline;
 
+	/* Reset baseline snapshot for accurate change detection */
+	snapshot_destroy(root->profile->baseline_snapshot);
+	root->profile->baseline_snapshot = snapshot_create(root->resource->path, watch);
+	if (!root->profile->baseline_snapshot) {
+		log_message(WARNING, "Failed to create new baseline snapshot for %s", root->resource->path);
+	} else {
+		log_message(DEBUG, "Created new baseline snapshot for %s with %d entries",
+					root->resource->path, root->profile->baseline_snapshot->count);
+	}
+
 	/* Clear all tracking deltas */
 	root->profile->stability->delta_files = 0;
 	root->profile->stability->delta_dirs = 0;
@@ -528,31 +539,17 @@ bool stability_execute(monitor_t *monitor, check_t *check, subscription_t *root,
 	int executed_count = 0;
 	const char *active_path = root->profile->scanner->active_path ? root->profile->scanner->active_path : check->path;
 
-	/* Determine if any command needs the trigger file path (%f or %F) */
-	bool needs_trigger = false;
-	for (int i = 0; i < check->num_watches; i++) {
-		watch_t *watch = registry_get(monitor->registry, check->watchrefs[i]);
-		if (watch && (strstr(watch->command, "%f") || strstr(watch->command, "%F"))) {
-			needs_trigger = true;
-			break;
-		}
-	}
+	/* Create snapshots for accurate placeholder data */
+	watch_t *watch = registry_get(monitor->registry, root->watchref);
+	snapshot_t *current_snapshot = NULL;
+	diff_t *diff = NULL;
 
-	/* If needed, find the most recently modified file to use as the trigger */
-	if (needs_trigger) {
-		free(root->trigger);
-		root->trigger = NULL; /* Clear previous path */
-
-		struct stat info;
-		if (stat(active_path, &info) == 0 && S_ISDIR(info.st_mode)) {
-			/* It's a directory, scan it for the most recent file */
-			root->trigger = scanner_newest(active_path);
-		} else {
-			/* It's a file, or doesn't exist; use the path directly */
-			root->trigger = strdup(active_path);
-		}
-		if (root->trigger) {
-			log_message(DEBUG, "Found trigger file for %%f/%%F: %s", root->trigger);
+	if (watch) {
+		current_snapshot = snapshot_create(root->resource->path, watch);
+		if (current_snapshot && root->profile->baseline_snapshot) {
+			diff = snapshot_diff(root->profile->baseline_snapshot, current_snapshot);
+			log_message(DEBUG, "Created command snapshot diff for %s: %d total changes", root->resource->path,
+						diff ? diff->total_changes : 0);
 		}
 	}
 
@@ -562,7 +559,8 @@ bool stability_execute(monitor_t *monitor, check_t *check, subscription_t *root,
 		.type = EVENT_STRUCTURE,
 		.time = root->resource->last_time,
 		.wall_time = root->resource->wall_time,
-		.user_id = getuid()};
+		.user_id = getuid(),
+		.diff = diff};
 
 	/* Set the executing flag for the root resource before starting any commands */
 	root->resource->executing = true;
@@ -605,6 +603,10 @@ bool stability_execute(monitor_t *monitor, check_t *check, subscription_t *root,
 	if (commands_executed) {
 		*commands_executed = executed_count;
 	}
+
+	/* Clean up snapshots after command execution */
+	snapshot_destroy(current_snapshot);
+	diff_destroy(diff);
 
 	return executed_count > 0;
 }
@@ -757,13 +759,14 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 			root->profile->scanner->latest_time = *current_time;
 			check->verifying = false;
 
-			log_message(DEBUG, "Directory %s failed stability scan (instability count: %d), rescheduling",
+			log_message(DEBUG, "Directory %s failed stability check (instability count: %d), rescheduling",
 						check->path, root->profile->stability->unstable_count);
 
 			/* Recalculate quiet period based on new instability */
 			required_quiet = scanner_delay(monitor, root);
 			log_message(DEBUG, "Recalculated quiet period for instability: %ld ms", required_quiet);
 			stability_delay(monitor, check, root, current_time, required_quiet);
+
 			pthread_mutex_unlock(&root->resource->mutex);
 			return;
 		}

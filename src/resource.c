@@ -13,12 +13,12 @@
 #include "logger.h"
 #include "registry.h"
 #include "scanner.h"
+#include "snapshot.h"
 #include "stability.h"
 
 /* Free resources used by a subscription */
 static void subscription_free(subscription_t *subscription) {
 	if (subscription) {
-		free(subscription->trigger);
 		free(subscription);
 	}
 }
@@ -432,6 +432,7 @@ profile_t *profile_create(resource_t *resource, uint64_t configuration_hash) {
 	profile->configuration_hash = configuration_hash;
 	profile->stability = NULL;
 	profile->scanner = NULL;
+	profile->baseline_snapshot = NULL;
 	profile->subscriptions = NULL;
 	profile->subscription_count = 0;
 	profile->next = NULL;
@@ -448,6 +449,7 @@ void profile_destroy(profile_t *profile) {
 	if (profile) {
 		stability_destroy(profile->stability);
 		scanner_destroy(profile->scanner);
+		snapshot_destroy(profile->baseline_snapshot);
 		free(profile);
 	}
 }
@@ -477,7 +479,6 @@ subscription_t *profile_subscribe(profile_t *profile, resource_t *resource, watc
 	subscription->watchref = watchref;
 	subscription->profile = profile;
 	subscription->command_time = 0;
-	subscription->trigger = NULL;
 
 	/* Add to the profile's subscription list */
 	subscription->next = profile->subscriptions;
@@ -611,6 +612,16 @@ subscription_t *resources_subscription(resources_t *resources, registry_t *regis
 	profile->stability->prev_stats = initial_stats;
 	profile->stability->ref_stats = initial_stats;
 	profile->stability->reference_init = true;
+
+	/* Create initial baseline snapshot for accurate change detection */
+	profile->baseline_snapshot = snapshot_create(path, watch);
+	if (!profile->baseline_snapshot) {
+		log_message(WARNING, "Failed to create initial baseline snapshot for directory: %s", path);
+		/* Continue without snapshot - system will fall back to time-based detection */
+	} else {
+		log_message(DEBUG, "Created initial baseline snapshot for %s with %d entries",
+					path, profile->baseline_snapshot->count);
+	}
 
 	log_message(DEBUG, "Initial baseline established for %s: files=%d, dirs=%d, depth=%d, size=%s",
 				path, profile->stability->stats.tree_files, profile->stability->stats.tree_dirs,

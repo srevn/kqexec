@@ -61,8 +61,6 @@ void scanner_destroy(scanner_t *scanner);
 bool scanner_scan(const char *dir_path, const watch_t *watch, stats_t *stats);
 bool scanner_stable(monitor_t *monitor, const watch_t *watch, const char *dir_path, stats_t *stats);
 bool scanner_compare(stats_t *prev_stats, stats_t *current_stats);
-char *scanner_newest(const char *dir_path);
-char *scanner_modified(const char *base_path, time_t since_time, bool recursive, bool basename);
 void scanner_update(profile_t *profile, const char *path);
 
 /* Activity tracking and timing */

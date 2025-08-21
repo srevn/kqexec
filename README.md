@@ -129,8 +129,6 @@ Commands can include the following placeholders that will be replaced at runtime
 - `%b` : Base path of the watch from the config
 - `%w` : Name of the watch from the config
 - `%r` : Event path relative to the watch path
-- `%f` : The file that triggered a directory event (most recent)
-- `%F` : The basename of the file that triggered a directory event
 - `%l` : List of filenames (without paths) modified within 1 second of current event
 - `%L` : List of files modified within 1 second of current event (newline-separated)
 - `%s` : Size of the file in bytes (recursive for directories)
@@ -138,6 +136,11 @@ Commands can include the following placeholders that will be replaced at runtime
 - `%t` : Time of the event (format: YYYY-MM-DD HH:MM:SS)
 - `%u` : User who triggered the event
 - `%e` : Event type which occurred
+- `%created_files` : List of created files
+- `%deleted_files` : List of deleted files
+- `%renamed_files` : List of renamed files (format: old -> new)
+- `%modified_files` : List of modified files
+
 
 ### Environment Variables
 
@@ -148,13 +151,15 @@ In addition to command placeholders, kqexec can optionally set environment varia
 - `KQ_WATCH_NAME` : Name of the watch from the configuration
 - `KQ_WATCH_PATH` : Base path being monitored
 - `KQ_RELATIVE_PATH` : Event path relative to the watch base
-- `KQ_TRIGGER_FILE` : Basename of the file that triggered the event (most recent)
-- `KQ_TRIGGER_FILE_PATH` : Full path of the file that triggered the event
 - `KQ_TRIGGER_DIR` : Directory containing the file that triggered the event
 - `KQ_USER_ID` : Numeric user ID that caused the event
 - `KQ_USERNAME` : Username that caused the event (resolved from user ID)
 - `KQ_TIMESTAMP` : ISO 8601 timestamp of the event
-- `KQ_MODIFIED_FILES` : Space-separated list of files modified within 1 second
+- `KQ_CHANGED_FILES` : Space-separated list of all changed files
+- `KQ_CREATED_FILES` : Space-separated list of files created
+- `KQ_DELETED_FILES` : Space-separated list of files deleted
+- `KQ_RENAMED_FILES` : Space-separated list of files renamed
+- `KQ_MODIFIED_FILES` : Space-separated list of files modified
 
 These environment variables make commands more powerful and reusable. For example:
 
@@ -165,7 +170,7 @@ case "$KQ_EVENT_TYPE" in
         echo "Directory structure changed in $KQ_WATCH_NAME"
         ;;
     "CONTENT")
-        echo "File content modified: $KQ_TRIGGER_FILE"
+        echo "File content modified: $KQ_RELATIVE_PATH"
         ;;
     *)
         echo "Event $KQ_EVENT_TYPE occurred on $KQ_RELATIVE_PATH"

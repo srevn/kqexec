@@ -11,6 +11,7 @@
 typedef struct monitor monitor_t;
 typedef struct resource resource_t;
 typedef struct subscription subscription_t;
+typedef struct diff diff_t;
 
 /* Logical operation types */
 typedef enum optype {
@@ -37,6 +38,7 @@ typedef struct event {
 	struct timespec time;                  /* Time of event (MONOTONIC for internal use) */
 	struct timespec wall_time;             /* Wall clock time (REALTIME for display) */
 	uid_t user_id;                         /* User ID associated with event */
+	diff_t *diff;                          /* Directory snapshot differences */
 } event_t;
 
 /* Delayed event queue entry */
