@@ -756,23 +756,23 @@ bool monitor_poll(monitor_t *monitor) {
 	if (nev > 0) {
 		log_message(DEBUG, "Processing %d new kqueue events", nev);
 
-		/* Initialize sync request for collecting paths that need validation */
-		sync_t sync;
-		events_sync_init(&sync);
+		/* Initialize validate request for collecting paths that need validation */
+		validate_t validate;
+		validate_init(&validate);
 
-		/* Process events and collect sync requests */
-		events_handle(monitor, events, nev, &kevent_time, &sync);
+		/* Process events and collect validate requests */
+		events_handle(monitor, events, nev, &kevent_time, &validate);
 
-		/* Handle any sync requests */
-		if (sync.paths_count > 0) {
-			for (int i = 0; i < sync.paths_count; i++) {
-				log_message(DEBUG, "Validating watch for path: %s", sync.paths[i]);
-				monitor_sync(monitor, sync.paths[i]);
+		/* Handle any validate requests */
+		if (validate.paths_count > 0) {
+			for (int i = 0; i < validate.paths_count; i++) {
+				log_message(DEBUG, "Validating watch for path: %s", validate.paths[i]);
+				monitor_sync(monitor, validate.paths[i]);
 			}
 		}
 
-		/* Clean up sync request */
-		events_sync_cleanup(&sync);
+		/* Clean up validate request */
+		validate_cleanup(&validate);
 	} else {
 		/* nev == 0 means timeout occurred */
 		if (p_timeout) {

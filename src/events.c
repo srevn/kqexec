@@ -325,64 +325,63 @@ void events_batch(monitor_t *monitor) {
 	}
 }
 
-/* Initialize a sync request structure */
-void events_sync_init(sync_t *sync) {
-	if (!sync) return;
+/* Initialize a validate request structure */
+void validate_init(validate_t *validate) {
+	if (!validate) return;
 
-	sync->paths = NULL;
-	sync->paths_count = 0;
-	sync->paths_capacity = 0;
+	validate->paths = NULL;
+	validate->paths_count = 0;
+	validate->paths_capacity = 0;
 }
 
-/* Add a path to the sync request */
-bool events_sync_add(sync_t *sync, const char *path) {
-	if (!sync || !path) return false;
+/* Add a path to the validate request */
+bool validate_add(validate_t *validate, const char *path) {
+	if (!validate || !path) return false;
 
 	/* Check if path already exists to avoid duplicates */
-	for (int i = 0; i < sync->paths_count; i++) {
-		if (strcmp(sync->paths[i], path) == 0) {
+	for (int i = 0; i < validate->paths_count; i++) {
+		if (strcmp(validate->paths[i], path) == 0) {
 			return true; /* Already exists, no need to add */
 		}
 	}
 
 	/* Expand array if needed */
-	if (sync->paths_count >= sync->paths_capacity) {
-		int new_capacity = sync->paths_capacity == 0 ? 4 : sync->paths_capacity * 2;
-		char **new_paths = realloc(sync->paths, new_capacity * sizeof(char *));
+	if (validate->paths_count >= validate->paths_capacity) {
+		int new_capacity = validate->paths_capacity == 0 ? 4 : validate->paths_capacity * 2;
+		char **new_paths = realloc(validate->paths, new_capacity * sizeof(char *));
 		if (!new_paths) {
-			log_message(ERROR, "Failed to allocate memory for sync request paths");
+			log_message(ERROR, "Failed to allocate memory for validate request paths");
 			return false;
 		}
-		sync->paths = new_paths;
-		sync->paths_capacity = new_capacity;
+		validate->paths = new_paths;
+		validate->paths_capacity = new_capacity;
 	}
 
 	/* Add the path */
-	sync->paths[sync->paths_count] = strdup(path);
-	if (!sync->paths[sync->paths_count]) {
-		log_message(ERROR, "Failed to duplicate path for sync request: %s", path);
+	validate->paths[validate->paths_count] = strdup(path);
+	if (!validate->paths[validate->paths_count]) {
+		log_message(ERROR, "Failed to duplicate path for validate request: %s", path);
 		return false;
 	}
-	sync->paths_count++;
+	validate->paths_count++;
 
-	log_message(DEBUG, "Added path to sync request: %s", path);
 	return true;
 }
 
-/* Clean up a sync request structure */
-void events_sync_cleanup(sync_t *sync) {
-	if (!sync) return;
+/* Clean up a validate request structure */
+void validate_cleanup(validate_t *validate) {
+	if (!validate) return;
 
-	if (sync->paths) {
-		for (int i = 0; i < sync->paths_count; i++) {
-			free(sync->paths[i]);
+	if (validate->paths) {
+		for (int i = 0; i < validate->paths_count; i++) {
+			free(validate->paths[i]);
 		}
-		free(sync->paths);
+		free(validate->paths);
 	}
 
-	sync->paths = NULL;
-	sync->paths_count = 0;
-	sync->paths_capacity = 0;
+	validate->paths = NULL;
+	validate->paths_count = 0;
+	validate->paths_capacity = 0;
 }
 
 /* Schedule an event for delayed processing */
@@ -619,7 +618,7 @@ static filter_t flags_to_filter(uint32_t flags) {
 }
 
 /* Handle kqueue events */
-bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, struct timespec *time, sync_t *sync) {
+bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, struct timespec *time, validate_t *validate) {
 	if (!monitor || !events || event_count <= 0) return false;
 
 	/* Process new events */
@@ -647,11 +646,10 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 				log_message(DEBUG, "Event: path=%s, flags=0x%x -> type=%s (watch: %s)", watcher->path,
 							events[i].fflags, filter_to_string(event.type), watch->name);
 
-				/* Proactive validation for directory events on NOTE_WRITE */
+				/* Proactive validation for directory events */
 				if (watch->target == WATCH_DIRECTORY && (events[i].fflags & NOTE_WRITE)) {
-					log_message(DEBUG, "Write event on dir %s, requesting validation", watcher->path);
-					if (sync) {
-						events_sync_add(sync, watcher->path);
+					if (validate) {
+						validate_add(validate, watcher->path);
 					}
 				}
 

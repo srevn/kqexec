@@ -55,15 +55,15 @@ typedef struct deferred {
 	struct deferred *next;                 /* Next deferred event in the queue */
 } deferred_t;
 
-/* Sync request structure for collecting paths that need validation */
-typedef struct sync {
-	char **paths;                          /* Array of paths needing sync */
+/* Structure for collecting paths that need validation */
+typedef struct validate {
+	char **paths;                          /* Array of paths needing validation */
 	int paths_count;                       /* Current number of paths */
 	int paths_capacity;                    /* Allocated capacity */
-} sync_t;
+} validate_t;
 
 /* Event processing core */
-bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, struct timespec *time, sync_t *sync);
+bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, struct timespec *time, validate_t *validate);
 bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kind_t kind, bool is_deferred);
 
 /* Delayed event management */
@@ -78,10 +78,10 @@ void events_deferred(monitor_t *monitor, resource_t *resource);
 int events_timeout(monitor_t *monitor, struct timespec *current_time);
 struct timespec *timeout_calculate(monitor_t *monitor, struct timespec *timeout, struct timespec *current_time);
 
-/* Sync request management */
-void events_sync_init(sync_t *sync);
-bool events_sync_add(sync_t *sync, const char *path);
-void events_sync_cleanup(sync_t *sync);
+/* Validate request management */
+void validate_init(validate_t *validate);
+bool validate_add(validate_t *validate, const char *path);
+void validate_cleanup(validate_t *validate);
 
 /* Event to operation translation */
 optype_t events_operation(monitor_t *monitor, subscription_t *subscription, filter_t filter);
