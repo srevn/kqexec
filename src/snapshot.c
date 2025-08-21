@@ -94,25 +94,36 @@ static bool string_copy(char ***dest_array, int *dest_count, char **source_array
 }
 
 /* Helper function to generate a newline-separated string from a string array */
-static char *string_list(char **array, int count, bool basename_only) {
+static char *string_list(char **array, int count, bool basename_only, const char *root_path) {
 	if (!array || count <= 0) {
 		return strdup("");
 	}
 
 	/* Calculate total size needed */
 	size_t total_size = 1; /* For null terminator */
+	size_t root_len = root_path ? strlen(root_path) : 0;
+	
 	for (int i = 0; i < count; i++) {
 		if (!array[i]) continue;
 
 		const char *path_to_use = array[i];
+		size_t path_len;
+		
 		if (basename_only) {
 			const char *basename = strrchr(array[i], '/');
 			if (basename) {
 				path_to_use = basename + 1;
 			}
+			path_len = strlen(path_to_use);
+		} else if (root_path && array[i][0] != '/') {
+			/* Convert relative path to absolute by prepending root_path */
+			path_len = root_len + 1 + strlen(array[i]); /* root + "/" + relative */
+		} else {
+			/* Use path as-is (already absolute or no root_path provided) */
+			path_len = strlen(array[i]);
 		}
 
-		total_size += strlen(path_to_use);
+		total_size += path_len;
 		if (i > 0) total_size++; /* For newline separator */
 	}
 
@@ -128,19 +139,23 @@ static char *string_list(char **array, int count, bool basename_only) {
 	for (int i = 0; i < count; i++) {
 		if (!array[i]) continue;
 
-		const char *path_to_use = array[i];
-		if (basename_only) {
-			const char *basename = strrchr(array[i], '/');
-			if (basename) {
-				path_to_use = basename + 1;
-			}
-		}
-
 		if (pos != result) {
 			*pos++ = '\n';
 		}
-		strcpy(pos, path_to_use);
-		pos += strlen(path_to_use);
+
+		if (basename_only) {
+			const char *basename = strrchr(array[i], '/');
+			const char *path_to_use = basename ? basename + 1 : array[i];
+			strcpy(pos, path_to_use);
+			pos += strlen(path_to_use);
+		} else if (root_path && array[i][0] != '/') {
+			/* Convert relative path to absolute */
+			pos += sprintf(pos, "%s/%s", root_path, array[i]);
+		} else {
+			/* Use path as-is */
+			strcpy(pos, array[i]);
+			pos += strlen(array[i]);
+		}
 	}
 	*pos = '\0';
 
@@ -523,25 +538,25 @@ diff_t *diff_copy(const diff_t *source) {
 /* Get a string list of created files */
 char *diff_created_files(const diff_t *diff, bool basename_only) {
 	if (!diff) return strdup("");
-	return string_list(diff->created_files, diff->created_count, basename_only);
+	return string_list(diff->created_files, diff->created_count, basename_only, NULL);
 }
 
 /* Get a string list of deleted files */
 char *diff_deleted_files(const diff_t *diff, bool basename_only) {
 	if (!diff) return strdup("");
-	return string_list(diff->deleted_files, diff->deleted_count, basename_only);
+	return string_list(diff->deleted_files, diff->deleted_count, basename_only, NULL);
 }
 
 /* Get a string list of renamed files */
 char *diff_renamed_files(const diff_t *diff, bool basename_only) {
 	if (!diff) return strdup("");
-	return string_list(diff->renamed_files, diff->renamed_count, basename_only);
+	return string_list(diff->renamed_files, diff->renamed_count, basename_only, NULL);
 }
 
 /* Get a string list of modified files */
 char *diff_modified_files(const diff_t *diff, bool basename_only) {
 	if (!diff) return strdup("");
-	return string_list(diff->modified_files, diff->modified_count, basename_only);
+	return string_list(diff->modified_files, diff->modified_count, basename_only, NULL);
 }
 
 /* Get a string list of all changed files */
@@ -662,6 +677,113 @@ char *diff_all_files(const diff_t *diff, bool basename_only) {
 	}
 
 	*pos = '\0';
+	return result;
+}
+
+/* Absolute path versions - convert relative paths to absolute using root_path */
+char *diff_created_files_absolute(const diff_t *diff, bool basename_only, const char *root_path) {
+	if (!diff) return strdup("");
+	return string_list(diff->created_files, diff->created_count, basename_only, root_path);
+}
+
+char *diff_deleted_files_absolute(const diff_t *diff, bool basename_only, const char *root_path) {
+	if (!diff) return strdup("");
+	return string_list(diff->deleted_files, diff->deleted_count, basename_only, root_path);
+}
+
+char *diff_renamed_files_absolute(const diff_t *diff, bool basename_only, const char *root_path) {
+	if (!diff) return strdup("");
+	return string_list(diff->renamed_files, diff->renamed_count, basename_only, root_path);
+}
+
+char *diff_modified_files_absolute(const diff_t *diff, bool basename_only, const char *root_path) {
+	if (!diff) return strdup("");
+	return string_list(diff->modified_files, diff->modified_count, basename_only, root_path);
+}
+
+char *diff_all_files_absolute(const diff_t *diff, bool basename_only, const char *root_path) {
+	if (!diff || diff->total_changes == 0) {
+		return strdup("");
+	}
+
+	/* Combine all change types using the absolute path string_list function */
+	char *created = diff_created_files_absolute(diff, basename_only, root_path);
+	char *deleted = diff_deleted_files_absolute(diff, basename_only, root_path);
+	char *renamed = diff_renamed_files_absolute(diff, basename_only, root_path);
+	char *modified = diff_modified_files_absolute(diff, basename_only, root_path);
+
+	/* Calculate total size needed */
+	size_t total_size = 1; /* For null terminator */
+	int parts_count = 0;
+	
+	if (created && created[0] != '\0') {
+		total_size += strlen(created);
+		parts_count++;
+	}
+	if (deleted && deleted[0] != '\0') {
+		total_size += strlen(deleted);
+		if (parts_count > 0) total_size++; /* For newline separator */
+		parts_count++;
+	}
+	if (renamed && renamed[0] != '\0') {
+		total_size += strlen(renamed);
+		if (parts_count > 0) total_size++; /* For newline separator */
+		parts_count++;
+	}
+	if (modified && modified[0] != '\0') {
+		total_size += strlen(modified);
+		if (parts_count > 0) total_size++; /* For newline separator */
+		parts_count++;
+	}
+
+	/* Allocate result buffer */
+	char *result = malloc(total_size);
+	if (!result) {
+		free(created);
+		free(deleted);
+		free(renamed);
+		free(modified);
+		log_message(ERROR, "Failed to allocate memory for combined absolute path list");
+		return NULL;
+	}
+
+	/* Build the combined string */
+	char *pos = result;
+	bool first = true;
+
+	if (created && created[0] != '\0') {
+		if (!first) *pos++ = '\n';
+		strcpy(pos, created);
+		pos += strlen(created);
+		first = false;
+	}
+	if (deleted && deleted[0] != '\0') {
+		if (!first) *pos++ = '\n';
+		strcpy(pos, deleted);
+		pos += strlen(deleted);
+		first = false;
+	}
+	if (renamed && renamed[0] != '\0') {
+		if (!first) *pos++ = '\n';
+		strcpy(pos, renamed);
+		pos += strlen(renamed);
+		first = false;
+	}
+	if (modified && modified[0] != '\0') {
+		if (!first) *pos++ = '\n';
+		strcpy(pos, modified);
+		pos += strlen(modified);
+		first = false;
+	}
+
+	*pos = '\0';
+
+	/* Cleanup */
+	free(created);
+	free(deleted);
+	free(renamed);
+	free(modified);
+
 	return result;
 }
 

@@ -455,8 +455,8 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 	/* Substitute %L with list of files modified since processing began */
 	if (strstr(result, "%L")) {
 		if (watch->target == WATCH_DIRECTORY && event->diff) {
-			/* Use accurate snapshot-based change detection for full paths */
-			char *changed_files = diff_all_files(event->diff, false); /* basename_only = false */
+			/* Use accurate snapshot-based change detection for absolute paths */
+			char *changed_files = diff_all_files_absolute(event->diff, false, watch->path); /* basename_only = false, absolute paths */
 			if (changed_files && changed_files[0] != '\0') {
 				char *escaped_files = command_escape_list(changed_files);
 				if (escaped_files) {
