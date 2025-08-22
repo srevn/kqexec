@@ -315,14 +315,36 @@ resource_t *resource_get(resources_t *resources, const char *path, kind_t kind) 
 			return NULL;
 		}
 
-		/* Initialize resource mutex */
-		if (pthread_mutex_init(&resource->mutex, NULL) != 0) {
-			log_message(ERROR, "Failed to initialize resource mutex for: %s", path);
+		/* Initialize resource mutex as recursive to handle nested locking */
+		pthread_mutexattr_t mutex_attr;
+		if (pthread_mutexattr_init(&mutex_attr) != 0) {
+			log_message(ERROR, "Failed to initialize mutex attributes for: %s", path);
 			free(resource->path);
 			free(resource);
 			pthread_mutex_unlock(&resources->bucket_mutexes[hash]);
 			return NULL;
 		}
+
+		if (pthread_mutexattr_settype(&mutex_attr, PTHREAD_MUTEX_RECURSIVE) != 0) {
+			log_message(ERROR, "Failed to set recursive mutex type for: %s", path);
+			pthread_mutexattr_destroy(&mutex_attr);
+			free(resource->path);
+			free(resource);
+			pthread_mutex_unlock(&resources->bucket_mutexes[hash]);
+			return NULL;
+		}
+
+		if (pthread_mutex_init(&resource->mutex, &mutex_attr) != 0) {
+			log_message(ERROR, "Failed to initialize resource mutex for: %s", path);
+			pthread_mutexattr_destroy(&mutex_attr);
+			free(resource->path);
+			free(resource);
+			pthread_mutex_unlock(&resources->bucket_mutexes[hash]);
+			return NULL;
+		}
+
+		/* Clean up mutex attributes after initialization */
+		pthread_mutexattr_destroy(&mutex_attr);
 
 		/* Initialize resource state */
 		resource->executing = false;
