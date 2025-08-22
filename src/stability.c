@@ -488,13 +488,15 @@ void stability_reset(monitor_t *monitor, subscription_t *root) {
 
 	/* Reset baseline snapshot for accurate change detection (only if profile needs snapshots) */
 	if (profile_snapshot(root->profile, monitor->registry)) {
-		snapshot_destroy(root->profile->baseline_snapshot);
-		root->profile->baseline_snapshot = snapshot_create(root->resource->path, watch);
-		if (!root->profile->baseline_snapshot) {
-			log_message(WARNING, "Failed to create new baseline snapshot for %s", root->resource->path);
-		} else {
+		snapshot_t *new_snapshot = snapshot_create(root->resource->path, watch);
+		if (new_snapshot) {
+			snapshot_destroy(root->profile->baseline_snapshot);
+			root->profile->baseline_snapshot = new_snapshot;
 			log_message(DEBUG, "Created new baseline snapshot for %s with %d entries",
 						root->resource->path, root->profile->baseline_snapshot->count);
+		} else {
+			log_message(WARNING, "Failed to create new baseline snapshot for %s, using old baseline",
+						root->resource->path);
 		}
 	} else {
 		/* Ensure baseline snapshot is cleared if profile doesn't need snapshots */
