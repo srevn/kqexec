@@ -43,6 +43,7 @@ typedef struct watch {
 	bool hidden;                           /* Whether to monitor hidden files/directories */
 	bool environment;                      /* Whether to inject KQ_* environment variables */
 	double complexity;                     /* Multiplier for quiet period calculation (default: 1.0) */
+	bool requires_snapshot;                /* Whether snapshots are needed for this watch */
 	
 	/* Delays and batch timeouts */
 	int batch_timeout;                     /* Event batching timeout duration in ms */
@@ -86,5 +87,8 @@ bool config_remove_watch(config_t *config, registry_t *registry, watchref_t watc
 /* Exclude pattern functions */
 bool config_exclude_add(watch_t *watch, const char *pattern);
 bool config_exclude_match(const watch_t *watch, const char *path);
+
+/* Snapshot detection functions */
+bool config_snapshot(const watch_t *watch);
 
 #endif /* CONFIG_H */

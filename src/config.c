@@ -190,6 +190,9 @@ bool config_add_watch(config_t *config, registry_t *registry, watch_t *watch) {
 		}
 	}
 
+	/* Determine if snapshots are needed for this watch */
+	watch->requires_snapshot = config_snapshot(watch);
+
 	/* Add watch to registry */
 	watchref_t watchref = registry_add(registry, watch);
 	if (!watchref_valid(watchref)) {
@@ -268,6 +271,7 @@ watch_t *config_clone_watch(const watch_t *source) {
 	clone->recursive = source->recursive;
 	clone->hidden = source->hidden;
 	clone->environment = source->environment;
+	clone->requires_snapshot = source->requires_snapshot;
 	clone->complexity = source->complexity;
 	clone->batch_timeout = source->batch_timeout;
 	clone->processing_delay = source->processing_delay;
@@ -860,6 +864,44 @@ bool config_exclude_match(const watch_t *watch, const char *path) {
 					return true;
 				}
 			}
+		}
+	}
+
+	return false;
+}
+
+/* Determine if a watch needs snapshot functionality */
+bool config_snapshot(const watch_t *watch) {
+	if (!watch) return false;
+
+	/* Snapshots are only applicable to directory watches */
+	if (watch->target != WATCH_DIRECTORY) {
+		return false;
+	}
+
+	/* If environment flag is set, we need snapshots for KQ_* variables */
+	if (watch->environment) {
+		return true;
+	}
+
+	/* If no command is specified, no snapshots needed */
+	if (!watch->command) {
+		return false;
+	}
+
+	/* Check for snapshot-dependent placeholders in the command */
+	const char *snapshot_placeholders[] = {
+		"%created",
+		"%deleted",
+		"%modified",
+		"%renamed",
+		"%l", /* List of changed basenames */
+		"%L", /* List of changed full paths */
+		NULL};
+
+	for (int i = 0; snapshot_placeholders[i]; i++) {
+		if (strstr(watch->command, snapshot_placeholders[i])) {
+			return true;
 		}
 	}
 

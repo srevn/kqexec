@@ -387,6 +387,8 @@ uint64_t configuration_hash(const watch_t *watch) {
 	hash *= prime;
 	hash ^= (uint64_t) (watch->hidden ? 1 : 0);
 	hash *= prime;
+	hash ^= (uint64_t) (watch->requires_snapshot ? 1 : 0);
+	hash *= prime;
 
 	/* Hash exclude patterns */
 	if (watch->exclude && watch->num_exclude > 0) {
@@ -403,6 +405,24 @@ uint64_t configuration_hash(const watch_t *watch) {
 	}
 
 	return hash;
+}
+
+/* Check if a profile needs snapshot functionality based on its subscriptions */
+bool profile_snapshot(const profile_t *profile, registry_t *registry) {
+	if (!profile || !registry) return false;
+
+	/* Check all subscriptions in this profile */
+	subscription_t *subscription = profile->subscriptions;
+	while (subscription) {
+		/* Get the watch for this subscription */
+		watch_t *watch = registry_get(registry, subscription->watchref);
+		if (watch && watch->requires_snapshot) {
+			return true;
+		}
+		subscription = subscription->next;
+	}
+
+	return false;
 }
 
 /* Find existing scanning profile with matching configuration hash */
@@ -556,8 +576,22 @@ subscription_t *resources_subscription(resources_t *resources, registry_t *regis
 	/* Find existing scanning profile with matching configuration */
 	profile_t *profile = profile_get(resource, watch_hash);
 
-	/* If no matching profile found, create a new one */
-	if (profile) goto create_subscription;
+	/* If matching profile found, check if we need to create baseline snapshot */
+	if (profile) {
+		/* Check if this watch needs snapshots but profile doesn't have one */
+		if (watch && watch->requires_snapshot && !profile->baseline_snapshot &&
+			resource->kind == ENTITY_DIRECTORY && resource->exists) {
+			log_message(DEBUG, "Creating baseline snapshot for existing profile in %s", path);
+			profile->baseline_snapshot = snapshot_create(path, watch);
+			if (!profile->baseline_snapshot) {
+				log_message(WARNING, "Failed to create baseline snapshot for existing profile in %s", path);
+			} else {
+				log_message(DEBUG, "Created baseline snapshot for existing profile in %s with %d entries",
+							path, profile->baseline_snapshot->count);
+			}
+		}
+		goto create_subscription;
+	}
 
 	/* For directories, pre-scan before creating profile to avoid holding lock during I/O */
 	stats_t initial_stats;
@@ -613,14 +647,19 @@ subscription_t *resources_subscription(resources_t *resources, registry_t *regis
 	profile->stability->ref_stats = initial_stats;
 	profile->stability->reference_init = true;
 
-	/* Create initial baseline snapshot for accurate change detection */
-	profile->baseline_snapshot = snapshot_create(path, watch);
-	if (!profile->baseline_snapshot) {
-		log_message(WARNING, "Failed to create initial baseline snapshot for directory: %s", path);
-		/* Continue without snapshot - system will fall back to time-based detection */
+	/* Create initial baseline snapshot only if this watch needs snapshots */
+	if (watch && watch->requires_snapshot) {
+		profile->baseline_snapshot = snapshot_create(path, watch);
+		if (!profile->baseline_snapshot) {
+			log_message(WARNING, "Failed to create initial baseline snapshot for directory: %s", path);
+			/* Continue without snapshot - system will fall back to time-based detection */
+		} else {
+			log_message(DEBUG, "Created initial baseline snapshot for %s with %d entries",
+						path, profile->baseline_snapshot->count);
+		}
 	} else {
-		log_message(DEBUG, "Created initial baseline snapshot for %s with %d entries",
-					path, profile->baseline_snapshot->count);
+		profile->baseline_snapshot = NULL;
+		log_message(DEBUG, "Skipping baseline snapshot creation for %s (snapshots not needed)", path);
 	}
 
 	log_message(DEBUG, "Initial baseline established for %s: files=%d, dirs=%d, depth=%d, size=%s",

@@ -486,14 +486,23 @@ void stability_reset(monitor_t *monitor, subscription_t *root) {
 	root->profile->stability->prev_stats = new_baseline;
 	root->profile->stability->ref_stats = new_baseline;
 
-	/* Reset baseline snapshot for accurate change detection */
-	snapshot_destroy(root->profile->baseline_snapshot);
-	root->profile->baseline_snapshot = snapshot_create(root->resource->path, watch);
-	if (!root->profile->baseline_snapshot) {
-		log_message(WARNING, "Failed to create new baseline snapshot for %s", root->resource->path);
+	/* Reset baseline snapshot for accurate change detection (only if profile needs snapshots) */
+	if (profile_snapshot(root->profile, monitor->registry)) {
+		snapshot_destroy(root->profile->baseline_snapshot);
+		root->profile->baseline_snapshot = snapshot_create(root->resource->path, watch);
+		if (!root->profile->baseline_snapshot) {
+			log_message(WARNING, "Failed to create new baseline snapshot for %s", root->resource->path);
+		} else {
+			log_message(DEBUG, "Created new baseline snapshot for %s with %d entries",
+						root->resource->path, root->profile->baseline_snapshot->count);
+		}
 	} else {
-		log_message(DEBUG, "Created new baseline snapshot for %s with %d entries",
-					root->resource->path, root->profile->baseline_snapshot->count);
+		/* Ensure baseline snapshot is cleared if profile doesn't need snapshots */
+		if (root->profile->baseline_snapshot) {
+			log_message(DEBUG, "Destroying unneeded baseline snapshot for %s", root->resource->path);
+			snapshot_destroy(root->profile->baseline_snapshot);
+			root->profile->baseline_snapshot = NULL;
+		}
 	}
 
 	/* Clear all tracking deltas */
@@ -544,17 +553,31 @@ bool stability_execute(monitor_t *monitor, check_t *check, subscription_t *root,
 	int executed_count = 0;
 	const char *active_path = root->profile->scanner->active_path ? root->profile->scanner->active_path : check->path;
 
-	/* Create snapshots for accurate placeholder data */
-	watch_t *watch = registry_get(monitor->registry, root->watchref);
+	/* Create snapshots for accurate placeholder data if any watch requires them */
 	snapshot_t *current_snapshot = NULL;
 	diff_t *diff = NULL;
+	bool needs_snapshot = false;
 
-	if (watch) {
-		current_snapshot = snapshot_create(root->resource->path, watch);
+	/* Check if any watch associated with this check requires a snapshot */
+	for (int i = 0; i < check->num_watches; i++) {
+		watch_t *w = registry_get(monitor->registry, check->watchrefs[i]);
+		if (w && w->requires_snapshot) {
+			needs_snapshot = true;
+			break;
+		}
+	}
+
+	if (needs_snapshot) {
+		/* Use the root watch's configuration for the scan parameters */
+		watch_t *scan_watch = registry_get(monitor->registry, root->watchref);
+		current_snapshot = snapshot_create(root->resource->path, scan_watch);
 		if (current_snapshot && root->profile->baseline_snapshot) {
 			diff = snapshot_diff(root->profile->baseline_snapshot, current_snapshot);
-			log_message(DEBUG, "Created command snapshot diff for %s: %d total changes", root->resource->path,
+			log_message(DEBUG, "Snapshot comparison for %s: %d total changes", root->resource->path,
 						diff ? diff->total_changes : 0);
+		} else if (current_snapshot && !root->profile->baseline_snapshot) {
+			log_message(DEBUG, "Snapshot created but no baseline snapshot available for %s",
+						root->resource->path);
 		}
 	}
 

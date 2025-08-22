@@ -20,7 +20,7 @@ typedef struct diff diff_t;
 
 /* Scanning profile for watches with compatible scan configurations */
 typedef struct profile {
-	uint64_t configuration_hash;           /* Hash of the scan configuration (recursive, hidden, excludes) */
+	uint64_t configuration_hash;           /* Hash of the scan configuration (recursive, hidden, snapshot, excludes) */
 	
 	/* Configuration-specific state */
 	stability_t *stability;                /* Shared stability state for this profile */
@@ -112,6 +112,7 @@ void resource_unlock(resource_t *resource);
 
 /* Configuration utilities */
 uint64_t configuration_hash(const watch_t *watch);
+bool profile_snapshot(const profile_t *profile, registry_t *registry);
 
 /* Profile management */
 profile_t *profile_get(resource_t *resource, uint64_t configuration_hash);
