@@ -227,13 +227,13 @@ static bool snapshot_scan(snapshot_t *snapshot, const char *current_path, const 
 			continue;
 		}
 
-		/* Skip hidden files if not requested */
-		if (!hidden && dirent->d_name[0] == '.') {
+		/* Skip .DS_Store files created by macOS */
+		if (strcmp(dirent->d_name, ".DS_Store") == 0) {
 			continue;
 		}
 
-		/* Skip excluded files and directories */
-		if (watch && config_exclude_match(watch, full_path)) {
+		/* Skip hidden files if not requested */
+		if (!hidden && dirent->d_name[0] == '.') {
 			continue;
 		}
 
