@@ -30,16 +30,16 @@ typedef struct snapshot {
 /* Difference between two snapshots */
 typedef struct diff {
 	/* Arrays of relative paths for each change type */
-	char **created_files;                  /* Files that were created */
-	char **deleted_files;                  /* Files that were deleted */
-	char **renamed_files;                  /* Files that were renamed/moved */
-	char **modified_files;                 /* Files that were modified */
+	char **created;                        /* Items that were created */
+	char **deleted;                        /* Items that were deleted */
+	char **renamed;                        /* Items that were renamed/moved */
+	char **modified;                       /* Items that were modified */
 	
 	/* Counts for each change type */
-	int created_count;                     /* Number of created files */
-	int deleted_count;                     /* Number of deleted files */
-	int renamed_count;                     /* Number of renamed files */
-	int modified_count;                    /* Number of modified files */
+	int created_count;                     /* Number of created items */
+	int deleted_count;                     /* Number of deleted items */
+	int renamed_count;                     /* Number of renamed items */
+	int modified_count;                    /* Number of modified items */
 	
 	/* Summary information */
 	int total_changes;                     /* Total number of changes */
@@ -59,17 +59,17 @@ char *diff_list(const diff_t *diff, bool basename_only, const char *change_type)
 diff_t *diff_copy(const diff_t *source);
 
 /* Individual change type string lists for new placeholders */
-char *diff_created_files(const diff_t *diff, bool basename_only);
-char *diff_deleted_files(const diff_t *diff, bool basename_only);
-char *diff_renamed_files(const diff_t *diff, bool basename_only);
-char *diff_modified_files(const diff_t *diff, bool basename_only);
-char *diff_all_files(const diff_t *diff, bool basename_only);
+char *diff_created(const diff_t *diff, bool basename_only);
+char *diff_deleted(const diff_t *diff, bool basename_only);
+char *diff_renamed(const diff_t *diff, bool basename_only);
+char *diff_modified(const diff_t *diff, bool basename_only);
+char *diff_changed(const diff_t *diff, bool basename_only);
 
 /* Absolute path versions that need access to snapshot root path */
-char *diff_created_files_absolute(const diff_t *diff, bool basename_only, const char *root_path);
-char *diff_deleted_files_absolute(const diff_t *diff, bool basename_only, const char *root_path);
-char *diff_renamed_files_absolute(const diff_t *diff, bool basename_only, const char *root_path);
-char *diff_modified_files_absolute(const diff_t *diff, bool basename_only, const char *root_path);
-char *diff_all_files_absolute(const diff_t *diff, bool basename_only, const char *root_path);
+char *diff_created_absolute(const diff_t *diff, bool basename_only, const char *root_path);
+char *diff_deleted_absolute(const diff_t *diff, bool basename_only, const char *root_path);
+char *diff_renamed_absolute(const diff_t *diff, bool basename_only, const char *root_path);
+char *diff_modified_absolute(const diff_t *diff, bool basename_only, const char *root_path);
+char *diff_changed_absolute(const diff_t *diff, bool basename_only, const char *root_path);
 
 #endif /* SNAPSHOT_H */

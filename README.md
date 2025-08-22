@@ -123,24 +123,23 @@ Kqexec supports the following event types that can be specified in the configura
 
 Commands can include the following placeholders that will be replaced at runtime:
 
+- `%created` : List of created items
+- `%deleted` : List of deleted items
+- `%renamed` : List of renamed items (format: old -> new)
+- `%modified` : List of modified files
 - `%p` : Path where the event occurred
 - `%n` : Filename (for files) or subdirectory name (for directories) which triggered the event
 - `%d` : Directory containing the path that triggered the event
 - `%b` : Base path of the watch from the config
 - `%w` : Name of the watch from the config
 - `%r` : Event path relative to the watch path
-- `%l` : List of filenames (without paths) modified within 1 second of current event
-- `%L` : List of files modified within 1 second of current event (newline-separated)
+- `%l` : List of items (basenames) changed
+- `%L` : List of items changed (newline-separated)
 - `%s` : Size of the file in bytes (recursive for directories)
 - `%S` : Human-readable size (e.g., 1.2M, 512K)
 - `%t` : Time of the event (format: YYYY-MM-DD HH:MM:SS)
 - `%u` : User who triggered the event
 - `%e` : Event type which occurred
-- `%created_files` : List of created files
-- `%deleted_files` : List of deleted files
-- `%renamed_files` : List of renamed files (format: old -> new)
-- `%modified_files` : List of modified files
-
 
 ### Environment Variables
 
@@ -155,11 +154,11 @@ In addition to command placeholders, kqexec can optionally set environment varia
 - `KQ_USER_ID` : Numeric user ID that caused the event
 - `KQ_USERNAME` : Username that caused the event (resolved from user ID)
 - `KQ_TIMESTAMP` : ISO 8601 timestamp of the event
-- `KQ_CHANGED_FILES` : Space-separated list of all changed files
-- `KQ_CREATED_FILES` : Space-separated list of files created
-- `KQ_DELETED_FILES` : Space-separated list of files deleted
-- `KQ_RENAMED_FILES` : Space-separated list of files renamed
-- `KQ_MODIFIED_FILES` : Space-separated list of files modified
+- `KQ_CHANGED` : Space-separated list of all changes
+- `KQ_CREATED` : Space-separated list of items created
+- `KQ_DELETED` : Space-separated list of items deleted
+- `KQ_RENAMED` : Space-separated list of items renamed
+- `KQ_MODIFIED` : Space-separated list of items modified
 
 These environment variables make commands more powerful and reusable. For example:
 
