@@ -267,14 +267,14 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 		if (strstr(result, "%created")) {
 			char *created = diff_created(event->diff, false);
 			if (created) {
-				char *escaped_items = command_escape_list(created);
-				if (escaped_items) {
-					if (!command_update(&result, "%created", escaped_items)) {
-						free(escaped_items);
+				char *escaped_created = command_escape_list(created);
+				if (escaped_created) {
+					if (!command_update(&result, "%created", escaped_created)) {
+						free(escaped_created);
 						free(created);
 						return NULL;
 					}
-					free(escaped_items);
+					free(escaped_created);
 				}
 				free(created);
 			}
@@ -284,14 +284,14 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 		if (strstr(result, "%deleted")) {
 			char *deleted = diff_deleted(event->diff, false);
 			if (deleted) {
-				char *escaped_items = command_escape_list(deleted);
-				if (escaped_items) {
-					if (!command_update(&result, "%deleted", escaped_items)) {
-						free(escaped_items);
+				char *escaped_deleted = command_escape_list(deleted);
+				if (escaped_deleted) {
+					if (!command_update(&result, "%deleted", escaped_deleted)) {
+						free(escaped_deleted);
 						free(deleted);
 						return NULL;
 					}
-					free(escaped_items);
+					free(escaped_deleted);
 				}
 				free(deleted);
 			}
@@ -301,14 +301,14 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 		if (strstr(result, "%renamed")) {
 			char *renamed = diff_renamed(event->diff, false);
 			if (renamed) {
-				char *escaped_items = command_escape_list(renamed);
-				if (escaped_items) {
-					if (!command_update(&result, "%renamed", escaped_items)) {
-						free(escaped_items);
+				char *escaped_renamed = command_escape_list(renamed);
+				if (escaped_renamed) {
+					if (!command_update(&result, "%renamed", escaped_renamed)) {
+						free(escaped_renamed);
 						free(renamed);
 						return NULL;
 					}
-					free(escaped_items);
+					free(escaped_renamed);
 				}
 				free(renamed);
 			}
@@ -318,14 +318,14 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 		if (strstr(result, "%modified")) {
 			char *modified = diff_modified(event->diff, false);
 			if (modified) {
-				char *escaped_items = command_escape_list(modified);
-				if (escaped_items) {
-					if (!command_update(&result, "%modified", escaped_items)) {
-						free(escaped_items);
+				char *escaped_modified = command_escape_list(modified);
+				if (escaped_modified) {
+					if (!command_update(&result, "%modified", escaped_modified)) {
+						free(escaped_modified);
 						free(modified);
 						return NULL;
 					}
-					free(escaped_items);
+					free(escaped_modified);
 				}
 				free(modified);
 			}
@@ -423,14 +423,14 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 			/* Use accurate snapshot-based change detection for basenames */
 			char *changed = diff_changed(event->diff, true); /* basename_only = true */
 			if (changed && changed[0] != '\0') {
-				char *escaped_items = command_escape_list(changed);
-				if (escaped_items) {
-					if (!command_update(&result, "%l", escaped_items)) {
-						free(escaped_items);
+				char *escaped_changed = command_escape_list(changed);
+				if (escaped_changed) {
+					if (!command_update(&result, "%l", escaped_changed)) {
+						free(escaped_changed);
 						free(changed);
 						return NULL;
 					}
-					free(escaped_items);
+					free(escaped_changed);
 				} else {
 					if (!command_update(&result, "%l", "")) {
 						free(changed);
@@ -458,14 +458,14 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 			/* Use accurate snapshot-based change detection for absolute paths */
 			char *changed = diff_changed(event->diff, false); /* basename_only = false, absolute paths */
 			if (changed && changed[0] != '\0') {
-				char *escaped_items = command_escape_list(changed);
-				if (escaped_items) {
-					if (!command_update(&result, "%L", escaped_items)) {
-						free(escaped_items);
+				char *escaped_changed = command_escape_list(changed);
+				if (escaped_changed) {
+					if (!command_update(&result, "%L", escaped_changed)) {
+						free(escaped_changed);
 						free(changed);
 						return NULL;
 					}
-					free(escaped_items);
+					free(escaped_changed);
 				} else {
 					if (!command_update(&result, "%L", "")) {
 						free(changed);
@@ -534,6 +534,157 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 	if (!command_update(&result, "%e", event_str)) return NULL;
 
 	return result;
+}
+
+/* Set environment variables for command execution */
+void command_environment(monitor_t *monitor, watchref_t watchref, const event_t *event) {
+	const watch_t *watch = registry_get(monitor->registry, watchref);
+	char buffer[1024];
+	struct passwd *pwd;
+	struct tm tm;
+
+	if (watch == NULL || event == NULL) {
+		return;
+	}
+
+	/* KQ_EVENT_TYPE - event type which occurred */
+	setenv("KQ_EVENT_TYPE", filter_to_string(event->type), 1);
+
+	/* KQ_TRIGGER_PATH - full path where the event occurred */
+	if (event->path) {
+		char *escaped_trigger_path = command_escape(event->path);
+		if (escaped_trigger_path) {
+			setenv("KQ_TRIGGER_PATH", escaped_trigger_path, 1);
+			free(escaped_trigger_path);
+		}
+	}
+
+	/* KQ_WATCH_NAME - name of the watch from the configuration */
+	if (watch->name) {
+		char *escaped_watch_name = command_escape(watch->name);
+		if (escaped_watch_name) {
+			setenv("KQ_WATCH_NAME", escaped_watch_name, 1);
+			free(escaped_watch_name);
+		}
+	}
+
+	/* KQ_WATCH_PATH - base path being monitored */
+	if (watch->path) {
+		char *escaped_watch_path = command_escape(watch->path);
+		if (escaped_watch_path) {
+			setenv("KQ_WATCH_PATH", escaped_watch_path, 1);
+			free(escaped_watch_path);
+		}
+	}
+
+	/* KQ_RELATIVE_PATH - event path relative to the watch base*/
+	if (event->path && watch->path && strlen(event->path) > strlen(watch->path)) {
+		const char *relative_path = event->path + strlen(watch->path);
+		if (*relative_path == '/') {
+			relative_path++;
+		}
+		char *escaped_relative_path = command_escape(relative_path);
+		if (escaped_relative_path) {
+			setenv("KQ_RELATIVE_PATH", escaped_relative_path, 1);
+			free(escaped_relative_path);
+		}
+	}
+
+	/* KQ_TRIGGER_DIR - directory containing trigger */
+	if (event->path) {
+		char *path_copy = strdup(event->path);
+		if (path_copy) {
+			char *dir_result = dirname(path_copy);
+			if (dir_result) {
+				char *escaped_trigger_dir = command_escape(dir_result);
+				if (escaped_trigger_dir) {
+					setenv("KQ_TRIGGER_DIR", escaped_trigger_dir, 1);
+					free(escaped_trigger_dir);
+				}
+			}
+			free(path_copy);
+		}
+	}
+
+	/* KQ_USER_ID - numeric user ID that caused the event*/
+	snprintf(buffer, sizeof(buffer), "%d", event->user_id);
+	setenv("KQ_USER_ID", buffer, 1);
+
+	/* KQ_USERNAME - try to resolve user ID to name */
+	pwd = getpwuid(event->user_id);
+	if (pwd && pwd->pw_name) {
+		char *escaped_username = command_escape(pwd->pw_name);
+		if (escaped_username) {
+			setenv("KQ_USERNAME", escaped_username, 1);
+			free(escaped_username);
+		}
+	} else {
+		snprintf(buffer, sizeof(buffer), "%d", event->user_id);
+		setenv("KQ_USERNAME", buffer, 1);
+	}
+
+	/* KQ_TIMESTAMP - ISO 8601 format */
+	if (localtime_r(&event->wall_time.tv_sec, &tm)) {
+		strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%S", &tm);
+		setenv("KQ_TIMESTAMP", buffer, 1);
+	}
+
+	/* KQ_CHANGED - list of changed items using snapshots */
+	if (watch->target == WATCH_DIRECTORY && event->diff) {
+		char *changed = diff_changed(event->diff, true); /* basename_only = true */
+		if (changed) {
+			char *escaped_changed = command_escape_list(changed);
+			if (escaped_changed) {
+				setenv("KQ_CHANGED", escaped_changed, 1);
+				free(escaped_changed);
+			}
+			free(changed);
+		}
+
+		/* KQ_CREATED - list of created items */
+		char *created = diff_created(event->diff, true); /* basename_only = true */
+		if (created) {
+			char *escaped_created = command_escape_list(created);
+			if (escaped_created) {
+				setenv("KQ_CREATED", escaped_created, 1);
+				free(escaped_created);
+			}
+			free(created);
+		}
+
+		/* KQ_DELETED - list of deleted items */
+		char *deleted = diff_deleted(event->diff, true); /* basename_only = true */
+		if (deleted) {
+			char *escaped_deleted = command_escape_list(deleted);
+			if (escaped_deleted) {
+				setenv("KQ_DELETED", escaped_deleted, 1);
+				free(escaped_deleted);
+			}
+			free(deleted);
+		}
+
+		/* KQ_RENAMED - list of renamed items */
+		char *renamed = diff_renamed(event->diff, true); /* basename_only = true */
+		if (renamed) {
+			char *escaped_renamed = command_escape_list(renamed);
+			if (escaped_renamed) {
+				setenv("KQ_RENAMED", escaped_renamed, 1);
+				free(escaped_renamed);
+			}
+			free(renamed);
+		}
+
+		/* KQ_MODIFIED - list of modified items */
+		char *modified = diff_modified(event->diff, true); /* basename_only = true */
+		if (modified) {
+			char *escaped_modified = command_escape_list(modified);
+			if (escaped_modified) {
+				setenv("KQ_MODIFIED", escaped_modified, 1);
+				free(escaped_modified);
+			}
+			free(modified);
+		}
+	}
 }
 
 /* Add line to output buffer */
@@ -813,101 +964,6 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 
 	free(command);
 	return true;
-}
-
-/* Set environment variables for command execution */
-void command_environment(monitor_t *monitor, watchref_t watchref, const event_t *event) {
-	const watch_t *watch = registry_get(monitor->registry, watchref);
-	char buffer[1024];
-	struct passwd *pwd;
-	struct tm tm;
-
-	if (watch == NULL || event == NULL) {
-		return;
-	}
-
-	/* KQ_EVENT_TYPE - event type which occurred */
-	setenv("KQ_EVENT_TYPE", filter_to_string(event->type), 1);
-
-	/* KQ_TRIGGER_PATH - full path where the event occurred */
-	setenv("KQ_TRIGGER_PATH", event->path, 1);
-
-	/* KQ_WATCH_NAME - name of the watch from the configuration */
-	setenv("KQ_WATCH_NAME", watch->name, 1);
-
-	/* KQ_WATCH_PATH - base path being monitored */
-	setenv("KQ_WATCH_PATH", watch->path, 1);
-
-	/* KQ_RELATIVE_PATH - event path relative to the watch base*/
-	const char *relative_path = event->path + strlen(watch->path);
-	if (*relative_path == '/') {
-		relative_path++;
-	}
-	setenv("KQ_RELATIVE_PATH", relative_path, 1);
-
-	/* KQ_TRIGGER_DIR - directory containing trigger */
-	char *path_copy = strdup(event->path);
-	path_copy = strdup(event->path);
-	if (path_copy) {
-		setenv("KQ_TRIGGER_DIR", dirname(path_copy), 1);
-		free(path_copy);
-	}
-
-	/* KQ_USER_ID - numeric user ID that caused the event*/
-	snprintf(buffer, sizeof(buffer), "%d", event->user_id);
-	setenv("KQ_USER_ID", buffer, 1);
-
-	/* KQ_USERNAME - try to resolve user ID to name */
-	pwd = getpwuid(event->user_id);
-	if (pwd) {
-		setenv("KQ_USERNAME", pwd->pw_name, 1);
-	} else {
-		snprintf(buffer, sizeof(buffer), "%d", event->user_id);
-		setenv("KQ_USERNAME", buffer, 1);
-	}
-
-	/* KQ_TIMESTAMP - ISO 8601 format */
-	if (localtime_r(&event->wall_time.tv_sec, &tm)) {
-		strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%S", &tm);
-		setenv("KQ_TIMESTAMP", buffer, 1);
-	}
-
-	/* KQ_CHANGED - list of changed items using snapshots */
-	if (watch->target == WATCH_DIRECTORY && event->diff) {
-		char *changed = diff_changed(event->diff, true); /* basename_only = true */
-		if (changed && changed[0] != '\0') {
-			setenv("KQ_CHANGED", changed, 1);
-		}
-		free(changed);
-
-		/* KQ_CREATED - list of created items */
-		char *created = diff_created(event->diff, true); /* basename_only = true */
-		if (created && created[0] != '\0') {
-			setenv("KQ_CREATED", created, 1);
-		}
-		free(created);
-
-		/* KQ_DELETED - list of deleted items */
-		char *deleted = diff_deleted(event->diff, true); /* basename_only = true */
-		if (deleted && deleted[0] != '\0') {
-			setenv("KQ_DELETED", deleted, 1);
-		}
-		free(deleted);
-
-		/* KQ_RENAMED - list of renamed items */
-		char *renamed = diff_renamed(event->diff, true); /* basename_only = true */
-		if (renamed && renamed[0] != '\0') {
-			setenv("KQ_RENAMED", renamed, 1);
-		}
-		free(renamed);
-
-		/* KQ_MODIFIED - list of modified items */
-		char *modified = diff_modified(event->diff, true); /* basename_only = true */
-		if (modified && modified[0] != '\0') {
-			setenv("KQ_MODIFIED", modified, 1);
-		}
-		free(modified);
-	}
 }
 
 /* Clean up command subsystem */

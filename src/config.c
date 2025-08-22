@@ -13,7 +13,7 @@
 #include "registry.h"
 
 /* Trim whitespace from a string */
-static char *trim(char *str) {
+static char *config_trim(char *str) {
 	if (str == NULL) {
 		return NULL;
 	}
@@ -117,7 +117,7 @@ bool config_events(const char *events_str, filter_t *events) {
 
 	token = strtok_r(events_copy, ",", &saveptr);
 	while (token != NULL) {
-		char *trimmed_token = trim(token);
+		char *trimmed_token = config_trim(token);
 
 		if (strcasecmp(trimmed_token, "STRUCTURE") == 0) {
 			*events |= EVENT_STRUCTURE;
@@ -372,7 +372,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 		}
 
 		/* Trim whitespace */
-		str = trim(line);
+		str = config_trim(line);
 
 		/* Skip empty lines */
 		if (*str == '\0') {
@@ -404,7 +404,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 			}
 
 			/* Trim whitespace from next line */
-			next_str = trim(next_line);
+			next_str = config_trim(next_line);
 
 			/* Skip empty continuation lines */
 			if (*next_str == '\0') {
@@ -518,8 +518,8 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 				return false;
 			}
 
-			key = trim(key);
-			value = trim(value);
+			key = config_trim(key);
+			value = config_trim(value);
 
 			if (strcasecmp(key, "file") == 0) {
 				current_watch->target = WATCH_FILE;
@@ -652,7 +652,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 				char *token, *saveptr;
 				token = strtok_r(patterns, ",", &saveptr);
 				while (token != NULL) {
-					char *trimmed_pattern = trim(token);
+					char *trimmed_pattern = config_trim(token);
 					if (strlen(trimmed_pattern) > 0) {
 						if (!config_exclude_add(current_watch, trimmed_pattern)) {
 							log_message(ERROR, "Failed to add exclude pattern '%s' at line %d",
