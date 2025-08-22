@@ -118,10 +118,13 @@ bool scanner_scan(const char *dir_path, const watch_t *watch, stats_t *stats) {
 			continue;
 		}
 
-		/* Skip hidden files if not requested */
+		/* Check if item is hidden when not requested */
+		bool hidden_item = false;
 		if (!hidden) {
 			const char *basename = strrchr(path, '/');
-			if ((basename ? basename + 1 : path)[0] == '.') continue;
+			if ((basename ? basename + 1 : path)[0] == '.') {
+				hidden_item = true;
+			}
 		}
 
 		if (stat(path, &info) != 0) {
@@ -130,8 +133,8 @@ bool scanner_scan(const char *dir_path, const watch_t *watch, stats_t *stats) {
 		}
 
 		if (S_ISREG(info.st_mode)) {
-			/* Check if file is excluded and count accordingly */
-			if (watch && config_exclude_match(watch, path)) {
+			/* Check if file is excluded (by pattern or hidden status) */
+			if (hidden_item || (watch && config_exclude_match(watch, path))) {
 				/* Excluded file, update the counters and checksums */
 				stats->excluded_files++;
 				stats->excluded_size += info.st_size;
@@ -151,6 +154,13 @@ bool scanner_scan(const char *dir_path, const watch_t *watch, stats_t *stats) {
 				stats->last_mtime = info.st_mtime;
 			}
 		} else if (S_ISDIR(info.st_mode)) {
+			/* Check if directory is excluded (by pattern or hidden status) */
+			if (hidden_item || (watch && config_exclude_match(watch, path))) {
+				/* Excluded directory, update the counter */
+				stats->excluded_dirs++;
+				continue;
+			}
+
 			stats->local_dirs++;
 
 			/* If not recursive, skip subdirectory scanning */
@@ -169,9 +179,10 @@ bool scanner_scan(const char *dir_path, const watch_t *watch, stats_t *stats) {
 			stats->tree_dirs += sub_stats.tree_dirs;
 			stats->tree_size += sub_stats.tree_size;
 
-			/* Aggregate the excluded file stats from the recursive call */
+			/* Aggregate the excluded file/dir stats from the recursive call */
 			stats->excluded_files += sub_stats.excluded_files;
 			stats->excluded_size += sub_stats.excluded_size;
+			stats->excluded_dirs += sub_stats.excluded_dirs;
 			/* Use latest mtime across all excluded files in the tree */
 			if (sub_stats.excluded_mtime > stats->excluded_mtime) {
 				stats->excluded_mtime = sub_stats.excluded_mtime;
@@ -321,10 +332,13 @@ bool scanner_stable(monitor_t *monitor, const watch_t *watch, const char *dir_pa
 			continue;
 		}
 
-		/* Skip hidden files if not requested */
+		/* Check if item is hidden when not requested */
+		bool hidden_item = false;
 		if (!hidden) {
 			const char *basename = strrchr(path, '/');
-			if ((basename ? basename + 1 : path)[0] == '.') continue;
+			if ((basename ? basename + 1 : path)[0] == '.') {
+				hidden_item = true;
+			}
 		}
 
 		if (stat(path, &info) != 0) {
@@ -336,8 +350,8 @@ bool scanner_stable(monitor_t *monitor, const watch_t *watch, const char *dir_pa
 
 		/* Look for temporary files or recent changes */
 		if (S_ISREG(info.st_mode)) {
-			/* Check if file is excluded and count accordingly */
-			if (watch && config_exclude_match(watch, path)) {
+			/* Check if file is excluded (by pattern or hidden status) */
+			if (hidden_item || (watch && config_exclude_match(watch, path))) {
 				/* Excluded file, update the counters and checksums */
 				stats->excluded_files++;
 				stats->excluded_size += info.st_size;
@@ -367,6 +381,13 @@ bool scanner_stable(monitor_t *monitor, const watch_t *watch, const char *dir_pa
 				is_stable = false; /* Mark as unstable but continue scanning */
 			}
 		} else if (S_ISDIR(info.st_mode)) {
+			/* Check if directory is excluded (by pattern or hidden status) */
+			if (hidden_item || (watch && config_exclude_match(watch, path))) {
+				/* Excluded directory, update the counter */
+				stats->excluded_dirs++;
+				continue;
+			}
+
 			stats->local_dirs++;
 
 			/* If not recursive, skip subdirectory processing */
@@ -390,9 +411,10 @@ bool scanner_stable(monitor_t *monitor, const watch_t *watch, const char *dir_pa
 			stats->tree_dirs += sub_stats.tree_dirs;
 			stats->tree_size += sub_stats.tree_size;
 
-			/* Aggregate the excluded file stats from the recursive call */
+			/* Aggregate the excluded file/dir stats from the recursive call */
 			stats->excluded_files += sub_stats.excluded_files;
 			stats->excluded_size += sub_stats.excluded_size;
+			stats->excluded_dirs += sub_stats.excluded_dirs;
 			/* Use latest mtime across all excluded files in the tree */
 			if (sub_stats.excluded_mtime > stats->excluded_mtime) {
 				stats->excluded_mtime = sub_stats.excluded_mtime;

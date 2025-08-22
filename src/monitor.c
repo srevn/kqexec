@@ -523,6 +523,11 @@ bool monitor_tree(monitor_t *monitor, const char *dir_path, watchref_t watchref)
 			continue;
 		}
 
+		/* Skip hidden directories unless hidden is true */
+		if (!watch->hidden && path_hidden(path)) {
+			continue;
+		}
+
 		struct stat info;
 		if (stat(path, &info) == -1) {
 			log_message(WARNING, "Failed to stat %s: %s", path, strerror(errno));

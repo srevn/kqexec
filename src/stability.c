@@ -839,14 +839,15 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 								(execution_stats->tree_dirs != baseline_stats->tree_dirs) ||
 								(execution_stats->tree_size != baseline_stats->tree_size);
 
-		/* Check if the excluded set of files has changed (count, total size, or latest mtime) */
+		/* Check if the excluded set of files/dirs has changed (count, total size, or latest mtime) */
 		bool excluded_changed = (execution_stats->excluded_files != baseline_stats->excluded_files) ||
 								(execution_stats->excluded_size != baseline_stats->excluded_size) ||
-								(execution_stats->excluded_mtime != baseline_stats->excluded_mtime);
+								(execution_stats->excluded_mtime != baseline_stats->excluded_mtime) ||
+								(execution_stats->excluded_dirs != baseline_stats->excluded_dirs);
 
 		/* If the included is unchanged and the excluded has changed then we ignore this event */
 		if (!included_changed && excluded_changed) {
-			log_message(INFO, "Ignoring event for %s, all recent changes were to excluded files", root->resource->path);
+			log_message(INFO, "Ignoring event for %s, all recent changes were to excluded files/directories", root->resource->path);
 
 			/* Reset the stability baseline to this new state */
 			stability_reset(monitor, root);
