@@ -65,11 +65,4 @@ char *diff_renamed(const diff_t *diff, bool basename_only);
 char *diff_modified(const diff_t *diff, bool basename_only);
 char *diff_changed(const diff_t *diff, bool basename_only);
 
-/* Absolute path versions that need access to snapshot root path */
-char *diff_created_absolute(const diff_t *diff, bool basename_only, const char *root_path);
-char *diff_deleted_absolute(const diff_t *diff, bool basename_only, const char *root_path);
-char *diff_renamed_absolute(const diff_t *diff, bool basename_only, const char *root_path);
-char *diff_modified_absolute(const diff_t *diff, bool basename_only, const char *root_path);
-char *diff_changed_absolute(const diff_t *diff, bool basename_only, const char *root_path);
-
 #endif /* SNAPSHOT_H */

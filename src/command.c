@@ -267,14 +267,14 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 		if (strstr(result, "%created")) {
 			char *created = diff_created(event->diff, false);
 			if (created) {
-				char *escaped_files = command_escape_list(created);
-				if (escaped_files) {
-					if (!command_update(&result, "%created", escaped_files)) {
-						free(escaped_files);
+				char *escaped_items = command_escape_list(created);
+				if (escaped_items) {
+					if (!command_update(&result, "%created", escaped_items)) {
+						free(escaped_items);
 						free(created);
 						return NULL;
 					}
-					free(escaped_files);
+					free(escaped_items);
 				}
 				free(created);
 			}
@@ -284,14 +284,14 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 		if (strstr(result, "%deleted")) {
 			char *deleted = diff_deleted(event->diff, false);
 			if (deleted) {
-				char *escaped_files = command_escape_list(deleted);
-				if (escaped_files) {
-					if (!command_update(&result, "%deleted", escaped_files)) {
-						free(escaped_files);
+				char *escaped_items = command_escape_list(deleted);
+				if (escaped_items) {
+					if (!command_update(&result, "%deleted", escaped_items)) {
+						free(escaped_items);
 						free(deleted);
 						return NULL;
 					}
-					free(escaped_files);
+					free(escaped_items);
 				}
 				free(deleted);
 			}
@@ -301,14 +301,14 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 		if (strstr(result, "%renamed")) {
 			char *renamed = diff_renamed(event->diff, false);
 			if (renamed) {
-				char *escaped_files = command_escape_list(renamed);
-				if (escaped_files) {
-					if (!command_update(&result, "%renamed", escaped_files)) {
-						free(escaped_files);
+				char *escaped_items = command_escape_list(renamed);
+				if (escaped_items) {
+					if (!command_update(&result, "%renamed", escaped_items)) {
+						free(escaped_items);
 						free(renamed);
 						return NULL;
 					}
-					free(escaped_files);
+					free(escaped_items);
 				}
 				free(renamed);
 			}
@@ -318,14 +318,14 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 		if (strstr(result, "%modified")) {
 			char *modified = diff_modified(event->diff, false);
 			if (modified) {
-				char *escaped_files = command_escape_list(modified);
-				if (escaped_files) {
-					if (!command_update(&result, "%modified", escaped_files)) {
-						free(escaped_files);
+				char *escaped_items = command_escape_list(modified);
+				if (escaped_items) {
+					if (!command_update(&result, "%modified", escaped_items)) {
+						free(escaped_items);
 						free(modified);
 						return NULL;
 					}
-					free(escaped_files);
+					free(escaped_items);
 				}
 				free(modified);
 			}
@@ -421,29 +421,29 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 	if (strstr(result, "%l")) {
 		if (watch->target == WATCH_DIRECTORY && event->diff) {
 			/* Use accurate snapshot-based change detection for basenames */
-			char *changed_files = diff_changed(event->diff, true); /* basename_only = true */
-			if (changed_files && changed_files[0] != '\0') {
-				char *escaped_files = command_escape_list(changed_files);
-				if (escaped_files) {
-					if (!command_update(&result, "%l", escaped_files)) {
-						free(escaped_files);
-						free(changed_files);
+			char *changed = diff_changed(event->diff, true); /* basename_only = true */
+			if (changed && changed[0] != '\0') {
+				char *escaped_items = command_escape_list(changed);
+				if (escaped_items) {
+					if (!command_update(&result, "%l", escaped_items)) {
+						free(escaped_items);
+						free(changed);
 						return NULL;
 					}
-					free(escaped_files);
+					free(escaped_items);
 				} else {
 					if (!command_update(&result, "%l", "")) {
-						free(changed_files);
+						free(changed);
 						return NULL;
 					}
 				}
 			} else {
 				if (!command_update(&result, "%l", "")) {
-					free(changed_files);
+					free(changed);
 					return NULL;
 				}
 			}
-			free(changed_files);
+			free(changed);
 		} else {
 			/* For file watches or when no diff available, use the file basename */
 			char *basename_str = strrchr(event->path, '/');
@@ -456,29 +456,29 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 	if (strstr(result, "%L")) {
 		if (watch->target == WATCH_DIRECTORY && event->diff) {
 			/* Use accurate snapshot-based change detection for absolute paths */
-			char *changed_files = diff_changed_absolute(event->diff, false, watch->path); /* basename_only = false, absolute paths */
-			if (changed_files && changed_files[0] != '\0') {
-				char *escaped_files = command_escape_list(changed_files);
-				if (escaped_files) {
-					if (!command_update(&result, "%L", escaped_files)) {
-						free(escaped_files);
-						free(changed_files);
+			char *changed = diff_changed(event->diff, false); /* basename_only = false, absolute paths */
+			if (changed && changed[0] != '\0') {
+				char *escaped_items = command_escape_list(changed);
+				if (escaped_items) {
+					if (!command_update(&result, "%L", escaped_items)) {
+						free(escaped_items);
+						free(changed);
 						return NULL;
 					}
-					free(escaped_files);
+					free(escaped_items);
 				} else {
 					if (!command_update(&result, "%L", "")) {
-						free(changed_files);
+						free(changed);
 						return NULL;
 					}
 				}
 			} else {
 				if (!command_update(&result, "%L", "")) {
-					free(changed_files);
+					free(changed);
 					return NULL;
 				}
 			}
-			free(changed_files);
+			free(changed);
 		} else {
 			/* For file watches or when no diff available, use the full file path */
 			char *escaped_path = command_escape(event->path);
@@ -874,11 +874,11 @@ void command_environment(monitor_t *monitor, watchref_t watchref, const event_t 
 
 	/* KQ_CHANGED - list of changed items using snapshots */
 	if (watch->target == WATCH_DIRECTORY && event->diff) {
-		char *changed_files = diff_changed(event->diff, true); /* basename_only = true */
-		if (changed_files && changed_files[0] != '\0') {
-			setenv("KQ_CHANGED", changed_files, 1);
+		char *changed = diff_changed(event->diff, true); /* basename_only = true */
+		if (changed && changed[0] != '\0') {
+			setenv("KQ_CHANGED", changed, 1);
 		}
-		free(changed_files);
+		free(changed);
 
 		/* KQ_CREATED - list of created items */
 		char *created = diff_created(event->diff, true); /* basename_only = true */
