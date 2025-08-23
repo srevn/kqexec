@@ -13,6 +13,7 @@
 
 #include "command.h"
 #include "events.h"
+#include "files.h"
 #include "logger.h"
 #include "pending.h"
 #include "queue.h"
@@ -228,20 +229,6 @@ monitor_t *monitor_create(config_t *config, registry_t *registry) {
 	monitor->delayed_count = 0;
 	monitor->delayed_capacity = 0;
 
-	/* Initialize file descriptor to profile mapping */
-	monitor->fd_map_size = 1024; /* Reasonable initial size */
-	monitor->fd_profile = calloc(monitor->fd_map_size, sizeof(profile_t *));
-	if (!monitor->fd_profile) {
-		log_message(ERROR, "Failed to allocate fd-to-profile mapping");
-		observer_unregister(monitor->registry, &monitor->monitor_observer);
-		observer_unregister(monitor->registry, &monitor->pending_observer);
-		resources_destroy(monitor->resources);
-		queue_destroy(monitor->check_queue);
-		free(monitor->config_path);
-		free(monitor);
-		return NULL;
-	}
-
 	return monitor;
 }
 
@@ -301,9 +288,6 @@ void monitor_destroy(monitor_t *monitor) {
 	/* Clean up resource table */
 	resources_destroy(monitor->resources);
 
-	/* Clean up file descriptor to profile mapping */
-	free(monitor->fd_profile);
-
 	/* Perform final garbage collection before destroying registry */
 	if (monitor->registry) {
 		registry_garbage(monitor->registry);
@@ -319,33 +303,6 @@ void monitor_destroy(monitor_t *monitor) {
 	}
 
 	free(monitor);
-}
-
-/* Map a file descriptor to its owning profile for fast event lookup */
-void monitor_map(monitor_t *monitor, int fd, profile_t *profile) {
-	if (!monitor || fd < 0 || fd >= monitor->fd_map_size || !profile) {
-		if (fd >= monitor->fd_map_size) {
-			log_message(WARNING, "File descriptor %d exceeds fd map size %d", fd, monitor->fd_map_size);
-		}
-		return;
-	}
-	monitor->fd_profile[fd] = profile;
-}
-
-/* Remove file descriptor to profile mapping */
-void monitor_unmap(monitor_t *monitor, int fd) {
-	if (!monitor || fd < 0 || fd >= monitor->fd_map_size) {
-		return;
-	}
-	monitor->fd_profile[fd] = NULL;
-}
-
-/* Get profile that owns a file descriptor */
-profile_t *monitor_profile(monitor_t *monitor, int fd) {
-	if (!monitor || fd < 0 || fd >= monitor->fd_map_size) {
-		return NULL;
-	}
-	return monitor->fd_profile[fd];
 }
 
 /* Set up kqueue monitoring for a file or directory */
@@ -448,6 +405,14 @@ bool monitor_path(monitor_t *monitor, const char *path, watchref_t watchref) {
 			return false;
 		}
 
+		/* For shared watchers, we still need to create a resource subscription. */
+		struct stat info;
+		watch_t *watch = registry_get(monitor->registry, watchref);
+		if (stat(path, &info) == 0 && watch) {
+			kind_t kind = S_ISDIR(info.st_mode) ? ENTITY_DIRECTORY : ENTITY_FILE;
+			resources_subscription(monitor->resources, monitor->registry, path, watchref, kind);
+		}
+
 		/* Shared watcher created successfully */
 		return true;
 	} else {
@@ -537,13 +502,13 @@ bool monitor_tree(monitor_t *monitor, const char *dir_path, watchref_t watchref)
 
 	/* Add file watches for content monitoring if requested */
 	if (watch->filter & EVENT_CONTENT) {
-		/* Find the resource and profile for this directory to get the file watch registry */
+		/* Find the resource for this directory to scan for files */
 		resource_t *resource = resource_get(monitor->resources, dir_path, ENTITY_DIRECTORY);
 		if (resource) {
 			uint64_t config_hash = configuration_hash(watch);
 			profile_t *profile = profile_get(resource, config_hash);
-			if (profile && profile->fregistry) {
-				files_scan(monitor, profile->fregistry, profile, dir_path, watchref, watch);
+			if (profile) {
+				files_scan(monitor, resource, watchref, watch);
 			}
 		}
 	}

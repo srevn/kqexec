@@ -548,11 +548,9 @@ void stability_reset(monitor_t *monitor, subscription_t *root) {
 		root->profile->scanner->active = false;
 	}
 
-	/* Re-register file watches that fired during the unstable period for all profiles */
-	for (profile_t *profile = root->resource->profiles; profile != NULL; profile = profile->next) {
-		if (profile->fregistry && profile->monitor_files) {
-			directory_reregister(monitor, profile->fregistry, root->resource->path);
-		}
+	/* Re-register file watches that fired during the unstable period */
+	if (root->resource->fregistry) {
+		directory_reregister(monitor, root->resource->fregistry, root->resource->path);
 	}
 }
 
@@ -613,12 +611,14 @@ bool stability_execute(monitor_t *monitor, check_t *check, subscription_t *root,
 			continue;
 		}
 
-		/* Find existing subscription in the root profile */
+		/* Find existing subscription across all profiles for this resource */
 		subscription_t *subscription = NULL;
-		for (subscription_t *existing = root->profile->subscriptions; existing != NULL; existing = existing->next) {
-			if (watchref_equal(existing->watchref, check->watchrefs[i])) {
-				subscription = existing;
-				break;
+		for (profile_t *profile = root->resource->profiles; profile != NULL && !subscription; profile = profile->next) {
+			for (subscription_t *existing = profile->subscriptions; existing != NULL; existing = existing->next) {
+				if (watchref_equal(existing->watchref, check->watchrefs[i])) {
+					subscription = existing;
+					break;
+				}
 			}
 		}
 

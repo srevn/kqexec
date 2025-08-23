@@ -12,6 +12,7 @@
 typedef struct monitor monitor_t;
 typedef struct watcher watcher_t;
 typedef struct profile profile_t;
+typedef struct resource resource_t;
 
 /* Magic number for file watcher validation */
 #define FWATCHER_MAGIC 0x46574348          /* "FWCH" */
@@ -33,7 +34,9 @@ typedef struct fwatcher {
 	uint32_t magic;                        /* Magic number for validation */
 	char *path;                            /* Full path to the file */
 	int fd;                                /* File descriptor */
-	watchref_t watchref;                   /* Parent directory watch reference */
+	watchref_t *watchrefs;                 /* Parent directory watch references */
+	int num_watchrefs;                     /* Number of parent watch references */
+	int cap_watchrefs;                     /* Capacity of the watchrefs array */
 	fstate_t state;                        /* Current state */
 	time_t last_event;                     /* Last time this file had an event */
 	time_t created;                        /* When this file watch was created */
@@ -59,8 +62,7 @@ fregistry_t *fregistry_create(size_t bucket_count);
 void fregistry_destroy(fregistry_t *registry);
 
 /* File watcher lifecycle */
-bool files_add(monitor_t *monitor, fregistry_t *registry, profile_t *profile, const char *file_path, watchref_t watchref);
-bool files_remove(monitor_t *monitor, fregistry_t *registry, profile_t *profile, const char *file_path);
+bool files_add(monitor_t *monitor, resource_t *resource, const char *file_path, watchref_t watchref);
 fwatcher_t *files_find(fregistry_t *registry, const char *file_path);
 
 /* File watch registration with kqueue */
@@ -68,10 +70,10 @@ bool files_register(monitor_t *monitor, fwatcher_t *fwatcher);
 bool files_reregister(monitor_t *monitor, fwatcher_t *fwatcher);
 
 /* File watch event processing */
-bool files_handle(monitor_t *monitor, fregistry_t *registry, fwatcher_t *watcher, struct kevent *event, struct timespec *time);
+bool files_handle(monitor_t *monitor, fwatcher_t *watcher, struct kevent *event, struct timespec *time);
 
 /* Directory scanning for file watches */
-bool files_scan(monitor_t *monitor, fregistry_t *registry, profile_t *profile, const char *dir_path, watchref_t watchref, const watch_t *watch);
+bool files_scan(monitor_t *monitor, resource_t *resource, watchref_t watchref, const watch_t *watch);
 
 /* Cleanup and maintenance */
 void files_cleanup(fregistry_t *registry);

@@ -227,6 +227,7 @@ static void resource_free(resource_t *resource) {
 			deferred = next_deferred;
 		}
 
+		fregistry_destroy(resource->fregistry);
 		pthread_mutex_destroy(&resource->mutex);
 		free(resource->path);
 		free(resource);
@@ -465,8 +466,8 @@ profile_t *profile_get(resource_t *resource, uint64_t configuration_hash) {
 }
 
 /* Create a new scanning profile */
-profile_t *profile_create(resource_t *resource, uint64_t configuration_hash, const watch_t *watch) {
-	if (!resource || !watch) return NULL;
+profile_t *profile_create(resource_t *resource, uint64_t configuration_hash) {
+	if (!resource) return NULL;
 
 	profile_t *profile = calloc(1, sizeof(profile_t));
 	if (!profile) {
@@ -478,8 +479,6 @@ profile_t *profile_create(resource_t *resource, uint64_t configuration_hash, con
 	profile->stability = NULL;
 	profile->scanner = NULL;
 	profile->baseline_snapshot = NULL;
-	profile->fregistry = NULL;
-	profile->monitor_files = ((watch->filter & EVENT_CONTENT) != 0);
 	profile->subscriptions = NULL;
 	profile->subscription_count = 0;
 	profile->next = NULL;
@@ -497,7 +496,6 @@ void profile_destroy(profile_t *profile) {
 		stability_destroy(profile->stability);
 		scanner_destroy(profile->scanner);
 		snapshot_destroy(profile->baseline_snapshot);
-		fregistry_destroy(profile->fregistry);
 		free(profile);
 	}
 }
@@ -646,11 +644,22 @@ subscription_t *resources_subscription(resources_t *resources, registry_t *regis
 	}
 
 	/* Create the profile now */
-	profile = profile_create(resource, watch_hash, watch);
+	profile = profile_create(resource, watch_hash);
 	if (!profile) {
 		log_message(ERROR, "Failed to create scanning profile for %s", path);
 		resource_unlock(resource);
 		return NULL;
+	}
+
+	/* If file monitoring is enabled for this watch, ensure fregistry exists on the resource */
+	if ((watch->filter & EVENT_CONTENT) && !resource->fregistry) {
+		resource->fregistry = fregistry_create(256);
+		if (!resource->fregistry) {
+			log_message(ERROR, "Failed to create file watch registry for resource: %s", path);
+			resource_unlock(resource);
+			return NULL;
+		}
+		log_message(DEBUG, "Created file watch registry for resource %s", path);
 	}
 
 	/* Initialize the profile for directories with pre-scanned data */
@@ -662,17 +671,6 @@ subscription_t *resources_subscription(resources_t *resources, registry_t *regis
 		log_message(ERROR, "Failed to create stability state for directory: %s", path);
 		resource_unlock(resource);
 		return NULL;
-	}
-
-	/* Create file watch registry if this profile needs file content monitoring */
-	if (profile->monitor_files) {
-		profile->fregistry = fregistry_create(256);
-		if (!profile->fregistry) {
-			log_message(ERROR, "Failed to create file watch registry for directory: %s", path);
-			resource_unlock(resource);
-			return NULL;
-		}
-		log_message(DEBUG, "Created file watch registry for profile monitoring %s", path);
 	}
 
 	/* Use pre-scanned data if scan was successful */

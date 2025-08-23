@@ -13,6 +13,7 @@
 #include "logger.h"
 #include "monitor.h"
 #include "registry.h"
+#include "resource.h"
 
 /* Create file watch registry */
 fregistry_t *fregistry_create(size_t bucket_count) {
@@ -141,21 +142,20 @@ bool files_monitor(const watch_t *watch, const char *file_path) {
 
 /* Register file watcher with kqueue using one-shot */
 bool files_register(monitor_t *monitor, fwatcher_t *fwatcher) {
-	if (!monitor || !fwatcher) return false;
+	if (!monitor || !fwatcher || fwatcher->num_watchrefs == 0) return false;
 
-	watch_t *watch = registry_get(monitor->registry, fwatcher->watchref);
-	if (!watch) {
-		log_message(ERROR, "Invalid watch reference for file watcher: %s", fwatcher->path);
-		return false;
-	}
-
-	/* Build event flags based on watch configuration */
+	/* Consolidate event filters from ALL watches on this file */
 	u_int fflags = 0;
-	if (watch->filter & EVENT_CONTENT) {
-		fflags |= NOTE_DELETE | NOTE_WRITE | NOTE_RENAME | NOTE_REVOKE;
-	}
-	if (watch->filter & EVENT_METADATA) {
-		fflags |= NOTE_ATTRIB | NOTE_LINK;
+	for (int i = 0; i < fwatcher->num_watchrefs; i++) {
+		watch_t *watch = registry_get(monitor->registry, fwatcher->watchrefs[i]);
+		if (!watch) continue;
+
+		if (watch->filter & EVENT_CONTENT) {
+			fflags |= NOTE_DELETE | NOTE_WRITE | NOTE_RENAME | NOTE_REVOKE;
+		}
+		if (watch->filter & EVENT_METADATA) {
+			fflags |= NOTE_ATTRIB | NOTE_LINK;
+		}
 	}
 
 	/* Use EV_ONESHOT to automatically remove the watch after the first event */
@@ -202,12 +202,35 @@ bool files_reregister(monitor_t *monitor, fwatcher_t *fwatcher) {
 }
 
 /* Add new file watcher */
-bool files_add(monitor_t *monitor, fregistry_t *registry, profile_t *profile, const char *file_path, watchref_t watchref) {
-	if (!monitor || !registry || !profile || !file_path) return false;
+bool files_add(monitor_t *monitor, resource_t *resource, const char *file_path, watchref_t watchref) {
+	if (!monitor || !resource || !resource->fregistry || !file_path) return false;
+
+	fregistry_t *registry = resource->fregistry;
 
 	/* Check if already monitoring this file */
-	if (files_find(registry, file_path)) {
-		return true; /* Already monitoring */
+	fwatcher_t *watcher = files_find(registry, file_path);
+	if (watcher) {
+		/* File is already watched, just add our watchref to it */
+		for (int i = 0; i < watcher->num_watchrefs; i++) {
+			if (watchref_equal(watcher->watchrefs[i], watchref)) {
+				return true; /* Already associated with this watch */
+			}
+		}
+
+		/* Add new watchref to the existing fwatcher */
+		if (watcher->num_watchrefs >= watcher->cap_watchrefs) {
+			int new_cap = watcher->cap_watchrefs == 0 ? 2 : watcher->cap_watchrefs * 2;
+			watchref_t *new_refs = realloc(watcher->watchrefs, new_cap * sizeof(watchref_t));
+			if (!new_refs) {
+				log_message(ERROR, "Failed to realloc watchrefs for %s", file_path);
+				return false;
+			}
+			watcher->watchrefs = new_refs;
+			watcher->cap_watchrefs = new_cap;
+		}
+		watcher->watchrefs[watcher->num_watchrefs++] = watchref;
+		log_message(DEBUG, "Associated new watch with existing file watch for %s", file_path);
+		return true;
 	}
 
 	/* Check if we've hit the per-directory limit */
@@ -257,53 +280,61 @@ bool files_add(monitor_t *monitor, fregistry_t *registry, profile_t *profile, co
 	}
 
 	/* Create file watcher */
-	fwatcher_t *watcher = calloc(1, sizeof(fwatcher_t));
-	if (!watcher) {
+	fwatcher_t *new_watcher = calloc(1, sizeof(fwatcher_t));
+	if (!new_watcher) {
 		log_message(ERROR, "Failed to allocate file watcher for %s", file_path);
 		close(fd);
 		return false;
 	}
 
-	watcher->path = strdup(file_path);
-	if (!watcher->path) {
+	new_watcher->path = strdup(file_path);
+	if (!new_watcher->path) {
 		log_message(ERROR, "Failed to duplicate path for file watcher: %s", file_path);
-		free(watcher);
+		free(new_watcher);
 		close(fd);
 		return false;
 	}
 
-	watcher->magic = FWATCHER_MAGIC;
-	watcher->fd = fd;
-	watcher->watchref = watchref;
-	watcher->state = FILES_ACTIVE;
-	watcher->last_event = time(NULL);
-	watcher->created = time(NULL);
-	watcher->inode = info.st_ino;
-	watcher->device = info.st_dev;
+	new_watcher->magic = FWATCHER_MAGIC;
+	new_watcher->fd = fd;
+	new_watcher->state = FILES_ACTIVE;
+	new_watcher->last_event = time(NULL);
+	new_watcher->created = time(NULL);
+	new_watcher->inode = info.st_ino;
+	new_watcher->device = info.st_dev;
+
+	new_watcher->watchrefs = calloc(2, sizeof(watchref_t));
+	if (!new_watcher->watchrefs) {
+		log_message(ERROR, "Failed to allocate watchrefs for %s", file_path);
+		free(new_watcher->path);
+		free(new_watcher);
+		close(fd);
+		return false;
+	}
+	new_watcher->watchrefs[0] = watchref;
+	new_watcher->num_watchrefs = 1;
+	new_watcher->cap_watchrefs = 2;
 
 	/* Register with kqueue */
-	if (!files_register(monitor, watcher)) {
-		free(watcher->path);
-		free(watcher);
+	if (!files_register(monitor, new_watcher)) {
+		free(new_watcher->path);
+		free(new_watcher);
 		close(fd);
 		return false;
 	}
 
 	/* Add to registry */
 	unsigned int bucket = files_hash(file_path, registry->bucket_count);
-	watcher->next = registry->buckets[bucket];
-	registry->buckets[bucket] = watcher;
+	new_watcher->next = registry->buckets[bucket];
+	registry->buckets[bucket] = new_watcher;
 
 	/* Add to fd mapping if fd is in range */
 	if (fd >= 0 && fd < registry->fd_map_size) {
-		registry->fd_map[fd] = watcher;
+		registry->fd_map[fd] = new_watcher;
 	} else {
 		log_message(WARNING, "File descriptor %d out of range for registry fd map (size: %d)",
 					fd, registry->fd_map_size);
 	}
-
-	/* Add to monitor's fd-to-profile mapping */
-	monitor_map(monitor, fd, profile);
 
 	registry->total_count++;
 
@@ -312,57 +343,10 @@ bool files_add(monitor_t *monitor, fregistry_t *registry, profile_t *profile, co
 	return true;
 }
 
-/* Remove file watcher */
-bool files_remove(monitor_t *monitor, fregistry_t *registry, profile_t *profile, const char *file_path) {
-	if (!monitor || !registry || !profile || !file_path) return false;
-
-	unsigned int bucket = files_hash(file_path, registry->bucket_count);
-	fwatcher_t *watcher = registry->buckets[bucket];
-	fwatcher_t *prev = NULL;
-
-	while (watcher) {
-		if (strcmp(watcher->path, file_path) == 0) {
-			/* Remove from bucket list */
-			if (prev) {
-				prev->next = watcher->next;
-			} else {
-				registry->buckets[bucket] = watcher->next;
-			}
-
-			/* Remove from fd mapping */
-			if (watcher->fd >= 0 && watcher->fd < registry->fd_map_size) {
-				registry->fd_map[watcher->fd] = NULL;
-			}
-
-			/* Remove from monitor's fd-to-profile mapping */
-			if (watcher->fd >= 0) {
-				monitor_unmap(monitor, watcher->fd);
-			}
-
-			/* Close file descriptor */
-			if (watcher->fd >= 0) {
-				close(watcher->fd);
-			}
-
-			/* Free memory */
-			free(watcher->path);
-			free(watcher);
-
-			registry->total_count--;
-			log_message(DEBUG, "Removed file watch for %s (total: %d)", file_path, registry->total_count);
-			return true;
-		}
-
-		prev = watcher;
-		watcher = watcher->next;
-	}
-
-	return false; /* Not found */
-}
 
 /* Handle file watch events */
-bool files_handle(monitor_t *monitor, fregistry_t *registry, fwatcher_t *watcher, struct kevent *event, struct timespec *time) {
-	if (!monitor || !registry || !watcher || !event || !time) return false;
+bool files_handle(monitor_t *monitor, fwatcher_t *watcher, struct kevent *event, struct timespec *time) {
+	if (!monitor || !watcher || !event || !time) return false;
 
 	/* Validate the watcher */
 	if (!fwatcher_valid(watcher)) {
@@ -371,9 +355,18 @@ bool files_handle(monitor_t *monitor, fregistry_t *registry, fwatcher_t *watcher
 	}
 
 	/* Check if file should still be monitored (exclude patterns may have changed) */
-	watch_t *watch = registry_get(monitor->registry, watcher->watchref);
-	if (watch && !files_monitor(watch, watcher->path)) {
-		log_message(DEBUG, "File %s is now excluded, removing from monitoring", watcher->path);
+	/* A file should continue being monitored if at least one watch still wants it */
+	bool still_wanted = false;
+	for (int i = 0; i < watcher->num_watchrefs; i++) {
+		watch_t *watch = registry_get(monitor->registry, watcher->watchrefs[i]);
+		if (watch && files_monitor(watch, watcher->path)) {
+			still_wanted = true;
+			break;
+		}
+	}
+	
+	if (!still_wanted) {
+		log_message(DEBUG, "File %s is now excluded by all watches, removing from monitoring", watcher->path);
 		watcher->state = FILES_PENDING_CLEANUP;
 		return false; /* Don't process excluded file events */
 	}
@@ -390,8 +383,10 @@ bool files_handle(monitor_t *monitor, fregistry_t *registry, fwatcher_t *watcher
 }
 
 /* Scan directory for files to monitor */
-bool files_scan(monitor_t *monitor, fregistry_t *registry, profile_t *profile, const char *dir_path, watchref_t watchref, const watch_t *watch) {
-	if (!monitor || !registry || !profile || !dir_path || !watch) return false;
+bool files_scan(monitor_t *monitor, resource_t *resource, watchref_t watchref, const watch_t *watch) {
+	if (!monitor || !resource || !watch) return false;
+
+	const char *dir_path = resource->path;
 
 	/* Only scan if file content monitoring is enabled */
 	if (!(watch->filter & EVENT_CONTENT)) return true;
@@ -432,7 +427,7 @@ bool files_scan(monitor_t *monitor, fregistry_t *registry, profile_t *profile, c
 		}
 
 		if (S_ISREG(info.st_mode)) {
-			if (files_add(monitor, registry, profile, file_path, watchref)) {
+			if (files_add(monitor, resource, file_path, watchref)) {
 				added_count++;
 			}
 		}

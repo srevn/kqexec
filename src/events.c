@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include "command.h"
+#include "files.h"
 #include "logger.h"
 #include "monitor.h"
 #include "registry.h"
@@ -625,37 +626,49 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 	for (int i = 0; i < event_count; i++) {
 		int fd = (int) events[i].ident;
 
-		/* Check if this is a file watch event using fast fd-to-profile lookup */
-		profile_t *file_profile = monitor_profile(monitor, fd);
-		if (file_profile && file_profile->fregistry) {
-			fwatcher_t *fwatcher = files_find_by_fd(file_profile->fregistry, fd);
+		/* Check if this is a file watch event by searching all resource fregistries */
+		fwatcher_t *fwatcher = NULL;
+		/* Search all resources for a file watcher with this fd */
+		for (size_t bucket = 0; bucket < monitor->resources->bucket_count && !fwatcher; bucket++) {
+			resource_t *resource = monitor->resources->buckets[bucket];
+			while (resource && !fwatcher) {
+				if (resource->fregistry) {
+					fwatcher = files_find_by_fd(resource->fregistry, fd);
+				}
+				resource = resource->next;
+			}
+		}
+		
+		if (fwatcher) {
 
 			/* Verify this is actually a valid file watcher */
 			if (fwatcher_valid(fwatcher)) {
-				if (files_handle(monitor, file_profile->fregistry, fwatcher, &events[i], time)) {
-					/* File content changed - delegate to parent directory stability system */
-					char *parent_dir = strdup(fwatcher->path);
-					if (parent_dir) {
-						char *last_slash = strrchr(parent_dir, '/');
-						if (last_slash && last_slash != parent_dir) {
-							*last_slash = '\0'; /* Truncate to get parent directory */
+				if (files_handle(monitor, fwatcher, &events[i], time)) {
+					/* File content changed - delegate to parent directory stability system for all watches */
+					for (int k = 0; k < fwatcher->num_watchrefs; k++) {
+						char *parent_dir = strdup(fwatcher->path);
+						if (parent_dir) {
+							char *last_slash = strrchr(parent_dir, '/');
+							if (last_slash && last_slash != parent_dir) {
+								*last_slash = '\0'; /* Truncate to get parent directory */
 
-							/* Create a directory content change event */
-							event_t event;
-							memset(&event, 0, sizeof(event));
-							event.path = parent_dir;
-							event.type = EVENT_CONTENT; /* File content change affects directory content */
-							event.time = *time;
-							clock_gettime(CLOCK_REALTIME, &event.wall_time);
-							event.user_id = getuid();
+								/* Create a directory content change event */
+								event_t event;
+								memset(&event, 0, sizeof(event));
+								event.path = parent_dir;
+								event.type = EVENT_CONTENT; /* File content change affects directory content */
+								event.time = *time;
+								clock_gettime(CLOCK_REALTIME, &event.wall_time);
+								event.user_id = getuid();
 
-							/* Process through directory stability system */
-							events_process(monitor, fwatcher->watchref, &event, ENTITY_DIRECTORY, false);
+								/* Process through directory stability system */
+								events_process(monitor, fwatcher->watchrefs[k], &event, ENTITY_DIRECTORY, false);
 
-							log_message(DEBUG, "File content change in %s delegated to directory %s for stability processing",
-										fwatcher->path, parent_dir);
+								log_message(DEBUG, "File content change in %s delegated to directory %s for stability processing",
+											fwatcher->path, parent_dir);
+							}
+							free(parent_dir);
 						}
-						free(parent_dir);
 					}
 				}
 				continue; /* Skip regular watcher processing for this event */
