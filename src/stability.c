@@ -542,22 +542,29 @@ void stability_reset(monitor_t *monitor, subscription_t *root) {
 
 	/* Clear deferred event queue */
 	if (root->resource->deferred_head) {
-		log_message(DEBUG, "Clearing %d deferred events for %s after processing",
-					root->resource->deferred_count, root->resource->path);
-		deferred_t *deferred = root->resource->deferred_head;
-		while (deferred) {
-			deferred_t *next_deferred = deferred->next;
-			free(deferred->event.path);
-			free(deferred);
-			deferred = next_deferred;
+		if (root->resource->batch_active) {
+			log_message(DEBUG, "Skipping deferred event clearing for %s, batch processing is active",
+						root->resource->path);
+		} else {
+			log_message(DEBUG, "Clearing %d deferred events for %s after processing",
+						root->resource->deferred_count, root->resource->path);
+			deferred_t *deferred = root->resource->deferred_head;
+			while (deferred) {
+				deferred_t *next_deferred = deferred->next;
+				free(deferred->event.path);
+				free(deferred);
+				deferred = next_deferred;
+			}
+			root->resource->deferred_head = NULL;
+			root->resource->deferred_tail = NULL;
+			root->resource->deferred_count = 0;
 		}
-		root->resource->deferred_head = NULL;
-		root->resource->deferred_tail = NULL;
-		root->resource->deferred_count = 0;
 	}
 
 	/* Deactivate any pending batch timeout to prevent duplicate triggers */
-	root->resource->batch_active = false;
+	if (root->resource->deferred_head == NULL) {
+		root->resource->batch_active = false;
+	}
 
 	/* Clear activity tracking flag to mark the directory as idle */
 	if (root->profile->scanner) {
