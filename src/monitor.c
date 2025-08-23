@@ -525,11 +525,13 @@ bool monitor_tree(monitor_t *monitor, const char *dir_path, watchref_t watchref)
 		/* Find the resource for this directory to scan for files */
 		resource_t *resource = resource_get(monitor->resources, dir_path, ENTITY_DIRECTORY);
 		if (resource) {
+			resource_lock(resource);
 			uint64_t config_hash = configuration_hash(watch);
 			profile_t *profile = profile_get(resource, config_hash);
 			if (profile) {
 				tracker_scan(monitor, resource, watchref, watch);
 			}
+			resource_unlock(resource);
 		}
 	}
 
@@ -849,7 +851,9 @@ bool monitor_poll(monitor_t *monitor) {
 			while (resource) {
 				if (resource->trackers) {
 					/* tracker_cleanup has its own internal timer to avoid running too often */
+					resource_lock(resource);
 					tracker_cleanup(monitor, resource->trackers);
+					resource_unlock(resource);
 				}
 				resource = resource->next;
 			}

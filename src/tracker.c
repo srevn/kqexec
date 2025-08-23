@@ -211,13 +211,15 @@ bool tracker_add(monitor_t *monitor, resource_t *resource, const char *file_path
 
 		/* Re-register with kqueue to update event filters based on all watchrefs */
 		if (!tracker_reregister(monitor, tracker)) {
-			log_message(ERROR, "Failed to re-register kqueue watch for %s after adding watchref", file_path);
+			log_message(ERROR, "Failed to re-register kqueue watch for %s after adding watchref",
+						file_path);
 			/* Rollback the watchref addition */
 			tracker->num_watchrefs--;
 			return false;
 		}
 
-		log_message(DEBUG, "Associated new watch with existing file tracker for %s and updated kqueue filters", file_path);
+		log_message(DEBUG, "Associated new watch with existing file tracker for %s and updated kqueue filters",
+					file_path);
 		return true;
 	}
 
@@ -323,6 +325,33 @@ bool tracker_handle(monitor_t *monitor, tracker_t *tracker, struct kevent *event
 		return false;
 	}
 
+	char *parent_path = strdup(tracker->path);
+	if (!parent_path) {
+		log_message(ERROR, "Failed to duplicate path for locking in tracker_handle");
+		return false;
+	}
+	char *last_slash = strrchr(parent_path, '/');
+	if (last_slash && last_slash != parent_path) {
+		*last_slash = '\0';
+	} else if (last_slash) {
+		*(last_slash + 1) = '\0';
+	} else {
+		free(parent_path);
+		log_message(ERROR, "Could not determine parent path for tracker %s", tracker->path);
+		return false;
+	}
+
+	resource_t *resource = resource_get(monitor->resources, parent_path, ENTITY_DIRECTORY);
+	free(parent_path);
+
+	if (!resource) {
+		log_message(WARNING, "Could not find parent resource for tracker %s, marking for cleanup", tracker->path);
+		tracker->tracker_state = TRACKER_PENDING_CLEANUP;
+		return false;
+	}
+
+	resource_lock(resource);
+
 	/* Check if file should still be monitored */
 	bool still_wanted = false;
 	for (int watchref_index = 0; watchref_index < tracker->num_watchrefs; watchref_index++) {
@@ -336,6 +365,7 @@ bool tracker_handle(monitor_t *monitor, tracker_t *tracker, struct kevent *event
 	if (!still_wanted) {
 		log_message(DEBUG, "File %s is now excluded by all watches, removing from monitoring", tracker->path);
 		tracker->tracker_state = TRACKER_PENDING_CLEANUP;
+		resource_unlock(resource);
 		return false; /* Don't process excluded file events */
 	}
 
@@ -346,6 +376,8 @@ bool tracker_handle(monitor_t *monitor, tracker_t *tracker, struct kevent *event
 	tracker->tracker_state = TRACKER_ONESHOT_FIRED;
 
 	log_message(DEBUG, "File tracker event for %s (flags: 0x%x)", tracker->path, event->fflags);
+
+	resource_unlock(resource);
 
 	return true;
 }
@@ -528,9 +560,13 @@ void directory_cleanup(monitor_t *monitor, trackers_t *registry, const char *dir
 }
 
 /* Re-register fired file trackers for a directory after stability */
-void directory_reregister(monitor_t *monitor, trackers_t *registry, const char *dir_path) {
-	if (!monitor || !registry || !dir_path) return;
+void directory_reregister(monitor_t *monitor, resource_t *resource) {
+	if (!monitor || !resource || !resource->trackers) return;
 
+	resource_lock(resource);
+
+	trackers_t *registry = resource->trackers;
+	const char *dir_path = resource->path;
 	int reregistered_count = 0;
 
 	for (size_t bucket_index = 0; bucket_index < registry->bucket_count; bucket_index++) {
@@ -557,6 +593,8 @@ void directory_reregister(monitor_t *monitor, trackers_t *registry, const char *
 		log_message(DEBUG, "Re-registered %d file trackers for stable directory %s",
 					reregistered_count, dir_path);
 	}
+
+	resource_unlock(resource);
 }
 
 /* Get total tracked files across all resources */

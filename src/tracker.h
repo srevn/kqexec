@@ -85,7 +85,7 @@ void tracker_cleanup(monitor_t *monitor, trackers_t *registry);
 void directory_cleanup(monitor_t *monitor, trackers_t *registry, const char *dir_path);
 
 /* Stability integration */
-void directory_reregister(monitor_t *monitor, trackers_t *registry, const char *dir_path);
+void directory_reregister(monitor_t *monitor, resource_t *resource);
 
 /* Utility functions */
 unsigned int tracker_hash(const char *path, size_t bucket_count);

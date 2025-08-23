@@ -535,7 +535,7 @@ void stability_reset(monitor_t *monitor, subscription_t *root) {
 
 	/* Re-register file watches that fired during the unstable period */
 	if (root->resource->trackers) {
-		directory_reregister(monitor, root->resource->trackers, root->resource->path);
+		directory_reregister(monitor, root->resource);
 	}
 
 	resource_unlock(root->resource);
