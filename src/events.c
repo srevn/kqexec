@@ -657,11 +657,17 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 									clock_gettime(CLOCK_REALTIME, &event.wall_time);
 									event.user_id = getuid();
 
-									/* Process through directory stability system */
-									events_process(monitor, tracker->watchrefs[k], &event, ENTITY_DIRECTORY, false);
-
-									log_message(DEBUG, "File content change in %s delegated to directory %s for stability processing",
-												tracker->path, parent_dir);
+									/* Check for processing delay on the associated watch */
+									watch_t *watch = registry_get(monitor->registry, tracker->watchrefs[k]);
+									if (watch) {
+										if (watch->processing_delay > 0) {
+											events_delay(monitor, tracker->watchrefs[k], &event, ENTITY_DIRECTORY);
+										} else {
+											events_process(monitor, tracker->watchrefs[k], &event, ENTITY_DIRECTORY, false);
+										}
+										log_message(DEBUG, "File change in %s delegated to directory %s for stability (watch: %s)",
+													tracker->path, parent_dir, watch->name);
+									}
 								}
 								free(parent_dir);
 							}
