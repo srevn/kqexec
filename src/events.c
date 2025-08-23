@@ -9,7 +9,6 @@
 #include <unistd.h>
 
 #include "command.h"
-#include "files.h"
 #include "logger.h"
 #include "mapper.h"
 #include "monitor.h"
@@ -17,6 +16,7 @@
 #include "resource.h"
 #include "scanner.h"
 #include "stability.h"
+#include "tracker.h"
 #include "utilities.h"
 
 /* Defer an event on a resource during timeouts or that is executing a command */
@@ -635,14 +635,14 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 		}
 
 		switch (entry->type) {
-			case MAP_TYPE_FWATCHER:
+			case MAP_TYPE_TRACKER:
 			{
-				fwatcher_t *fwatcher = entry->ptr.fw;
-				if (fwatcher_valid(fwatcher)) {
-					if (files_handle(monitor, fwatcher, &events[i], time)) {
+				tracker_t *tracker = entry->ptr.tracker;
+				if (tracker_valid(tracker)) {
+					if (tracker_handle(monitor, tracker, &events[i], time)) {
 						/* File content changed - delegate to parent directory stability system for all watches */
-						for (int k = 0; k < fwatcher->num_watchrefs; k++) {
-							char *parent_dir = strdup(fwatcher->path);
+						for (int k = 0; k < tracker->num_watchrefs; k++) {
+							char *parent_dir = strdup(tracker->path);
 							if (parent_dir) {
 								char *last_slash = strrchr(parent_dir, '/');
 								if (last_slash && last_slash != parent_dir) {
@@ -658,10 +658,10 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 									event.user_id = getuid();
 
 									/* Process through directory stability system */
-									events_process(monitor, fwatcher->watchrefs[k], &event, ENTITY_DIRECTORY, false);
+									events_process(monitor, tracker->watchrefs[k], &event, ENTITY_DIRECTORY, false);
 
 									log_message(DEBUG, "File content change in %s delegated to directory %s for stability processing",
-												fwatcher->path, parent_dir);
+												tracker->path, parent_dir);
 								}
 								free(parent_dir);
 							}
@@ -675,7 +675,7 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 			{
 				watcher_node_t *node = entry->ptr.watchers;
 				while (node) {
-					watcher_t *watcher = node->w;
+					watcher_t *watcher = node->watcher;
 					if (watcher) {
 						event_t event;
 						memset(&event, 0, sizeof(event));

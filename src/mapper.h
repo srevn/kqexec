@@ -3,13 +3,13 @@
 
 #include <stdbool.h>
 
-/* Forward declarations to avoid circular header dependencies */
+/* Forward declarations */
 struct watcher;
-struct fwatcher;
+struct tracker;
 
 /* A node in a linked list for watchers that share a file descriptor */
 typedef struct watcher_node {
-	struct watcher *w;                     /* The watcher instance */
+	struct watcher *watcher;               /* The watcher instance */
 	struct watcher_node *next;             /* Next node in the linked list */
 } watcher_node_t;
 
@@ -17,12 +17,12 @@ typedef struct watcher_node {
 typedef struct map_entry {
 	enum {
 		MAP_TYPE_NONE,                     /* Empty slot */
-		MAP_TYPE_FWATCHER,                 /* Fine-grained file watcher */
+		MAP_TYPE_TRACKER,                  /* Fine-grained file tracker */
 		MAP_TYPE_WATCHER                   /* Coarse-grained directory/path watcher */
 	} type;
 
 	union {
-		struct fwatcher *fw;               /* Used for MAP_TYPE_FWATCHER */
+		struct tracker *tracker;           /* Used for MAP_TYPE_TRACKER */
 		watcher_node_t *watchers;          /* Head of linked list for MAP_TYPE_WATCHER */
 	} ptr;
 } map_entry_t;
@@ -41,11 +41,11 @@ void mapper_destroy(mapper_t *mapper);
 map_entry_t* mapper_get(mapper_t *mapper, int fd);
 
 /* Directory watcher management */
-bool mapper_add_watcher(mapper_t *mapper, int fd, struct watcher *w);
-bool mapper_remove_watcher(mapper_t *mapper, int fd, struct watcher *w);
+bool mapper_add_watcher(mapper_t *mapper, int fd, struct watcher *watcher);
+bool mapper_remove_watcher(mapper_t *mapper, int fd, struct watcher *watcher);
 
-/* File watcher management */
-bool mapper_add_fwatcher(mapper_t *mapper, int fd, struct fwatcher *fw);
-void mapper_remove_fwatcher(mapper_t *mapper, int fd);
+/* File tracker management */
+bool mapper_add_tracker(mapper_t *mapper, int fd, struct tracker *tracker);
+void mapper_remove_tracker(mapper_t *mapper, int fd);
 
 #endif /* MAPPER_H */

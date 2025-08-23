@@ -284,19 +284,19 @@ static char *proxy_name(watchref_t watchref, const char *type) {
 
 /* Create a proxy watch for a pending path's parent */
 static watchref_t proxy_create(monitor_t *monitor, const watch_t *watch, watchref_t watchref, const char *parent_path, const char *type) {
-	if (!monitor || !watch || !parent_path) return WATCH_REF_INVALID;
+	if (!monitor || !watch || !parent_path) return WATCHREF_INVALID;
 
 	watch_t *proxy_watch = calloc(1, sizeof(watch_t));
 	if (!proxy_watch) {
 		log_message(ERROR, "Failed to allocate memory for proxy watch");
-		return WATCH_REF_INVALID;
+		return WATCHREF_INVALID;
 	}
 
 	/* Create unique name for this proxy watch */
 	proxy_watch->name = proxy_name(watchref, type);
 	if (!proxy_watch->name) {
 		free(proxy_watch);
-		return WATCH_REF_INVALID;
+		return WATCHREF_INVALID;
 	}
 
 	proxy_watch->path = strdup(parent_path);
@@ -315,7 +315,7 @@ static watchref_t proxy_create(monitor_t *monitor, const watch_t *watch, watchre
 	if (!watchref_valid(proxyref)) {
 		log_message(ERROR, "Failed to add proxy watch to registry");
 		config_destroy_watch(proxy_watch);
-		return WATCH_REF_INVALID;
+		return WATCHREF_INVALID;
 	}
 
 	log_message(DEBUG, "Created proxy watch '%s' for pattern from watch %u:%u",
@@ -489,7 +489,7 @@ static void pending_promote(monitor_t *monitor, pending_t *pending, const char *
 	}
 
 	/* Find the watch that was just added to the registry */
-	watchref_t resolvedref = WATCH_REF_INVALID;
+	watchref_t resolvedref = WATCHREF_INVALID;
 	uint32_t num_active = 0;
 	watchref_t *active_refs = registry_active(monitor->registry, &num_active);
 	if (!active_refs || num_active == 0) {
@@ -569,7 +569,7 @@ static void pending_proxy(monitor_t *monitor, pending_t *pending, const char *pr
 	new_pending->glob_pattern = strdup(pending->glob_pattern);
 	new_pending->watchref = pending->watchref;
 	new_pending->proxy_watcher = NULL;
-	new_pending->proxyref = WATCH_REF_INVALID;
+	new_pending->proxyref = WATCHREF_INVALID;
 
 	/* Create individual proxy watch for this glob directory */
 	watch_t *watch = registry_get(monitor->registry, pending->watchref);

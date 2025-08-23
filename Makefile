@@ -47,11 +47,11 @@ endif
 # Source files
 SRCS = src/main.c \
 	   src/queue.c \
-	   src/files.c \
 	   src/events.c \
 	   src/config.c \
-	   src/monitor.c \
 	   src/mapper.c \
+	   src/monitor.c \
+	   src/tracker.c \
 	   src/pending.c \
 	   src/scanner.c \
 	   src/registry.c \

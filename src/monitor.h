@@ -5,11 +5,11 @@
 
 #include "config.h"
 #include "events.h"
+#include "mapper.h"
 #include "pending.h"
 #include "queue.h"
 #include "registry.h"
 #include "resource.h"
-#include "mapper.h"
 
 /* Monitor configuration */
 #define MAX_WATCHES 128

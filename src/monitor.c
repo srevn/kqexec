@@ -13,13 +13,13 @@
 
 #include "command.h"
 #include "events.h"
-#include "files.h"
 #include "logger.h"
 #include "mapper.h"
 #include "pending.h"
 #include "queue.h"
 #include "resource.h"
 #include "stability.h"
+#include "tracker.h"
 
 /* Check if a path is a hidden file or directory (starts with dot) */
 static bool path_hidden(const char *path) {
@@ -528,7 +528,7 @@ bool monitor_tree(monitor_t *monitor, const char *dir_path, watchref_t watchref)
 			uint64_t config_hash = configuration_hash(watch);
 			profile_t *profile = profile_get(resource, config_hash);
 			if (profile) {
-				files_scan(monitor, resource, watchref, watch);
+				tracker_scan(monitor, resource, watchref, watch);
 			}
 		}
 	}
@@ -732,7 +732,7 @@ bool monitor_setup(monitor_t *monitor) {
 		return true;
 	}
 
-	watchref_t config_watchref = WATCH_REF_INVALID;
+	watchref_t config_watchref = WATCHREF_INVALID;
 	for (uint32_t i = 0; i < num_active; i++) {
 		watch_t *watch = registry_get(monitor->registry, active_watchrefs[i]);
 		if (!watch || !watch->command || strcmp(watch->command, "__config_reload__") != 0) {
@@ -847,9 +847,9 @@ bool monitor_poll(monitor_t *monitor) {
 		for (size_t i = 0; i < monitor->resources->bucket_count; i++) {
 			resource_t *resource = monitor->resources->buckets[i];
 			while (resource) {
-				if (resource->fregistry) {
-					/* files_cleanup has its own internal timer to avoid running too often */
-					files_cleanup(monitor, resource->fregistry);
+				if (resource->trackers) {
+					/* tracker_cleanup has its own internal timer to avoid running too often */
+					tracker_cleanup(monitor, resource->trackers);
 				}
 				resource = resource->next;
 			}
@@ -1133,12 +1133,12 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 		/* Path deleted - clean up all related resources */
 		log_message(DEBUG, "Path deleted: %s, cleaning up watch resources", path);
 
-		/* Clean up associated file watches from the resource's fregistry */
+		/* Clean up associated file watches from the resource's trackers */
 		resource_t *resource = resource_get(monitor->resources, path, ENTITY_UNKNOWN);
-		if (resource && resource->fregistry) {
+		if (resource && resource->trackers) {
 			log_message(DEBUG, "Cleaning up file watches for deleted directory: %s", path);
 			resource_lock(resource);
-			directory_cleanup(monitor, resource->fregistry, path);
+			directory_cleanup(monitor, resource->trackers, path);
 			resource_unlock(resource);
 		}
 

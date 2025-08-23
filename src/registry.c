@@ -116,7 +116,7 @@ static bool registry_expand(registry_t *registry) {
 
 /* Add a watch to the registry */
 watchref_t registry_add(registry_t *registry, struct watch *watch) {
-	if (!registry || !watch) return WATCH_REF_INVALID;
+	if (!registry || !watch) return WATCHREF_INVALID;
 
 	pthread_rwlock_wrlock(&registry->lock);
 
@@ -124,7 +124,7 @@ watchref_t registry_add(registry_t *registry, struct watch *watch) {
 	if (registry->next_id >= registry->capacity) {
 		if (!registry_expand(registry)) {
 			pthread_rwlock_unlock(&registry->lock);
-			return WATCH_REF_INVALID;
+			return WATCHREF_INVALID;
 		}
 	}
 

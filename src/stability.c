@@ -7,7 +7,6 @@
 
 #include "command.h"
 #include "events.h"
-#include "files.h"
 #include "logger.h"
 #include "monitor.h"
 #include "queue.h"
@@ -15,6 +14,7 @@
 #include "resource.h"
 #include "scanner.h"
 #include "snapshot.h"
+#include "tracker.h"
 #include "utilities.h"
 
 /* Create a stability state */
@@ -534,8 +534,8 @@ void stability_reset(monitor_t *monitor, subscription_t *root) {
 	root->profile->stability->reference_init = true;
 
 	/* Re-register file watches that fired during the unstable period */
-	if (root->resource->fregistry) {
-		directory_reregister(monitor, root->resource->fregistry, root->resource->path);
+	if (root->resource->trackers) {
+		directory_reregister(monitor, root->resource->trackers, root->resource->path);
 	}
 
 	resource_unlock(root->resource);

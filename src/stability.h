@@ -4,8 +4,8 @@
 #include <stdbool.h>
 
 #include "queue.h"
-#include "scanner.h"
 #include "resource.h"
+#include "scanner.h"
 
 /* Maximum allowed failures before giving up */
 #define MAX_CHECKS_FAILED 3

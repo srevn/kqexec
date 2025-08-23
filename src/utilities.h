@@ -1,8 +1,8 @@
 #ifndef UTILITIES_H
 #define UTILITIES_H
 
-#include <time.h>
 #include <stdbool.h>
+#include <time.h>
 
 /* Timespec utilities functions */
 void timespec_add(struct timespec *ts, int milliseconds);

@@ -13,7 +13,7 @@
 typedef struct stability stability_t;
 typedef struct snapshot snapshot_t;
 typedef struct diff diff_t;
-typedef struct fregistry fregistry_t;
+typedef struct trackers trackers_t;
 
 /* Resource table configuration */
 #define PATH_HASH_SIZE 1024
@@ -41,7 +41,7 @@ typedef struct profile {
 typedef struct resource {
 	char *path;                            /* The filesystem path */
 	kind_t kind;                           /* File or directory */
-	fregistry_t *fregistry;                /* File watch registry for content monitoring */
+	trackers_t *trackers;                /* File watch registry for content monitoring */
 	
 	/* Basic filesystem state */
 	bool exists;                           /* Resource currently exists */

@@ -3,9 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "files.h"
 #include "logger.h"
-#include "monitor.h"
 
 #define MAPPER_INITIAL_SIZE 1024
 #define MAPPER_GROWTH_FACTOR 2
@@ -62,13 +60,13 @@ mapper_t *mapper_create(int initial_size) {
 void mapper_destroy(mapper_t *mapper) {
 	if (!mapper) return;
 
-	for (int i = 0; i < mapper->size; i++) {
-		if (mapper->entries[i].type == MAP_TYPE_WATCHER) {
-			watcher_node_t *node = mapper->entries[i].ptr.watchers;
-			while (node) {
-				watcher_node_t *next = node->next;
-				free(node);
-				node = next;
+	for (int fd_index = 0; fd_index < mapper->size; fd_index++) {
+		if (mapper->entries[fd_index].type == MAP_TYPE_WATCHER) {
+			watcher_node_t *current_node = mapper->entries[fd_index].ptr.watchers;
+			while (current_node) {
+				watcher_node_t *next_node = current_node->next;
+				free(current_node);
+				current_node = next_node;
 			}
 		}
 	}
@@ -87,62 +85,62 @@ map_entry_t *mapper_get(mapper_t *mapper, int fd) {
 	return &mapper->entries[fd];
 }
 
-/* Add a file watcher to the map */
-bool mapper_add_fwatcher(mapper_t *mapper, int fd, struct fwatcher *fw) {
-	if (!mapper || fd < 0 || !fw) return false;
+/* Add a file tracker to the map */
+bool mapper_add_tracker(mapper_t *mapper, int fd, struct tracker *tracker) {
+	if (!mapper || fd < 0 || !tracker) return false;
 	if (!mapper_resize(mapper, fd)) return false;
 
 	if (mapper->entries[fd].type != MAP_TYPE_NONE) {
 		log_message(WARNING, "Overwriting existing map entry for fd %d", fd);
 	}
 
-	mapper->entries[fd].type = MAP_TYPE_FWATCHER;
-	mapper->entries[fd].ptr.fw = fw;
+	mapper->entries[fd].type = MAP_TYPE_TRACKER;
+	mapper->entries[fd].ptr.tracker = tracker;
 	return true;
 }
 
-/* Remove a file watcher from the map */
-void mapper_remove_fwatcher(mapper_t *mapper, int fd) {
+/* Remove a file tracker from the map */
+void mapper_remove_tracker(mapper_t *mapper, int fd) {
 	if (!mapper || fd < 0 || fd >= mapper->size) return;
 
-	if (mapper->entries[fd].type == MAP_TYPE_FWATCHER) {
+	if (mapper->entries[fd].type == MAP_TYPE_TRACKER) {
 		mapper->entries[fd].type = MAP_TYPE_NONE;
-		mapper->entries[fd].ptr.fw = NULL;
+		mapper->entries[fd].ptr.tracker = NULL;
 	} else {
-		log_message(WARNING, "Attempted to remove fwatcher from fd %d, but it's not an fwatcher", fd);
+		log_message(WARNING, "Attempted to remove tracker from fd %d, but it's not a tracker", fd);
 	}
 }
 
 /* Add a directory watcher to the map */
-bool mapper_add_watcher(mapper_t *mapper, int fd, struct watcher *w) {
-	if (!mapper || fd < 0 || !w) return false;
+bool mapper_add_watcher(mapper_t *mapper, int fd, struct watcher *watcher) {
+	if (!mapper || fd < 0 || !watcher) return false;
 	if (!mapper_resize(mapper, fd)) return false;
 
 	map_entry_t *entry = &mapper->entries[fd];
 
-	if (entry->type == MAP_TYPE_FWATCHER) {
-		log_message(ERROR, "Cannot add watcher to fd %d, it's already an fwatcher", fd);
+	if (entry->type == MAP_TYPE_TRACKER) {
+		log_message(ERROR, "Cannot add directory watcher to fd %d, it's already a file tracker", fd);
 		return false;
 	}
 
-	watcher_node_t *new_node = calloc(1, sizeof(watcher_node_t));
-	if (!new_node) {
+	watcher_node_t *watcher_node = calloc(1, sizeof(watcher_node_t));
+	if (!watcher_node) {
 		log_message(ERROR, "Failed to allocate memory for watcher_node");
 		return false;
 	}
-	new_node->w = w;
+	watcher_node->watcher = watcher;
 
 	/* Add to the front of the list */
-	new_node->next = entry->ptr.watchers;
-	entry->ptr.watchers = new_node;
+	watcher_node->next = entry->ptr.watchers;
+	entry->ptr.watchers = watcher_node;
 	entry->type = MAP_TYPE_WATCHER;
 
 	return true;
 }
 
 /* Remove a directory watcher from the map */
-bool mapper_remove_watcher(mapper_t *mapper, int fd, struct watcher *w) {
-	if (!mapper || fd < 0 || fd >= mapper->size || !w) return false;
+bool mapper_remove_watcher(mapper_t *mapper, int fd, struct watcher *watcher) {
+	if (!mapper || fd < 0 || fd >= mapper->size || !watcher) return false;
 
 	map_entry_t *entry = &mapper->entries[fd];
 	if (entry->type != MAP_TYPE_WATCHER) {
@@ -151,10 +149,10 @@ bool mapper_remove_watcher(mapper_t *mapper, int fd, struct watcher *w) {
 
 	watcher_node_t **node_ptr = &entry->ptr.watchers;
 	while (*node_ptr) {
-		if ((*node_ptr)->w == w) {
-			watcher_node_t *to_remove = *node_ptr;
-			*node_ptr = to_remove->next; /* Unlink */
-			free(to_remove);
+		if ((*node_ptr)->watcher == watcher) {
+			watcher_node_t *target_node = *node_ptr;
+			*node_ptr = target_node->next; /* Unlink */
+			free(target_node);
 
 			/* If the list is now empty, mark the entry as NONE */
 			if (entry->ptr.watchers == NULL) {

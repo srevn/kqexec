@@ -10,12 +10,12 @@
 #include <unistd.h>
 
 #include "events.h"
-#include "files.h"
 #include "logger.h"
 #include "registry.h"
 #include "scanner.h"
 #include "snapshot.h"
 #include "stability.h"
+#include "tracker.h"
 
 /* Free resources used by a subscription */
 static void subscription_free(subscription_t *subscription) {
@@ -227,7 +227,7 @@ static void resource_free(resource_t *resource) {
 			deferred = next_deferred;
 		}
 
-		fregistry_destroy(resource->fregistry);
+		trackers_destroy(resource->trackers);
 		pthread_mutex_destroy(&resource->mutex);
 		free(resource->path);
 		free(resource);
@@ -651,10 +651,10 @@ subscription_t *resources_subscription(resources_t *resources, registry_t *regis
 		return NULL;
 	}
 
-	/* If file monitoring is enabled for this watch, ensure fregistry exists on the resource */
-	if ((watch->filter & EVENT_CONTENT) && !resource->fregistry) {
-		resource->fregistry = fregistry_create(256);
-		if (!resource->fregistry) {
+	/* If file monitoring is enabled for this watch, ensure trackers exists on the resource */
+	if ((watch->filter & EVENT_CONTENT) && !resource->trackers) {
+		resource->trackers = trackers_create(256);
+		if (!resource->trackers) {
 			log_message(ERROR, "Failed to create file watch registry for resource: %s", path);
 			resource_unlock(resource);
 			return NULL;

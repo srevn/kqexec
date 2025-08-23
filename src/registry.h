@@ -8,7 +8,7 @@
 /* Registry configuration */
 #define REGISTRY_INITIAL_CAPACITY 256
 #define REGISTRY_GROWTH_FACTOR 2
-#define WATCH_REF_INVALID ((watchref_t){0, 0})
+#define WATCHREF_INVALID ((watchref_t){0, 0})
 
 /* Watch lifecycle states */
 typedef enum {
