@@ -209,7 +209,7 @@ bool files_add(monitor_t *monitor, resource_t *resource, const char *file_path, 
 			watcher->cap_watchrefs = new_cap;
 		}
 		watcher->watchrefs[watcher->num_watchrefs++] = watchref;
-		
+
 		/* Re-register with kqueue to update event filters based on all watchrefs */
 		if (!files_reregister(monitor, watcher)) {
 			log_message(ERROR, "Failed to re-register kqueue watch for %s after adding watchref", file_path);
@@ -217,7 +217,7 @@ bool files_add(monitor_t *monitor, resource_t *resource, const char *file_path, 
 			watcher->num_watchrefs--;
 			return false;
 		}
-		
+
 		log_message(DEBUG, "Associated new watch with existing file watch for %s and updated kqueue filters", file_path);
 		return true;
 	}
@@ -484,7 +484,6 @@ void files_cleanup(monitor_t *monitor, fregistry_t *registry) {
 void directory_cleanup(monitor_t *monitor, fregistry_t *registry, const char *dir_path) {
 	if (!registry || !dir_path) return;
 
-	size_t dir_len = strlen(dir_path);
 	int removed_count = 0;
 
 	for (size_t i = 0; i < registry->bucket_count; i++) {
@@ -494,32 +493,25 @@ void directory_cleanup(monitor_t *monitor, fregistry_t *registry, const char *di
 		while (watcher) {
 			fwatcher_t *next = watcher->next;
 
-			/* Check if this file is within the directory */
-			if (strncmp(watcher->path, dir_path, dir_len) == 0 &&
-				(watcher->path[dir_len] == '/' || watcher->path[dir_len] == '\0')) {
-
-				/* Remove from list */
-				if (prev) {
-					prev->next = next;
-				} else {
-					registry->buckets[i] = next;
-				}
-
-				/* Remove from fd mapping */
-				if (watcher->fd >= 0) {
-					mapper_remove_fwatcher(monitor->mapper, watcher->fd);
-					close(watcher->fd);
-				}
-
-				/* Free memory */
-				free(watcher->path);
-				free(watcher);
-
-				registry->total_count--;
-				removed_count++;
+			/* Remove from list */
+			if (prev) {
+				prev->next = next;
 			} else {
-				prev = watcher;
+				registry->buckets[i] = next;
 			}
+
+			/* Remove from fd mapping */
+			if (watcher->fd >= 0) {
+				mapper_remove_fwatcher(monitor->mapper, watcher->fd);
+				close(watcher->fd);
+			}
+
+			/* Free memory */
+			free(watcher->path);
+			free(watcher);
+
+			registry->total_count--;
+			removed_count++;
 
 			watcher = next;
 		}
@@ -534,18 +526,14 @@ void directory_cleanup(monitor_t *monitor, fregistry_t *registry, const char *di
 void directory_reregister(monitor_t *monitor, fregistry_t *registry, const char *dir_path) {
 	if (!monitor || !registry || !dir_path) return;
 
-	size_t dir_len = strlen(dir_path);
 	int reregistered_count = 0;
 
 	for (size_t i = 0; i < registry->bucket_count; i++) {
 		fwatcher_t *watcher = registry->buckets[i];
 
 		while (watcher) {
-			/* Check if this file is within the directory and needs re-registration */
-			if (strncmp(watcher->path, dir_path, dir_len) == 0 &&
-				(watcher->path[dir_len] == '/' || watcher->path[dir_len] == '\0') &&
-				watcher->state == FILES_ONESHOT_FIRED) {
-
+			/* Check if this file needs re-registration */
+			if (watcher->state == FILES_ONESHOT_FIRED) {
 				/* Re-register with kqueue */
 				if (files_reregister(monitor, watcher)) {
 					watcher->state = FILES_ACTIVE;

@@ -81,7 +81,6 @@ void directory_reregister(monitor_t *monitor, fregistry_t *registry, const char 
 /* Utility functions */
 unsigned int files_hash(const char *path, size_t bucket_count);
 bool files_monitor(const watch_t *watch, const char *file_path);
-fwatcher_t *files_find_by_fd(fregistry_t *registry, int fd);
 bool fwatcher_valid(const fwatcher_t *watcher);
 
 #endif /* FILES_H */
