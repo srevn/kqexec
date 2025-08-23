@@ -865,7 +865,13 @@ bool monitor_start(monitor_t *monitor) {
 
 	monitor->running = true;
 
-	log_message(NOTICE, "Starting file monitor with %d watches", monitor->num_watches);
+	int num_trackers = tracker_counter(monitor);
+	if (num_trackers > 0) {
+		log_message(NOTICE, "Starting monitor with %d watches, %d tracked files",
+					monitor->num_watches, num_trackers);
+	} else {
+		log_message(NOTICE, "Starting monitor with %d watches", monitor->num_watches);
+	}
 
 	/* Main event loop */
 	while (monitor->running) {
@@ -886,7 +892,13 @@ bool monitor_reload(monitor_t *monitor) {
 	}
 
 	log_message(INFO, "Reloading configuration from %s", monitor->config_path);
-	log_message(DEBUG, "Current configuration has %d watches", monitor->num_watches);
+	int current_trackers = tracker_counter(monitor);
+	if (current_trackers > 0) {
+		log_message(DEBUG, "Current configuration has %d watches, %d tracked files",
+					monitor->num_watches, current_trackers);
+	} else {
+		log_message(DEBUG, "Current configuration has %d watches", monitor->num_watches);
+	}
 
 	/* Wait for any pending commands to finish before destroying state */
 	command_cleanup(NULL);
@@ -1059,7 +1071,13 @@ bool monitor_reload(monitor_t *monitor) {
 	/* After reloading, explicitly validate the config file watch to handle editor atomic saves */
 	monitor_sync(monitor, monitor->config_path);
 
-	log_message(INFO, "Configuration reload complete: %d active watches", monitor->num_watches);
+	int reload_trackers = tracker_counter(monitor);
+	if (reload_trackers > 0) {
+		log_message(INFO, "Configuration reload complete: %d watches, %d tracked files",
+					monitor->num_watches, reload_trackers);
+	} else {
+		log_message(INFO, "Configuration reload complete: %d watches", monitor->num_watches);
+	}
 	return true;
 }
 

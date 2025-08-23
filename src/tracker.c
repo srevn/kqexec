@@ -558,3 +558,20 @@ void directory_reregister(monitor_t *monitor, trackers_t *registry, const char *
 					reregistered_count, dir_path);
 	}
 }
+
+/* Get total tracked files across all resources */
+int tracker_counter(monitor_t *monitor) {
+	int total = 0;
+	if (monitor->resources && monitor->resources->buckets) {
+		for (size_t i = 0; i < monitor->resources->bucket_count; i++) {
+			resource_t *resource = monitor->resources->buckets[i];
+			while (resource) {
+				if (resource->trackers) {
+					total += resource->trackers->total_count;
+				}
+				resource = resource->next;
+			}
+		}
+	}
+	return total;
+}

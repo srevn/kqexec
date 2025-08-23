@@ -92,4 +92,7 @@ unsigned int tracker_hash(const char *path, size_t bucket_count);
 bool tracker_monitor(const watch_t *watch, const char *file_path);
 bool tracker_valid(const tracker_t *tracker);
 
+/* Statistics */
+int tracker_counter(monitor_t *monitor);
+
 #endif /* TRACKER_H */
