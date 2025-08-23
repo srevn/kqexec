@@ -328,13 +328,24 @@ bool stability_new(monitor_t *monitor, check_t *check) {
 
 	int prev_num_watches = monitor->num_watches;
 
+	/* Get the root resource; all watches in a check share the same resource path */
+	subscription_t *root = stability_entry(monitor, check);
+	if (!root || !root->resource) {
+		return false;
+	}
+
+	/* Lock the resource to ensure the re-scan is atomic for this check */
+	resource_lock(root->resource);
+
 	/* For recursive watches, scan for new directories */
 	for (int i = 0; i < check->num_watches; i++) {
 		watch_t *watch = registry_get(monitor->registry, check->watchrefs[i]);
-		if (watch && watch->recursive) {
+		if (watch) {
 			monitor_tree(monitor, check->path, check->watchrefs[i]);
 		}
 	}
+
+	resource_unlock(root->resource);
 
 	return monitor->num_watches > prev_num_watches;
 }
@@ -522,6 +533,11 @@ void stability_reset(monitor_t *monitor, subscription_t *root) {
 	root->profile->stability->stability_lost = false;
 	root->profile->stability->reference_init = true;
 
+	/* Re-register file watches that fired during the unstable period */
+	if (root->resource->fregistry) {
+		directory_reregister(monitor, root->resource->fregistry, root->resource->path);
+	}
+
 	resource_unlock(root->resource);
 
 	/* Clear deferred event queue */
@@ -546,11 +562,6 @@ void stability_reset(monitor_t *monitor, subscription_t *root) {
 	/* Clear activity tracking flag to mark the directory as idle */
 	if (root->profile->scanner) {
 		root->profile->scanner->active = false;
-	}
-
-	/* Re-register file watches that fired during the unstable period */
-	if (root->resource->fregistry) {
-		directory_reregister(monitor, root->resource->fregistry, root->resource->path);
 	}
 }
 

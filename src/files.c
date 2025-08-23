@@ -433,6 +433,13 @@ void files_cleanup(monitor_t *monitor, fregistry_t *registry) {
 			fwatcher_t *next = watcher->next;
 			bool should_remove = false;
 
+			/* Do not clean up watchers that are pending re-registration */
+			if (watcher->state == FILES_ONESHOT_FIRED) {
+				prev = watcher;
+				watcher = next;
+				continue;
+			}
+
 			/* Remove idle watches */
 			if (now - watcher->last_event > FILES_IDLE_TIMEOUT) {
 				should_remove = true;

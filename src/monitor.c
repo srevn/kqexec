@@ -1137,7 +1137,9 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 		resource_t *resource = resource_get(monitor->resources, path, ENTITY_UNKNOWN);
 		if (resource && resource->fregistry) {
 			log_message(DEBUG, "Cleaning up file watches for deleted directory: %s", path);
+			resource_lock(resource);
 			directory_cleanup(monitor, resource->fregistry, path);
+			resource_unlock(resource);
 		}
 
 		/* Handle pending watches that might be affected by this deletion */
