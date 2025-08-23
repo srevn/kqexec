@@ -981,6 +981,18 @@ bool monitor_reload(monitor_t *monitor) {
 		return false;
 	}
 
+	/* Create new mapper */
+	mapper_t *new_mapper = mapper_create(0);
+	if (!new_mapper) {
+		log_message(ERROR, "Failed to create new mapper during reload");
+		queue_destroy(new_check_queue);
+		resources_destroy(new_resources);
+		close(new_kq);
+		config_destroy(new_config);
+		registry_destroy(new_registry);
+		return false;
+	}
+
 	/* Switch to new kqueue first */
 	monitor->kq = new_kq;
 
@@ -995,6 +1007,10 @@ bool monitor_reload(monitor_t *monitor) {
 	/* Switch check queue */
 	queue_t *old_check_queue = monitor->check_queue;
 	monitor->check_queue = new_check_queue;
+
+	/* Switch mapper */
+	mapper_t *old_mapper = monitor->mapper;
+	monitor->mapper = new_mapper;
 
 	/* Clear delayed events queue that may reference old watches */
 	int cleared_count = 0;
@@ -1045,6 +1061,7 @@ bool monitor_reload(monitor_t *monitor) {
 	/* Cleanup old resources */
 	resources_destroy(old_resources);
 	queue_destroy(old_check_queue);
+	mapper_destroy(old_mapper);
 
 	/* Retire the old watchers and config to the graveyard */
 	if (stale_count > 0 || old_config) {
