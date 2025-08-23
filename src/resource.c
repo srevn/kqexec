@@ -413,7 +413,7 @@ uint64_t configuration_hash(const watch_t *watch) {
 	hash *= prime;
 	hash ^= (uint64_t) (watch->requires_snapshot ? 1 : 0);
 	hash *= prime;
-	hash ^= (uint64_t) ((watch->filter & EVENT_CONTENT) ? 1 : 0);
+	hash ^= (uint64_t) (((watch->filter & EVENT_CONTENT) || watch->filter == EVENT_ALL) ? 1 : 0);
 	hash *= prime;
 
 	/* Hash exclude patterns */
@@ -652,7 +652,7 @@ subscription_t *resources_subscription(resources_t *resources, registry_t *regis
 	}
 
 	/* If file monitoring is enabled for this watch, ensure trackers exists on the resource */
-	if ((watch->filter & EVENT_CONTENT) && !resource->trackers) {
+	if (((watch->filter & EVENT_CONTENT) || watch->filter == EVENT_ALL) && !resource->trackers) {
 		resource->trackers = trackers_create(256);
 		if (!resource->trackers) {
 			log_message(ERROR, "Failed to create file watch registry for resource: %s", path);

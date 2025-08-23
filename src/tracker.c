@@ -104,7 +104,7 @@ bool tracker_monitor(const watch_t *watch, const char *file_path) {
 	if (!watch || !file_path) return false;
 
 	/* Check if content events are requested */
-	if (!(watch->filter & EVENT_CONTENT)) return false;
+	if (!((watch->filter & EVENT_CONTENT) || watch->filter == EVENT_ALL)) return false;
 
 	/* Check exclusion patterns */
 	if (config_exclude_match(watch, file_path)) return false;
@@ -389,7 +389,7 @@ bool tracker_scan(monitor_t *monitor, resource_t *resource, watchref_t watchref,
 	const char *dir_path = resource->path;
 
 	/* Only scan if file content monitoring is enabled */
-	if (!(watch->filter & EVENT_CONTENT)) return true;
+	if (!((watch->filter & EVENT_CONTENT) || watch->filter == EVENT_ALL)) return true;
 
 	DIR *dir = opendir(dir_path);
 	if (!dir) {

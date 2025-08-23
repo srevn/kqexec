@@ -521,7 +521,7 @@ bool monitor_tree(monitor_t *monitor, const char *dir_path, watchref_t watchref)
 	}
 
 	/* Add file watches for content monitoring if requested */
-	if (watch->filter & EVENT_CONTENT) {
+	if ((watch->filter & EVENT_CONTENT) || watch->filter == EVENT_ALL) {
 		/* Find the resource for this directory to scan for files */
 		resource_t *resource = resource_get(monitor->resources, dir_path, ENTITY_DIRECTORY);
 		if (resource) {
