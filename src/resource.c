@@ -354,9 +354,9 @@ resource_t *resource_get(resources_t *resources, const char *path, kind_t kind) 
 		resource->profiles = NULL;
 
 		/* Initialize deferred event queue */
+		resource->deferred_count = 0;
 		resource->deferred_head = NULL;
 		resource->deferred_tail = NULL;
-		resource->deferred_count = 0;
 
 		/* Determine resource type and existence from filesystem */
 		struct stat info;

@@ -137,18 +137,18 @@ static bool glob_find(const char *parent_path, const watch_t *watch, const char 
 	}
 
 	/* First pass: count matches */
-	struct dirent *entry;
+	struct dirent *dirent;
 	int count = 0;
-	while ((entry = readdir(dir)) != NULL) {
+	while ((dirent = readdir(dir)) != NULL) {
 		/* Skip . and .. */
-		if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+		if (strcmp(dirent->d_name, ".") == 0 || strcmp(dirent->d_name, "..") == 0) {
 			continue;
 		}
 
 		/* Check if filename matches glob pattern */
-		if (fnmatch(glob_component, entry->d_name, 0) == 0) {
+		if (fnmatch(glob_component, dirent->d_name, 0) == 0) {
 			/* Check against exclude patterns */
-			char *full_path = pending_join(parent_path, entry->d_name);
+			char *full_path = pending_join(parent_path, dirent->d_name);
 			if (full_path) {
 				if (!watch || !config_exclude_match(watch, full_path)) {
 					count++;
@@ -173,16 +173,16 @@ static bool glob_find(const char *parent_path, const watch_t *watch, const char 
 	/* Second pass: collect matches */
 	rewinddir(dir);
 	int index = 0;
-	while ((entry = readdir(dir)) != NULL && index < count) {
+	while ((dirent = readdir(dir)) != NULL && index < count) {
 		/* Skip . and .. */
-		if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+		if (strcmp(dirent->d_name, ".") == 0 || strcmp(dirent->d_name, "..") == 0) {
 			continue;
 		}
 
 		/* Check if filename matches glob pattern */
-		if (fnmatch(glob_component, entry->d_name, 0) == 0) {
+		if (fnmatch(glob_component, dirent->d_name, 0) == 0) {
 			/* Create full path */
-			char *full_path = pending_join(parent_path, entry->d_name);
+			char *full_path = pending_join(parent_path, dirent->d_name);
 			if (full_path) {
 				/* Check against exclude patterns */
 				if (!watch || !config_exclude_match(watch, full_path)) {

@@ -453,8 +453,8 @@ diff_t *snapshot_diff(const snapshot_t *baseline, const snapshot_t *current) {
 						  diff->modified_count + diff->renamed_count;
 
 	log_message(DEBUG, "Snapshot diff complete: %d created, %d deleted, %d modified, %d renamed (total: %d)",
-				diff->created_count, diff->deleted_count, diff->modified_count,
-				diff->renamed_count, diff->total_changes);
+				diff->created_count, diff->deleted_count, diff->modified_count, diff->renamed_count,
+				diff->total_changes);
 
 	return diff;
 }

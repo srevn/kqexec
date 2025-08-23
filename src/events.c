@@ -137,9 +137,9 @@ void events_deferred(monitor_t *monitor, resource_t *resource) {
 
 	/* Detach the entire deferred event list from the resource for local processing */
 	deferred_t *detached_events = resource->deferred_head;
+	resource->deferred_count = 0;
 	resource->deferred_head = NULL;
 	resource->deferred_tail = NULL;
-	resource->deferred_count = 0;
 	resource->batch_active = false;
 
 	/* Copy resource path before unlocking to avoid accessing freed memory */

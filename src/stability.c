@@ -555,9 +555,9 @@ void stability_reset(monitor_t *monitor, subscription_t *root) {
 				free(deferred);
 				deferred = next_deferred;
 			}
+			root->resource->deferred_count = 0;
 			root->resource->deferred_head = NULL;
 			root->resource->deferred_tail = NULL;
-			root->resource->deferred_count = 0;
 		}
 	}
 
@@ -873,7 +873,8 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 
 		/* If the included is unchanged and the excluded has changed then we ignore this event */
 		if (!included_changed && excluded_changed) {
-			log_message(INFO, "Ignoring event for %s, all recent changes were to excluded files/directories", root->resource->path);
+			log_message(INFO, "Ignoring event for %s, all recent changes were to excluded files/directories",
+						root->resource->path);
 
 			/* Reset the stability baseline to this new state */
 			stability_reset(monitor, root);

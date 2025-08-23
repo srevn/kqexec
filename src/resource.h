@@ -31,8 +31,8 @@ typedef struct profile {
 	snapshot_t *baseline_snapshot;         /* Baseline directory state */
 	
 	/* Subscriptions using this configuration */
-	subscription_t *subscriptions;         /* Head of list of subscriptions with this profile */
 	int subscription_count;                /* Reference counter for cleanup */
+	subscription_t *subscriptions;         /* Head of list of subscriptions with this profile */
 	
 	struct profile *next;                  /* Next profile for the same resource */
 } profile_t;
@@ -41,7 +41,7 @@ typedef struct profile {
 typedef struct resource {
 	char *path;                            /* The filesystem path */
 	kind_t kind;                           /* File or directory */
-	trackers_t *trackers;                /* File watch registry for content monitoring */
+	trackers_t *trackers;                  /* File watch registry for content monitoring */
 	
 	/* Basic filesystem state */
 	bool exists;                           /* Resource currently exists */
@@ -62,9 +62,9 @@ typedef struct resource {
 	pthread_mutex_t mutex;                 /* Resource-level mutex */
 
 	/* Deferred events queue */
+	int deferred_count;                    /* Number of events in the queue */
 	struct deferred *deferred_head;        /* Head of the deferred event queue */
 	struct deferred *deferred_tail;        /* Tail of the deferred event queue */
-	int deferred_count;                    /* Number of events in the queue */
 	
 	/* Batch timeout detection */
 	bool batch_active;                     /* Whether batch processing is active */

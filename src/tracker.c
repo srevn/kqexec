@@ -40,29 +40,27 @@ trackers_t *trackers_create(size_t bucket_count) {
 	return registry;
 }
 
-/* Destroy file tracker registry */
+/* Destroy file tracker registry and all its resources */
 void trackers_destroy(trackers_t *registry) {
 	if (!registry) return;
 
-	for (size_t i = 0; i < registry->bucket_count; i++) {
-		tracker_t *tracker = registry->buckets[i];
-		while (tracker) {
-			tracker_t *next = tracker->next;
+	for (size_t bucket_index = 0; bucket_index < registry->bucket_count; bucket_index++) {
+		tracker_t *current_tracker = registry->buckets[bucket_index];
+		while (current_tracker) {
+			tracker_t *next_tracker = current_tracker->next;
 
-			if (tracker->fd >= 0) {
-				close(tracker->fd);
+			if (current_tracker->fd >= 0) {
+				close(current_tracker->fd);
 			}
-			free(tracker->path);
-			free(tracker);
+			free(current_tracker->path);
+			free(current_tracker);
 
-			tracker = next;
+			current_tracker = next_tracker;
 		}
 	}
 
 	free(registry->buckets);
 	free(registry);
-
-	log_message(DEBUG, "Destroyed file tracker registry");
 }
 
 /* Hash function for file paths */
@@ -398,20 +396,20 @@ bool tracker_scan(monitor_t *monitor, resource_t *resource, watchref_t watchref,
 		return false;
 	}
 
-	struct dirent *entry;
+	struct dirent *dirent;
 	int added_count = 0;
 
-	while ((entry = readdir(dir)) != NULL) {
+	while ((dirent = readdir(dir)) != NULL) {
 		/* Skip . and .. */
-		if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+		if (strcmp(dirent->d_name, ".") == 0 || strcmp(dirent->d_name, "..") == 0) {
 			continue;
 		}
 
 		char file_path[1024];
-		int path_len = snprintf(file_path, sizeof(file_path), "%s/%s", dir_path, entry->d_name);
+		int path_len = snprintf(file_path, sizeof(file_path), "%s/%s", dir_path, dirent->d_name);
 
 		if (path_len >= (int) sizeof(file_path)) {
-			log_message(WARNING, "Path too long, skipping: %s/%s", dir_path, entry->d_name);
+			log_message(WARNING, "Path too long, skipping: %s/%s", dir_path, dirent->d_name);
 			continue;
 		}
 
