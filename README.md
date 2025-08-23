@@ -119,6 +119,8 @@ Kqexec supports the following event types that can be specified in the configura
 
 - `ALL`: Monitors all event types (combination of all the above)
 
+Note: When monitoring directories, `kqueue` may not trigger structural change events if a file’s contents are modified in place. To work around this, set `events = STRUCTURE,CONTENT`, which will add each individual file in the directory to monitoring.
+
 ### Command Placeholders
 
 Commands can include the following placeholders that will be replaced at runtime:
@@ -185,7 +187,7 @@ esac
 [Configuration Files]
 # Monitor system configuration files
 directory = /usr/local/etc
-events = STRUCTURE,METADATA
+events = STRUCTURE,CONTENT
 command = logger -p daemon.notice "Configuration changed in %p"
 recursive = true
 hidden = false
