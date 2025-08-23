@@ -822,6 +822,20 @@ bool monitor_poll(monitor_t *monitor) {
 	/* Clean up retired items from the graveyard */
 	monitor_graveyard(monitor);
 
+	/* Periodically clean up idle file watches to prevent resource leaks */
+	if (monitor->resources && monitor->resources->buckets) {
+		for (size_t i = 0; i < monitor->resources->bucket_count; i++) {
+			resource_t *resource = monitor->resources->buckets[i];
+			while (resource) {
+				if (resource->fregistry) {
+					/* files_cleanup has its own internal timer to avoid running too often */
+					files_cleanup(resource->fregistry);
+				}
+				resource = resource->next;
+			}
+		}
+	}
+
 	return true; /* Continue monitoring */
 }
 
@@ -1098,6 +1112,13 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 	if (!path_exists) {
 		/* Path deleted - clean up all related resources */
 		log_message(DEBUG, "Path deleted: %s, cleaning up watch resources", path);
+
+		/* Clean up associated file watches from the resource's fregistry */
+		resource_t *resource = resource_get(monitor->resources, path, ENTITY_UNKNOWN);
+		if (resource && resource->fregistry) {
+			log_message(DEBUG, "Cleaning up file watches for deleted directory: %s", path);
+			directory_cleanup(resource->fregistry, path);
+		}
 
 		/* Handle pending watches that might be affected by this deletion */
 		pending_delete(monitor, path);
