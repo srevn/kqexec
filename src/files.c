@@ -209,7 +209,16 @@ bool files_add(monitor_t *monitor, resource_t *resource, const char *file_path, 
 			watcher->cap_watchrefs = new_cap;
 		}
 		watcher->watchrefs[watcher->num_watchrefs++] = watchref;
-		log_message(DEBUG, "Associated new watch with existing file watch for %s", file_path);
+		
+		/* Re-register with kqueue to update event filters based on all watchrefs */
+		if (!files_reregister(monitor, watcher)) {
+			log_message(ERROR, "Failed to re-register kqueue watch for %s after adding watchref", file_path);
+			/* Rollback the watchref addition */
+			watcher->num_watchrefs--;
+			return false;
+		}
+		
+		log_message(DEBUG, "Associated new watch with existing file watch for %s and updated kqueue filters", file_path);
 		return true;
 	}
 
