@@ -640,7 +640,7 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 				tracker_t *tracker = entry->ptr.tracker;
 				if (tracker_valid(tracker)) {
 					if (tracker_handle(monitor, tracker, &events[i], time)) {
-						/* File content changed - delegate to parent directory stability system for all watches */
+						/* File event - delegate to parent directory stability system for all watches */
 						for (int k = 0; k < tracker->num_watchrefs; k++) {
 							char *parent_dir = strdup(tracker->path);
 							if (parent_dir) {
@@ -648,11 +648,11 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 								if (last_slash && last_slash != parent_dir) {
 									*last_slash = '\0'; /* Truncate to get parent directory */
 
-									/* Create a directory content change event */
+									/* Create a directory change event from the file event */
 									event_t event;
 									memset(&event, 0, sizeof(event));
 									event.path = parent_dir;
-									event.type = EVENT_CONTENT; /* File content change affects directory content */
+									event.type = flags_to_filter(events[i].fflags);
 									event.time = *time;
 									clock_gettime(CLOCK_REALTIME, &event.wall_time);
 									event.user_id = getuid();
