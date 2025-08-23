@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include "events.h"
+#include "files.h"
 #include "logger.h"
 #include "registry.h"
 #include "scanner.h"
@@ -411,6 +412,8 @@ uint64_t configuration_hash(const watch_t *watch) {
 	hash *= prime;
 	hash ^= (uint64_t) (watch->requires_snapshot ? 1 : 0);
 	hash *= prime;
+	hash ^= (uint64_t) ((watch->filter & EVENT_CONTENT) ? 1 : 0);
+	hash *= prime;
 
 	/* Hash exclude patterns */
 	if (watch->exclude && watch->num_exclude > 0) {
@@ -462,8 +465,8 @@ profile_t *profile_get(resource_t *resource, uint64_t configuration_hash) {
 }
 
 /* Create a new scanning profile */
-profile_t *profile_create(resource_t *resource, uint64_t configuration_hash) {
-	if (!resource) return NULL;
+profile_t *profile_create(resource_t *resource, uint64_t configuration_hash, const watch_t *watch) {
+	if (!resource || !watch) return NULL;
 
 	profile_t *profile = calloc(1, sizeof(profile_t));
 	if (!profile) {
@@ -475,6 +478,8 @@ profile_t *profile_create(resource_t *resource, uint64_t configuration_hash) {
 	profile->stability = NULL;
 	profile->scanner = NULL;
 	profile->baseline_snapshot = NULL;
+	profile->fregistry = NULL;
+	profile->monitor_files = ((watch->filter & EVENT_CONTENT) != 0);
 	profile->subscriptions = NULL;
 	profile->subscription_count = 0;
 	profile->next = NULL;
@@ -492,6 +497,7 @@ void profile_destroy(profile_t *profile) {
 		stability_destroy(profile->stability);
 		scanner_destroy(profile->scanner);
 		snapshot_destroy(profile->baseline_snapshot);
+		fregistry_destroy(profile->fregistry);
 		free(profile);
 	}
 }
@@ -640,7 +646,7 @@ subscription_t *resources_subscription(resources_t *resources, registry_t *regis
 	}
 
 	/* Create the profile now */
-	profile = profile_create(resource, watch_hash);
+	profile = profile_create(resource, watch_hash, watch);
 	if (!profile) {
 		log_message(ERROR, "Failed to create scanning profile for %s", path);
 		resource_unlock(resource);
@@ -656,6 +662,17 @@ subscription_t *resources_subscription(resources_t *resources, registry_t *regis
 		log_message(ERROR, "Failed to create stability state for directory: %s", path);
 		resource_unlock(resource);
 		return NULL;
+	}
+
+	/* Create file watch registry if this profile needs file content monitoring */
+	if (profile->monitor_files) {
+		profile->fregistry = fregistry_create(256);
+		if (!profile->fregistry) {
+			log_message(ERROR, "Failed to create file watch registry for directory: %s", path);
+			resource_unlock(resource);
+			return NULL;
+		}
+		log_message(DEBUG, "Created file watch registry for profile monitoring %s", path);
 	}
 
 	/* Use pre-scanned data if scan was successful */

@@ -228,6 +228,20 @@ monitor_t *monitor_create(config_t *config, registry_t *registry) {
 	monitor->delayed_count = 0;
 	monitor->delayed_capacity = 0;
 
+	/* Initialize file descriptor to profile mapping */
+	monitor->fd_map_size = 1024; /* Reasonable initial size */
+	monitor->fd_profile = calloc(monitor->fd_map_size, sizeof(profile_t *));
+	if (!monitor->fd_profile) {
+		log_message(ERROR, "Failed to allocate fd-to-profile mapping");
+		observer_unregister(monitor->registry, &monitor->monitor_observer);
+		observer_unregister(monitor->registry, &monitor->pending_observer);
+		resources_destroy(monitor->resources);
+		queue_destroy(monitor->check_queue);
+		free(monitor->config_path);
+		free(monitor);
+		return NULL;
+	}
+
 	return monitor;
 }
 
@@ -287,6 +301,9 @@ void monitor_destroy(monitor_t *monitor) {
 	/* Clean up resource table */
 	resources_destroy(monitor->resources);
 
+	/* Clean up file descriptor to profile mapping */
+	free(monitor->fd_profile);
+
 	/* Perform final garbage collection before destroying registry */
 	if (monitor->registry) {
 		registry_garbage(monitor->registry);
@@ -302,6 +319,33 @@ void monitor_destroy(monitor_t *monitor) {
 	}
 
 	free(monitor);
+}
+
+/* Map a file descriptor to its owning profile for fast event lookup */
+void monitor_map(monitor_t *monitor, int fd, profile_t *profile) {
+	if (!monitor || fd < 0 || fd >= monitor->fd_map_size || !profile) {
+		if (fd >= monitor->fd_map_size) {
+			log_message(WARNING, "File descriptor %d exceeds fd map size %d", fd, monitor->fd_map_size);
+		}
+		return;
+	}
+	monitor->fd_profile[fd] = profile;
+}
+
+/* Remove file descriptor to profile mapping */
+void monitor_unmap(monitor_t *monitor, int fd) {
+	if (!monitor || fd < 0 || fd >= monitor->fd_map_size) {
+		return;
+	}
+	monitor->fd_profile[fd] = NULL;
+}
+
+/* Get profile that owns a file descriptor */
+profile_t *monitor_profile(monitor_t *monitor, int fd) {
+	if (!monitor || fd < 0 || fd >= monitor->fd_map_size) {
+		return NULL;
+	}
+	return monitor->fd_profile[fd];
 }
 
 /* Set up kqueue monitoring for a file or directory */
@@ -489,6 +533,19 @@ bool monitor_tree(monitor_t *monitor, const char *dir_path, watchref_t watchref)
 	if (!monitor_path(monitor, dir_path, watchref)) {
 		log_message(WARNING, "Failed to add watch for directory %s", dir_path);
 		return false; /* If we can't watch the root, we shouldn't proceed */
+	}
+
+	/* Add file watches for content monitoring if requested */
+	if (watch->filter & EVENT_CONTENT) {
+		/* Find the resource and profile for this directory to get the file watch registry */
+		resource_t *resource = resource_get(monitor->resources, dir_path, ENTITY_DIRECTORY);
+		if (resource) {
+			uint64_t config_hash = configuration_hash(watch);
+			profile_t *profile = profile_get(resource, config_hash);
+			if (profile && profile->fregistry) {
+				files_scan(monitor, profile->fregistry, profile, dir_path, watchref, watch);
+			}
+		}
 	}
 
 	/* If not recursive, we're done */

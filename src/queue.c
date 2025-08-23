@@ -109,7 +109,7 @@ void queue_destroy(queue_t *queue) {
 	free(queue->items);
 	free(queue);
 
-	log_message(DEBUG, "Cleaned up queued check queue (observer unregistered)");
+	log_message(DEBUG, "Cleaned up queued check queue and observer unregistered");
 }
 
 /* Add a watch reference to a queue entry */

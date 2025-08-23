@@ -7,6 +7,7 @@
 
 #include "command.h"
 #include "events.h"
+#include "files.h"
 #include "logger.h"
 #include "monitor.h"
 #include "queue.h"
@@ -545,6 +546,13 @@ void stability_reset(monitor_t *monitor, subscription_t *root) {
 	/* Clear activity tracking flag to mark the directory as idle */
 	if (root->profile->scanner) {
 		root->profile->scanner->active = false;
+	}
+
+	/* Re-register file watches that fired during the unstable period for all profiles */
+	for (profile_t *profile = root->resource->profiles; profile != NULL; profile = profile->next) {
+		if (profile->fregistry && profile->monitor_files) {
+			directory_reregister(monitor, profile->fregistry, root->resource->path);
+		}
 	}
 }
 

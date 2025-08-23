@@ -625,6 +625,43 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 	for (int i = 0; i < event_count; i++) {
 		int fd = (int) events[i].ident;
 
+		/* Check if this is a file watch event using fast fd-to-profile lookup */
+		profile_t *file_profile = monitor_profile(monitor, fd);
+		if (file_profile && file_profile->fregistry) {
+			fwatcher_t *fwatcher = files_find_by_fd(file_profile->fregistry, fd);
+
+			/* Verify this is actually a valid file watcher */
+			if (fwatcher_valid(fwatcher)) {
+				if (files_handle(monitor, file_profile->fregistry, fwatcher, &events[i], time)) {
+					/* File content changed - delegate to parent directory stability system */
+					char *parent_dir = strdup(fwatcher->path);
+					if (parent_dir) {
+						char *last_slash = strrchr(parent_dir, '/');
+						if (last_slash && last_slash != parent_dir) {
+							*last_slash = '\0'; /* Truncate to get parent directory */
+
+							/* Create a directory content change event */
+							event_t event;
+							memset(&event, 0, sizeof(event));
+							event.path = parent_dir;
+							event.type = EVENT_CONTENT; /* File content change affects directory content */
+							event.time = *time;
+							clock_gettime(CLOCK_REALTIME, &event.wall_time);
+							event.user_id = getuid();
+
+							/* Process through directory stability system */
+							events_process(monitor, fwatcher->watchref, &event, ENTITY_DIRECTORY, false);
+
+							log_message(DEBUG, "File content change in %s delegated to directory %s for stability processing",
+										fwatcher->path, parent_dir);
+						}
+						free(parent_dir);
+					}
+				}
+				continue; /* Skip regular watcher processing for this event */
+			}
+		}
+
 		/* Find all watches that share this file descriptor */
 		for (int j = 0; j < monitor->num_watches; j++) {
 			watcher_t *watcher = monitor->watches[j];

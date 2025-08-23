@@ -5,6 +5,7 @@
 
 #include "config.h"
 #include "events.h"
+#include "files.h"
 #include "pending.h"
 #include "queue.h"
 #include "registry.h"
@@ -58,6 +59,10 @@ typedef struct monitor {
 	int delayed_count;                     /* Current number of delayed events */
 	int delayed_capacity;                  /* Allocated capacity */
 
+	/* File watch to profile mapping */
+	profile_t **fd_profile;                /* Array indexed by fd pointing to owning profile */
+	int fd_map_size;                       /* Size of fd mapping array */
+
 	/* Control flags & config */
 	bool running;                          /* Monitor running flag */
 	bool reload;                           /* Flag to indicate reload requested */
@@ -88,5 +93,10 @@ void monitor_graveyard(monitor_t *monitor);
 /* Path synchronization */
 bool monitor_sync(monitor_t *monitor, const char *path);
 bool monitor_prune(monitor_t *monitor, const char *parent);
+
+/* File monitoring support */
+profile_t *monitor_profile(monitor_t *monitor, int fd);
+void monitor_map(monitor_t *monitor, int fd, profile_t *profile);
+void monitor_unmap(monitor_t *monitor, int fd);
 
 #endif /* MONITOR_H */

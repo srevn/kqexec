@@ -13,6 +13,7 @@
 typedef struct stability stability_t;
 typedef struct snapshot snapshot_t;
 typedef struct diff diff_t;
+typedef struct fregistry fregistry_t;
 
 /* Resource table configuration */
 #define PATH_HASH_SIZE 1024
@@ -25,6 +26,8 @@ typedef struct profile {
 	/* Configuration-specific state */
 	stability_t *stability;                /* Shared stability state for this profile */
 	scanner_t *scanner;                    /* Shared scanner state for this profile */
+	fregistry_t *fregistry;                /* File watch registry for content monitoring */
+	bool monitor_files;                    /* Whether this profile requires file content monitoring */
 	
 	/* Snapshot state for accurate change detection */
 	snapshot_t *baseline_snapshot;         /* Baseline directory state */
@@ -116,7 +119,7 @@ bool profile_snapshot(const profile_t *profile, registry_t *registry);
 
 /* Profile management */
 profile_t *profile_get(resource_t *resource, uint64_t configuration_hash);
-profile_t *profile_create(resource_t *resource, uint64_t configuration_hash);
+profile_t *profile_create(resource_t *resource, uint64_t configuration_hash, const watch_t *watch);
 void profile_destroy(profile_t *profile);
 
 /* Subscription management */
