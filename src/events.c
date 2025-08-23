@@ -11,6 +11,7 @@
 #include "command.h"
 #include "files.h"
 #include "logger.h"
+#include "mapper.h"
 #include "monitor.h"
 #include "registry.h"
 #include "resource.h"
@@ -626,100 +627,104 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 	for (int i = 0; i < event_count; i++) {
 		int fd = (int) events[i].ident;
 
-		/* Check if this is a file watch event by searching all resource fregistries */
-		fwatcher_t *fwatcher = NULL;
-		/* Search all resources for a file watcher with this fd */
-		for (size_t bucket = 0; bucket < monitor->resources->bucket_count && !fwatcher; bucket++) {
-			resource_t *resource = monitor->resources->buckets[bucket];
-			while (resource && !fwatcher) {
-				if (resource->fregistry) {
-					fwatcher = files_find_by_fd(resource->fregistry, fd);
-				}
-				resource = resource->next;
-			}
+		/* Look up the fd in our mapper for O(1) dispatch */
+		map_entry_t *entry = mapper_get(monitor->mapper, fd);
+		if (!entry) {
+			log_message(DEBUG, "Event for an unknown or out-of-bounds fd: %d", fd);
+			continue;
 		}
-		
-		if (fwatcher) {
 
-			/* Verify this is actually a valid file watcher */
-			if (fwatcher_valid(fwatcher)) {
-				if (files_handle(monitor, fwatcher, &events[i], time)) {
-					/* File content changed - delegate to parent directory stability system for all watches */
-					for (int k = 0; k < fwatcher->num_watchrefs; k++) {
-						char *parent_dir = strdup(fwatcher->path);
-						if (parent_dir) {
-							char *last_slash = strrchr(parent_dir, '/');
-							if (last_slash && last_slash != parent_dir) {
-								*last_slash = '\0'; /* Truncate to get parent directory */
+		switch (entry->type) {
+			case MAP_TYPE_FWATCHER:
+			{
+				fwatcher_t *fwatcher = entry->ptr.fw;
+				if (fwatcher_valid(fwatcher)) {
+					if (files_handle(monitor, fwatcher, &events[i], time)) {
+						/* File content changed - delegate to parent directory stability system for all watches */
+						for (int k = 0; k < fwatcher->num_watchrefs; k++) {
+							char *parent_dir = strdup(fwatcher->path);
+							if (parent_dir) {
+								char *last_slash = strrchr(parent_dir, '/');
+								if (last_slash && last_slash != parent_dir) {
+									*last_slash = '\0'; /* Truncate to get parent directory */
 
-								/* Create a directory content change event */
-								event_t event;
-								memset(&event, 0, sizeof(event));
-								event.path = parent_dir;
-								event.type = EVENT_CONTENT; /* File content change affects directory content */
-								event.time = *time;
-								clock_gettime(CLOCK_REALTIME, &event.wall_time);
-								event.user_id = getuid();
+									/* Create a directory content change event */
+									event_t event;
+									memset(&event, 0, sizeof(event));
+									event.path = parent_dir;
+									event.type = EVENT_CONTENT; /* File content change affects directory content */
+									event.time = *time;
+									clock_gettime(CLOCK_REALTIME, &event.wall_time);
+									event.user_id = getuid();
 
-								/* Process through directory stability system */
-								events_process(monitor, fwatcher->watchrefs[k], &event, ENTITY_DIRECTORY, false);
+									/* Process through directory stability system */
+									events_process(monitor, fwatcher->watchrefs[k], &event, ENTITY_DIRECTORY, false);
 
-								log_message(DEBUG, "File content change in %s delegated to directory %s for stability processing",
-											fwatcher->path, parent_dir);
+									log_message(DEBUG, "File content change in %s delegated to directory %s for stability processing",
+												fwatcher->path, parent_dir);
+								}
+								free(parent_dir);
 							}
-							free(parent_dir);
 						}
 					}
 				}
-				continue; /* Skip regular watcher processing for this event */
+				break;
 			}
-		}
 
-		/* Find all watches that share this file descriptor */
-		for (int j = 0; j < monitor->num_watches; j++) {
-			watcher_t *watcher = monitor->watches[j];
+			case MAP_TYPE_WATCHER:
+			{
+				watcher_node_t *node = entry->ptr.watchers;
+				while (node) {
+					watcher_t *watcher = node->w;
+					if (watcher) {
+						event_t event;
+						memset(&event, 0, sizeof(event));
+						event.path = watcher->path;
+						event.type = flags_to_filter(events[i].fflags);
+						event.time = *time;
+						clock_gettime(CLOCK_REALTIME, &event.wall_time);
+						event.user_id = getuid();
 
-			if (watcher->wd == fd) {
-				event_t event;
-				memset(&event, 0, sizeof(event));
-				event.path = watcher->path;
-				event.type = flags_to_filter(events[i].fflags);
-				event.time = *time;
-				clock_gettime(CLOCK_REALTIME, &event.wall_time);
-				event.user_id = getuid();
+						watch_t *watch = registry_get(monitor->registry, watcher->watchref);
+						if (watch) {
+							kind_t kind = (watch->target == WATCH_FILE) ? ENTITY_FILE : ENTITY_DIRECTORY;
 
-				watch_t *watch = registry_get(monitor->registry, watcher->watchref);
-				if (!watch) continue;
+							log_message(DEBUG, "Event: path=%s, flags=0x%x -> type=%s (watch: %s)", watcher->path,
+										events[i].fflags, filter_to_string(event.type), watch->name);
 
-				kind_t kind = (watch->target == WATCH_FILE) ? ENTITY_FILE : ENTITY_DIRECTORY;
+							/* Proactive validation for directory events */
+							if (watch->target == WATCH_DIRECTORY && (events[i].fflags & NOTE_WRITE)) {
+								if (validate) {
+									validate_add(validate, watcher->path);
+								}
+							}
 
-				log_message(DEBUG, "Event: path=%s, flags=0x%x -> type=%s (watch: %s)", watcher->path,
-							events[i].fflags, filter_to_string(event.type), watch->name);
+							/* Keep watchref before pending_process, as watcher may be freed during deactivation */
+							watchref_t savedref = watcher->watchref;
 
-				/* Proactive validation for directory events */
-				if (watch->target == WATCH_DIRECTORY && (events[i].fflags & NOTE_WRITE)) {
-					if (validate) {
-						validate_add(validate, watcher->path);
+							/* Process pending watches for any event that might create new paths */
+							if (monitor->num_pending > 0) {
+								pending_process(monitor, watcher->path);
+							}
+
+							/* Check if this watch has a processing delay configured */
+							if (watch->processing_delay > 0) {
+								/* Schedule the event for delayed processing */
+								events_delay(monitor, savedref, &event, kind);
+							} else {
+								/* Process the event immediately */
+								events_process(monitor, savedref, &event, kind, false);
+							}
+						}
 					}
+					node = node->next;
 				}
-
-				/* Keep watchref before pending_process, as watcher may be freed during deactivation */
-				watchref_t savedref = watcher->watchref;
-
-				/* Process pending watches for any event that might create new paths */
-				if (monitor->num_pending > 0) {
-					pending_process(monitor, watcher->path);
-				}
-
-				/* Check if this watch has a processing delay configured */
-				if (watch->processing_delay > 0) {
-					/* Schedule the event for delayed processing */
-					events_delay(monitor, savedref, &event, kind);
-				} else {
-					/* Process the event immediately */
-					events_process(monitor, savedref, &event, kind, false);
-				}
+				break;
 			}
+
+			case MAP_TYPE_NONE:
+				log_message(DEBUG, "Event for a closed or unmapped fd: %d", fd);
+				break;
 		}
 	}
 

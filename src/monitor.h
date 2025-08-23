@@ -9,6 +9,7 @@
 #include "queue.h"
 #include "registry.h"
 #include "resource.h"
+#include "mapper.h"
 
 /* Monitor configuration */
 #define MAX_WATCHES 128
@@ -40,6 +41,7 @@ typedef struct graveyard {
 typedef struct monitor {
 	int kq;                                /* Kqueue descriptor */
 	config_t *config;                      /* Configuration */
+	mapper_t *mapper;                      /* FD -> Watcher mapping */
 	resources_t *resources;                /* Resource table for this monitor */
 	registry_t *registry;                  /* Watch registry */
 	graveyard_t graveyard;                 /* Graveyard for stale items */

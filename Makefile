@@ -51,6 +51,7 @@ SRCS = src/main.c \
 	   src/events.c \
 	   src/config.c \
 	   src/monitor.c \
+	   src/mapper.c \
 	   src/pending.c \
 	   src/scanner.c \
 	   src/registry.c \

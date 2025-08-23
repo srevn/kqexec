@@ -15,6 +15,7 @@
 #include "events.h"
 #include "files.h"
 #include "logger.h"
+#include "mapper.h"
 #include "pending.h"
 #include "queue.h"
 #include "resource.h"
@@ -39,25 +40,27 @@ static void watcher_cleanup(monitor_t *monitor, watcher_t *watcher, bool is_stal
 
 	/* Close the file descriptor if this is the last watcher using it */
 	if (watcher->wd >= 0) {
-		bool should_close = !watcher->shared_fd;
-
-		if (watcher->shared_fd && monitor) {
-			/* Count other watchers using this FD */
-			int fd_users = 0;
-			watcher_t **list = is_stale ? monitor->graveyard.stale_watches : monitor->watches;
-			int count = is_stale ? monitor->graveyard.num_stale : monitor->num_watches;
-
-			for (int i = 0; i < count; i++) {
-				watcher_t *other = list[i];
-				if (other && other != watcher && other->wd == watcher->wd) {
-					fd_users++;
+		if (is_stale) {
+			/* For stale watchers in the graveyard, mapper is unaware of them */
+			bool should_close = true;
+			if (monitor && monitor->graveyard.stale_watches) {
+				int fd_users = 0;
+				for (int i = 0; i < monitor->graveyard.num_stale; i++) {
+					watcher_t *other = monitor->graveyard.stale_watches[i];
+					if (other && other != watcher && other->wd == watcher->wd) {
+						fd_users++;
+					}
 				}
+				should_close = (fd_users == 0);
 			}
-			should_close = (fd_users == 0);
-		}
-
-		if (should_close) {
-			close(watcher->wd);
+			if (should_close) {
+				close(watcher->wd);
+			}
+		} else {
+			/* For active watchers use mapper */
+			if (monitor && monitor->mapper && mapper_remove_watcher(monitor->mapper, watcher->wd, watcher)) {
+				close(watcher->wd);
+			}
 		}
 	}
 
@@ -100,6 +103,11 @@ static bool watcher_add(monitor_t *monitor, watcher_t *watcher) {
 	monitor->watches = new_watches;
 	monitor->watches[monitor->num_watches] = watcher;
 	monitor->num_watches++;
+
+	/* Add the watcher to the mapper for fast event lookup */
+	if (monitor->mapper) {
+		mapper_add_watcher(monitor->mapper, watcher->wd, watcher);
+	}
 
 	return true;
 }
@@ -179,6 +187,15 @@ monitor_t *monitor_create(config_t *config, registry_t *registry) {
 	/* Store config file path for reloading */
 	if (config->config_path != NULL) {
 		monitor->config_path = strdup(config->config_path);
+	}
+
+	/* Initialize the mapper for fast event lookup */
+	monitor->mapper = mapper_create(0);
+	if (!monitor->mapper) {
+		log_message(ERROR, "Failed to create mapper for monitor");
+		free(monitor->config_path);
+		free(monitor);
+		return NULL;
 	}
 
 	/* Initialize the queued check queue with registry observer */
@@ -276,6 +293,9 @@ void monitor_destroy(monitor_t *monitor) {
 
 	/* Clean up the check queue */
 	queue_destroy(monitor->check_queue);
+
+	/* Clean up the mapper */
+	mapper_destroy(monitor->mapper);
 
 	/* Clean up delayed event queue */
 	if (monitor->delayed_events) {
@@ -829,7 +849,7 @@ bool monitor_poll(monitor_t *monitor) {
 			while (resource) {
 				if (resource->fregistry) {
 					/* files_cleanup has its own internal timer to avoid running too often */
-					files_cleanup(resource->fregistry);
+					files_cleanup(monitor, resource->fregistry);
 				}
 				resource = resource->next;
 			}
@@ -1117,7 +1137,7 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 		resource_t *resource = resource_get(monitor->resources, path, ENTITY_UNKNOWN);
 		if (resource && resource->fregistry) {
 			log_message(DEBUG, "Cleaning up file watches for deleted directory: %s", path);
-			directory_cleanup(resource->fregistry, path);
+			directory_cleanup(monitor, resource->fregistry, path);
 		}
 
 		/* Handle pending watches that might be affected by this deletion */

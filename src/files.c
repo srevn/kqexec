@@ -11,6 +11,7 @@
 
 #include "config.h"
 #include "logger.h"
+#include "mapper.h"
 #include "monitor.h"
 #include "registry.h"
 #include "resource.h"
@@ -32,22 +33,11 @@ fregistry_t *fregistry_create(size_t bucket_count) {
 		return NULL;
 	}
 
-	/* Initialize FD mapping with reasonable initial size */
-	registry->fd_map_size = 1024;
-	registry->fd_map = calloc(registry->fd_map_size, sizeof(fwatcher_t *));
-	if (!registry->fd_map) {
-		log_message(ERROR, "Failed to allocate file watch fd map");
-		free(registry->buckets);
-		free(registry);
-		return NULL;
-	}
-
 	registry->bucket_count = bucket_count;
 	registry->total_count = 0;
 	registry->last_cleanup = time(NULL);
 
-	log_message(DEBUG, "Created file watch registry with %zu buckets and %d fd slots",
-				bucket_count, registry->fd_map_size);
+	log_message(DEBUG, "Created file watch registry with %zu buckets", bucket_count);
 	return registry;
 }
 
@@ -71,7 +61,6 @@ void fregistry_destroy(fregistry_t *registry) {
 	}
 
 	free(registry->buckets);
-	free(registry->fd_map);
 	free(registry);
 
 	log_message(DEBUG, "Destroyed file watch registry");
@@ -104,15 +93,6 @@ fwatcher_t *files_find(fregistry_t *registry, const char *file_path) {
 	}
 
 	return NULL;
-}
-
-/* Find file watcher by file descriptor */
-fwatcher_t *files_find_by_fd(fregistry_t *registry, int fd) {
-	if (!registry || fd < 0 || fd >= registry->fd_map_size) {
-		return NULL;
-	}
-
-	return registry->fd_map[fd];
 }
 
 /* Validate file watcher structure */
@@ -249,22 +229,6 @@ bool files_add(monitor_t *monitor, resource_t *resource, const char *file_path, 
 		return false;
 	}
 
-	/* Ensure fd_map is large enough to hold the new file descriptor */
-	if (fd >= registry->fd_map_size) {
-		int new_size = fd + 256; /* Grow by a margin to avoid frequent reallocs */
-		fwatcher_t **new_map = realloc(registry->fd_map, new_size * sizeof(fwatcher_t *));
-		if (!new_map) {
-			log_message(ERROR, "Failed to resize fd_map to %d. Cannot add watch for %s", new_size, file_path);
-			close(fd);
-			return false;
-		}
-		/* Zero out the newly allocated portion of the map */
-		memset(new_map + registry->fd_map_size, 0, (new_size - registry->fd_map_size) * sizeof(fwatcher_t *));
-		registry->fd_map = new_map;
-		registry->fd_map_size = new_size;
-		log_message(DEBUG, "Resized file watch fd_map to %d", new_size);
-	}
-
 	/* Get file identity */
 	struct stat info;
 	if (fstat(fd, &info) == -1) {
@@ -328,12 +292,10 @@ bool files_add(monitor_t *monitor, resource_t *resource, const char *file_path, 
 	new_watcher->next = registry->buckets[bucket];
 	registry->buckets[bucket] = new_watcher;
 
-	/* Add to fd mapping if fd is in range */
-	if (fd >= 0 && fd < registry->fd_map_size) {
-		registry->fd_map[fd] = new_watcher;
-	} else {
-		log_message(WARNING, "File descriptor %d out of range for registry fd map (size: %d)",
-					fd, registry->fd_map_size);
+	/* Add to the central mapper */
+	if (!mapper_add_fwatcher(monitor->mapper, fd, new_watcher)) {
+		log_message(WARNING, "Failed to add fwatcher for %s (fd: %d) to mapper", file_path, fd);
+		/* Cleanup logic might be needed here if this fails */
 	}
 
 	registry->total_count++;
@@ -342,7 +304,6 @@ bool files_add(monitor_t *monitor, resource_t *resource, const char *file_path, 
 				file_path, fd, registry->total_count);
 	return true;
 }
-
 
 /* Handle file watch events */
 bool files_handle(monitor_t *monitor, fwatcher_t *watcher, struct kevent *event, struct timespec *time) {
@@ -364,7 +325,7 @@ bool files_handle(monitor_t *monitor, fwatcher_t *watcher, struct kevent *event,
 			break;
 		}
 	}
-	
+
 	if (!still_wanted) {
 		log_message(DEBUG, "File %s is now excluded by all watches, removing from monitoring", watcher->path);
 		watcher->state = FILES_PENDING_CLEANUP;
@@ -443,7 +404,7 @@ bool files_scan(monitor_t *monitor, resource_t *resource, watchref_t watchref, c
 }
 
 /* Clean up idle file watches */
-void files_cleanup(fregistry_t *registry) {
+void files_cleanup(monitor_t *monitor, fregistry_t *registry) {
 	if (!registry) return;
 
 	time_t now = time(NULL);
@@ -482,14 +443,12 @@ void files_cleanup(fregistry_t *registry) {
 				}
 
 				/* Remove from fd mapping */
-				if (watcher->fd >= 0 && watcher->fd < registry->fd_map_size) {
-					registry->fd_map[watcher->fd] = NULL;
-				}
-
-				/* Close and free */
 				if (watcher->fd >= 0) {
+					mapper_remove_fwatcher(monitor->mapper, watcher->fd);
 					close(watcher->fd);
 				}
+
+				/* Free memory */
 				free(watcher->path);
 				free(watcher);
 
@@ -513,7 +472,7 @@ void files_cleanup(fregistry_t *registry) {
 }
 
 /* Clean up file watches in a specific directory */
-void directory_cleanup(fregistry_t *registry, const char *dir_path) {
+void directory_cleanup(monitor_t *monitor, fregistry_t *registry, const char *dir_path) {
 	if (!registry || !dir_path) return;
 
 	size_t dir_len = strlen(dir_path);
@@ -538,14 +497,12 @@ void directory_cleanup(fregistry_t *registry, const char *dir_path) {
 				}
 
 				/* Remove from fd mapping */
-				if (watcher->fd >= 0 && watcher->fd < registry->fd_map_size) {
-					registry->fd_map[watcher->fd] = NULL;
-				}
-
-				/* Close and free */
 				if (watcher->fd >= 0) {
+					mapper_remove_fwatcher(monitor->mapper, watcher->fd);
 					close(watcher->fd);
 				}
+
+				/* Free memory */
 				free(watcher->path);
 				free(watcher);
 

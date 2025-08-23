@@ -51,10 +51,6 @@ typedef struct fregistry {
 	size_t bucket_count;                   /* Number of hash buckets */
 	int total_count;                       /* Total number of file watches */
 	time_t last_cleanup;                   /* Last time cleanup was performed */
-	
-	/* FD-based lookup for event handling */
-	fwatcher_t **fd_map;                   /* Array indexed by fd for fast lookup */
-	int fd_map_size;                       /* Size of fd map array */
 } fregistry_t;
 
 /* File monitor management functions */
@@ -76,8 +72,8 @@ bool files_handle(monitor_t *monitor, fwatcher_t *watcher, struct kevent *event,
 bool files_scan(monitor_t *monitor, resource_t *resource, watchref_t watchref, const watch_t *watch);
 
 /* Cleanup and maintenance */
-void files_cleanup(fregistry_t *registry);
-void directory_cleanup(fregistry_t *registry, const char *dir_path);
+void files_cleanup(monitor_t *monitor, fregistry_t *registry);
+void directory_cleanup(monitor_t *monitor, fregistry_t *registry, const char *dir_path);
 
 /* Stability integration */
 void directory_reregister(monitor_t *monitor, fregistry_t *registry, const char *dir_path);
