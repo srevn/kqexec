@@ -598,11 +598,11 @@ int events_timeout(monitor_t *monitor, struct timespec *current_time) {
 }
 
 /* Convert kqueue flags to filter type bitmask */
-static filter_t flags_to_filter(uint32_t flags) {
+static filter_t flags_to_filter(uint32_t flags, kind_t kind) {
 	filter_t event = EVENT_NONE;
 
 	/* Structural changes to directories */
-	if (flags & (NOTE_WRITE | NOTE_EXTEND)) {
+	if (kind == ENTITY_DIRECTORY && (flags & (NOTE_WRITE | NOTE_EXTEND))) {
 		event |= EVENT_STRUCTURE;
 	}
 
@@ -612,7 +612,10 @@ static filter_t flags_to_filter(uint32_t flags) {
 	}
 
 	/* File content changes */
-	if (flags & (NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE | NOTE_WRITE)) {
+	if (flags & (NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE)) {
+		event |= EVENT_CONTENT;
+	}
+	if (kind != ENTITY_DIRECTORY && (flags & (NOTE_WRITE | NOTE_EXTEND))) {
 		event |= EVENT_CONTENT;
 	}
 
@@ -652,7 +655,7 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 									event_t event;
 									memset(&event, 0, sizeof(event));
 									event.path = parent_dir;
-									event.type = flags_to_filter(events[i].fflags);
+									event.type = flags_to_filter(events[i].fflags, ENTITY_FILE);
 									event.time = *time;
 									clock_gettime(CLOCK_REALTIME, &event.wall_time);
 									event.user_id = getuid();
@@ -683,17 +686,17 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 				while (node) {
 					watcher_t *watcher = node->watcher;
 					if (watcher) {
-						event_t event;
-						memset(&event, 0, sizeof(event));
-						event.path = watcher->path;
-						event.type = flags_to_filter(events[i].fflags);
-						event.time = *time;
-						clock_gettime(CLOCK_REALTIME, &event.wall_time);
-						event.user_id = getuid();
-
 						watch_t *watch = registry_get(monitor->registry, watcher->watchref);
 						if (watch) {
 							kind_t kind = (watch->target == WATCH_FILE) ? ENTITY_FILE : ENTITY_DIRECTORY;
+
+							event_t event;
+							memset(&event, 0, sizeof(event));
+							event.path = watcher->path;
+								event.type = flags_to_filter(events[i].fflags, kind);
+								event.time = *time;
+								clock_gettime(CLOCK_REALTIME, &event.wall_time);
+								event.user_id = getuid();
 
 							log_message(DEBUG, "Event: path=%s, flags=0x%x -> type=%s (watch: %s)", watcher->path,
 										events[i].fflags, filter_to_string(event.type), watch->name);
@@ -845,10 +848,12 @@ optype_t events_operation(monitor_t *monitor, subscription_t *subscription, filt
 		subscription->resource->exists = true;
 
 		/* Prioritize which operation to report if multiple flags are set */
-		if (subscription->resource->kind == ENTITY_DIRECTORY && (subscription->resource->content_changed ||
-																 subscription->resource->structure_changed)) {
+		if (subscription->resource->kind == ENTITY_DIRECTORY && subscription->resource->structure_changed) {
 			determined_op = OP_DIR_CONTENT_CHANGED;
 			log_message(DEBUG, "Directory %s structure changed", subscription->resource->path);
+		} else if (subscription->resource->kind == ENTITY_DIRECTORY && subscription->resource->content_changed) {
+			determined_op = OP_FILE_CONTENT_CHANGED;
+			log_message(DEBUG, "File content changed in directory %s", subscription->resource->path);
 		} else if (subscription->resource->kind == ENTITY_FILE && subscription->resource->structure_changed) {
 			determined_op = OP_FILE_CONTENT_CHANGED;
 			log_message(DEBUG, "File %s content changed", subscription->resource->path);
