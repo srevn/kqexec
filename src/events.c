@@ -615,7 +615,7 @@ static filter_t flags_to_filter(uint32_t flags, kind_t kind) {
 	if (flags & (NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE)) {
 		event |= EVENT_CONTENT;
 	}
-	if (kind != ENTITY_DIRECTORY && (flags & (NOTE_WRITE | NOTE_EXTEND))) {
+	if (kind == ENTITY_FILE && (flags & (NOTE_WRITE | NOTE_EXTEND))) {
 		event |= EVENT_CONTENT;
 	}
 
@@ -723,6 +723,11 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 							} else {
 								/* Process the event immediately */
 								events_process(monitor, savedref, &event, kind, false);
+							}
+
+							/* Recreate file watch after rename or delete */
+							if (kind == ENTITY_FILE && (events[i].fflags & (NOTE_RENAME | NOTE_DELETE))) {
+								monitor_sync(monitor, watcher->path);
 							}
 						}
 					}
@@ -862,12 +867,9 @@ optype_t events_operation(monitor_t *monitor, subscription_t *subscription, filt
 				determined_op = OP_DIR_CONTENT_CHANGED;
 				log_message(DEBUG, "Directory %s structure changed", subscription->resource->path);
 			}
-		} else if (subscription->resource->kind == ENTITY_FILE && subscription->resource->structure_changed) {
+		} else if (subscription->resource->kind == ENTITY_FILE && subscription->resource->content_changed) {
 			determined_op = OP_FILE_CONTENT_CHANGED;
 			log_message(DEBUG, "File %s content changed", subscription->resource->path);
-		} else if (subscription->resource->kind == ENTITY_FILE && subscription->resource->content_changed) {
-			determined_op = OP_FILE_RENAMED;
-			log_message(DEBUG, "File %s renamed or replaced", subscription->resource->path);
 		} else if (subscription->resource->metadata_changed) {
 			determined_op = (subscription->resource->kind == ENTITY_FILE) ? OP_FILE_METADATA_CHANGED : OP_DIR_METADATA_CHANGED;
 			log_message(DEBUG, "Entity %s metadata changed", subscription->resource->path);

@@ -123,7 +123,8 @@ static bool tracker_remove(monitor_t *monitor, trackers_t *registry, tracker_t *
 
 			registry->total_count--;
 
-			log_message(DEBUG, "Removed stale file tracker (total: %d)", registry->total_count);
+			log_message(DEBUG, "Removed stale file tracker from registry (total: %d)",
+						registry->total_count);
 			return true;
 		}
 		previous_tracker = tracker;
@@ -241,8 +242,8 @@ bool tracker_add(monitor_t *monitor, resource_t *resource, const char *file_path
 
 		/* Check if the file identity has changed */
 		if (tracker->inode != current_file_info.st_ino || tracker->device != current_file_info.st_dev) {
-			log_message(DEBUG, "File %s was atomically replaced (inode %llu->%llu), removing stale tracker",
-						file_path, tracker->inode, current_file_info.st_ino);
+			log_message(DEBUG, "File %s was atomically replaced (inode %llu->%llu)", file_path,
+						tracker->inode, current_file_info.st_ino);
 			tracker_remove(monitor, registry, tracker);
 			/* Continue to create a new tracker for the new file */
 		} else {

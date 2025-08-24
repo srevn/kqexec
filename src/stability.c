@@ -92,7 +92,7 @@ bool stability_ready(monitor_t *monitor, subscription_t *subscription, optype_t 
 		root->profile->scanner->active = true;
 		root->profile->stability->stability_lost = false;
 
-		log_message(DEBUG, "Directory content change for %s, marked root %s as active, command deferred",
+		log_message(DEBUG, "Directory content change for %s, marked root %s as active",
 					subscription->resource->path, root->resource->path);
 
 		stability_queue(monitor, root);
