@@ -791,6 +791,9 @@ filter_t operation_to_filter(optype_t optype) {
 		case OP_DIR_METADATA_CHANGED:
 			return EVENT_METADATA;
 
+		case OP_DIR_COMPOSITE_CHANGE:
+			return EVENT_STRUCTURE | EVENT_CONTENT;
+
 		default:
 			return EVENT_NONE;
 	}
@@ -848,12 +851,17 @@ optype_t events_operation(monitor_t *monitor, subscription_t *subscription, filt
 		subscription->resource->exists = true;
 
 		/* Prioritize which operation to report if multiple flags are set */
-		if (subscription->resource->kind == ENTITY_DIRECTORY && subscription->resource->structure_changed) {
-			determined_op = OP_DIR_CONTENT_CHANGED;
-			log_message(DEBUG, "Directory %s structure changed", subscription->resource->path);
-		} else if (subscription->resource->kind == ENTITY_DIRECTORY && subscription->resource->content_changed) {
-			determined_op = OP_FILE_CONTENT_CHANGED;
-			log_message(DEBUG, "File content changed in directory %s", subscription->resource->path);
+		if (subscription->resource->kind == ENTITY_DIRECTORY) {
+			if (subscription->resource->content_changed && subscription->resource->structure_changed) {
+				determined_op = OP_DIR_COMPOSITE_CHANGE;
+				log_message(DEBUG, "Directory %s has both structure and content changes", subscription->resource->path);
+			} else if (subscription->resource->content_changed) {
+				determined_op = OP_FILE_CONTENT_CHANGED;
+				log_message(DEBUG, "File content changed in directory %s", subscription->resource->path);
+			} else if (subscription->resource->structure_changed) {
+				determined_op = OP_DIR_CONTENT_CHANGED;
+				log_message(DEBUG, "Directory %s structure changed", subscription->resource->path);
+			}
 		} else if (subscription->resource->kind == ENTITY_FILE && subscription->resource->structure_changed) {
 			determined_op = OP_FILE_CONTENT_CHANGED;
 			log_message(DEBUG, "File %s content changed", subscription->resource->path);

@@ -28,7 +28,10 @@ typedef enum optype {
 	OP_DIR_CONTENT_CHANGED,                /* Directory content changed */
 	OP_DIR_CREATED,                        /* Directory was created */
 	OP_DIR_DELETED,                        /* Directory was deleted */
-	OP_DIR_METADATA_CHANGED                /* Directory attributes changed */
+	OP_DIR_METADATA_CHANGED,               /* Directory attributes changed */
+	
+	/* Multiple operation types */
+	OP_DIR_COMPOSITE_CHANGE                /* Structure and content changed */
 } optype_t;
 
 /* Structure for file/directory event */
