@@ -53,6 +53,7 @@ void trackers_destroy(trackers_t *registry) {
 				close(current_tracker->fd);
 			}
 			free(current_tracker->path);
+			free(current_tracker->watchrefs);
 			free(current_tracker);
 
 			current_tracker = next_tracker;
@@ -90,6 +91,46 @@ tracker_t *tracker_find(trackers_t *registry, const char *file_path) {
 	}
 
 	return NULL;
+}
+
+/* Remove a tracker from the registry hash table */
+static bool tracker_remove(monitor_t *monitor, trackers_t *registry, tracker_t *target_tracker) {
+	if (!registry || !target_tracker || !target_tracker->path) return false;
+
+	unsigned int bucket = tracker_hash(target_tracker->path, registry->bucket_count);
+	tracker_t *tracker = registry->buckets[bucket];
+	tracker_t *previous_tracker = NULL;
+
+	while (tracker) {
+		if (tracker == target_tracker) {
+			/* Remove from list */
+			if (previous_tracker) {
+				previous_tracker->next = tracker->next;
+			} else {
+				registry->buckets[bucket] = tracker->next;
+			}
+
+			/* Remove from fd mapping */
+			if (tracker->fd >= 0) {
+				mapper_remove_tracker(monitor->mapper, tracker->fd);
+				close(tracker->fd);
+			}
+
+			/* Free memory */
+			free(tracker->path);
+			free(tracker->watchrefs);
+			free(tracker);
+
+			registry->total_count--;
+
+			log_message(DEBUG, "Removed stale file tracker (total: %d)", registry->total_count);
+			return true;
+		}
+		previous_tracker = tracker;
+		tracker = tracker->next;
+	}
+
+	return false;
 }
 
 /* Validate file tracker structure */
@@ -187,38 +228,55 @@ bool tracker_add(monitor_t *monitor, resource_t *resource, const char *file_path
 	/* Check if already monitoring this file */
 	tracker_t *tracker = tracker_find(registry, file_path);
 	if (tracker) {
-		/* File is already tracked, just add our watchref to it */
-		for (int watchref_index = 0; watchref_index < tracker->num_watchrefs; watchref_index++) {
-			if (watchref_equal(tracker->watchrefs[watchref_index], watchref)) {
-				return true; /* Already associated with this watch */
+		/* Validate that the existing tracker is still valid for the current file */
+		struct stat current_file_info;
+		if (stat(file_path, &current_file_info) == -1) {
+			if (errno != ENOENT) {
+				log_message(WARNING, "Failed to stat file %s: %s", file_path, strerror(errno));
 			}
-		}
-
-		/* Add new watchref to the existing tracker */
-		if (tracker->num_watchrefs >= tracker->watchrefs_capacity) {
-			int new_cap = tracker->watchrefs_capacity == 0 ? 2 : tracker->watchrefs_capacity * 2;
-			watchref_t *new_refs = realloc(tracker->watchrefs, new_cap * sizeof(watchref_t));
-			if (!new_refs) {
-				log_message(ERROR, "Failed to realloc watchrefs for %s", file_path);
-				return false;
-			}
-			tracker->watchrefs = new_refs;
-			tracker->watchrefs_capacity = new_cap;
-		}
-		tracker->watchrefs[tracker->num_watchrefs++] = watchref;
-
-		/* Re-register with kqueue to update event filters based on all watchrefs */
-		if (!tracker_reregister(monitor, tracker)) {
-			log_message(ERROR, "Failed to re-register kqueue watch for %s after adding watchref",
-						file_path);
-			/* Rollback the watchref addition */
-			tracker->num_watchrefs--;
+			/* File doesn't exist, remove stale tracker */
+			tracker_remove(monitor, registry, tracker);
 			return false;
 		}
 
-		log_message(DEBUG, "Associated new watch with existing file tracker for %s and updated kqueue filters",
-					file_path);
-		return true;
+		/* Check if the file identity has changed */
+		if (tracker->inode != current_file_info.st_ino || tracker->device != current_file_info.st_dev) {
+			log_message(DEBUG, "File %s was atomically replaced (inode %llu->%llu), removing stale tracker",
+						file_path, tracker->inode, current_file_info.st_ino);
+			tracker_remove(monitor, registry, tracker);
+			/* Continue to create a new tracker for the new file */
+		} else {
+			/* File is still the same, check if already associated with this watch */
+			for (int watchref_index = 0; watchref_index < tracker->num_watchrefs; watchref_index++) {
+				if (watchref_equal(tracker->watchrefs[watchref_index], watchref)) {
+					return true; /* Already associated with this watch */
+				}
+			}
+
+			/* Add new watchref to the existing tracker */
+			if (tracker->num_watchrefs >= tracker->watchrefs_capacity) {
+				int new_cap = tracker->watchrefs_capacity == 0 ? 2 : tracker->watchrefs_capacity * 2;
+				watchref_t *new_refs = realloc(tracker->watchrefs, new_cap * sizeof(watchref_t));
+				if (!new_refs) {
+					log_message(ERROR, "Failed to realloc watchrefs for %s", file_path);
+					return false;
+				}
+				tracker->watchrefs = new_refs;
+				tracker->watchrefs_capacity = new_cap;
+			}
+			tracker->watchrefs[tracker->num_watchrefs++] = watchref;
+
+			/* Re-register with kqueue to update event filters based on all watchrefs */
+			if (!tracker_reregister(monitor, tracker)) {
+				log_message(ERROR, "Failed to re-register kqueue watch for %s", file_path);
+				/* Rollback the watchref addition */
+				tracker->num_watchrefs--;
+				return false;
+			}
+
+			log_message(DEBUG, "Associated new watch with existing file tracker for %s", file_path);
+			return true;
+		}
 	}
 
 	/* Check if we've hit the per-directory limit */
@@ -494,6 +552,7 @@ void tracker_cleanup(monitor_t *monitor, trackers_t *registry) {
 
 				/* Free memory */
 				free(tracker->path);
+				free(tracker->watchrefs);
 				free(tracker);
 
 				registry->total_count--;
@@ -543,6 +602,7 @@ void directory_cleanup(monitor_t *monitor, trackers_t *registry, const char *dir
 
 			/* Free memory */
 			free(tracker->path);
+			free(tracker->watchrefs);
 			free(tracker);
 
 			registry->total_count--;
