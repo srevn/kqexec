@@ -39,15 +39,15 @@ typedef struct registry {
 	struct watch **watches;                /* Array of watch pointers, NULL for empty slots */
 	uint32_t *generations;                 /* Generation numbers for ABA problem prevention */
 	lifecycle_t *states;                   /* Current lifecycle state of each watch */
-
+	
 	/* Registry metadata */
 	uint32_t capacity;                     /* Total allocated array size */
 	uint32_t count;                        /* Number of currently active watches */
 	uint32_t next_id;                      /* Next watch ID to assign (monotonic) */
-
+	
 	/* Observer management */
 	observer_t *observers;                 /* Head of observer linked list */
-
+	
 	/* Thread safety */
 	pthread_rwlock_t lock;                 /* Read-write lock for thread-safe access */
 } registry_t;

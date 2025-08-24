@@ -23,13 +23,13 @@ typedef struct stability {
 	stats_t stats;                         /* Current directory statistics */
 	stats_t prev_stats;                    /* Previous stats for comparison */
 	stats_t ref_stats;                     /* Last known stable state statistics */
-
+	
 	/* Stable reference state tracking */
 	int delta_files;                       /* Running total of file changes since stability */
 	int delta_dirs;                        /* Running total of directory changes */
 	int delta_depth;                       /* Running total of depth changes */
 	ssize_t delta_size;                    /* Running total of size changes since stability */
-
+	
 	/* Stability verification tracking */
 	int checks_count;                      /* Number of stability checks */
 	int checks_failed;                     /* Number of consecutive failed stability checks */

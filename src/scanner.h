@@ -24,11 +24,11 @@ typedef struct sample {
 /* Scanner state tracking structure */
 typedef struct scanner {
 	sample_t samples[MAX_SAMPLES];         /* Circular buffer of recent events */
-	bool active;                           /* Whether there is ongoing activity */
 	int sample_count;                      /* Number of samples in the buffer */
 	int sample_index;                      /* Current index in the circular buffer */
-	struct timespec latest_time;           /* Timestamp of the last activity in the directory tree */
+	bool active;                           /* Whether there is ongoing activity */
 	char *active_path;                     /* Path of the most recent activity */
+	struct timespec latest_time;           /* Timestamp of the last activity in tree */
 } scanner_t;
 
 /* Directory statistics for stability verification */
@@ -39,7 +39,7 @@ typedef struct stats {
 	int local_files;                       /* Number of files in the directory */
 	int local_dirs;                        /* Number of subdirectories */
 	size_t local_size;                     /* Total size of files in the directory */
-
+	
 	/* Recursive stats for the entire directory tree */
 	int depth;                             /* Directory tree depth */
 	int max_depth;                         /* Maximum depth reached from this dir */

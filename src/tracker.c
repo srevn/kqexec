@@ -195,15 +195,15 @@ bool tracker_add(monitor_t *monitor, resource_t *resource, const char *file_path
 		}
 
 		/* Add new watchref to the existing tracker */
-		if (tracker->num_watchrefs >= tracker->cap_watchrefs) {
-			int new_cap = tracker->cap_watchrefs == 0 ? 2 : tracker->cap_watchrefs * 2;
+		if (tracker->num_watchrefs >= tracker->watchrefs_capacity) {
+			int new_cap = tracker->watchrefs_capacity == 0 ? 2 : tracker->watchrefs_capacity * 2;
 			watchref_t *new_refs = realloc(tracker->watchrefs, new_cap * sizeof(watchref_t));
 			if (!new_refs) {
 				log_message(ERROR, "Failed to realloc watchrefs for %s", file_path);
 				return false;
 			}
 			tracker->watchrefs = new_refs;
-			tracker->cap_watchrefs = new_cap;
+			tracker->watchrefs_capacity = new_cap;
 		}
 		tracker->watchrefs[tracker->num_watchrefs++] = watchref;
 
@@ -285,7 +285,7 @@ bool tracker_add(monitor_t *monitor, resource_t *resource, const char *file_path
 	}
 	new_tracker->watchrefs[0] = watchref;
 	new_tracker->num_watchrefs = 1;
-	new_tracker->cap_watchrefs = 2;
+	new_tracker->watchrefs_capacity = 2;
 
 	/* Register with kqueue */
 	if (!tracker_register(monitor, new_tracker)) {

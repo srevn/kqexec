@@ -42,16 +42,23 @@ make
 
 #### Installation Options
 
+Generate a sample configuration:
+
+```sh
+make config
+```
+
 Install the application and its configuration file:
 
 ```sh
 make install
 ```
 
-Generate a sample configuration:
+For an optimized release build:
 
 ```sh
-make config
+make release
+make install
 ```
 
 **Note:** Due to incompatibilities between macOS and FreeBSD Make utility, it's best to use gmake on FreeBSD.
@@ -125,10 +132,10 @@ Note: When monitoring directories, `kqueue` may not trigger structural change ev
 
 Commands can include the following placeholders that will be replaced at runtime:
 
-- `%created` : List of created items
-- `%deleted` : List of deleted items
-- `%renamed` : List of renamed items (format: old -> new)
-- `%modified` : List of modified files
+- `%created` : List of created items (newline-separated)
+- `%deleted` : List of deleted items (newline-separated)
+- `%renamed` : List of renamed items (format: old -> new, newline-separated)
+- `%modified` : List of modified files (newline-separated)
 - `%p` : Path where the event occurred
 - `%n` : Filename (for files) or subdirectory name (for directories) which triggered the event
 - `%d` : Directory containing the path that triggered the event
@@ -156,11 +163,11 @@ In addition to command placeholders, kqexec can optionally set environment varia
 - `KQ_USER_ID` : Numeric user ID that caused the event
 - `KQ_USERNAME` : Username that caused the event (resolved from user ID)
 - `KQ_TIMESTAMP` : ISO 8601 timestamp of the event
-- `KQ_CHANGED` : Space-separated list of all changes
-- `KQ_CREATED` : Space-separated list of items created
-- `KQ_DELETED` : Space-separated list of items deleted
-- `KQ_RENAMED` : Space-separated list of items renamed
-- `KQ_MODIFIED` : Space-separated list of items modified
+- `KQ_CHANGED` : Newline-separated list of all changes
+- `KQ_CREATED` : Newline-separated list of items created
+- `KQ_DELETED` : Newline-separated list of items deleted
+- `KQ_RENAMED` : Newline-separated list of items renamed
+- `KQ_MODIFIED` : Newline-separated list of items modified
 
 These environment variables make commands more powerful and reusable. For example:
 
@@ -319,6 +326,7 @@ The `complexity` option (range 0.1-5.0) provides fine-grained control over syste
 - **Backoff Behavior**: More aggressive delays during filesystem instability
 - **Batch Processing**: Higher thresholds for detecting activity gaps
 - **Depth/Size Sensitivity**: Complexity-scaled delays for deep or large directory structures
+- **Temporary File Window**: Increseas period for what is considered temporary or in-progress operation
 
 This allows tuning from very responsive (0.1) for simple workflows to highly cautious (5.0) for complex build systems or intensive I/O operations.
 
@@ -328,7 +336,7 @@ The `processing_delay`/`delay` option introduces an initial fixed delay before p
 
 #### Batch Event Processing
 
-The `batch_timeout`/`timeout` option defers events during active filesystem operations and processes them as a single operation when activity settles. Rather than a simple timer, it uses activity gap detection - the timeout window resets if events continue arriving, only triggering when there's been no activity for a complexity-determined threshold of the configured duration (by default 50%). This prevents command flooding during intensive or chaotic operations like indexing, builds, or large file transfers.
+The `batch_timeout`/`timeout` option defers events during active filesystem operations and processes them as a single operation when activity settles. Rather than a simple timer, it uses activity gap detection - the timeout window resets if events continue arriving, only triggering when there's been no activity for a complexity-determined threshold of the configured duration (by default 50%). This prevents command flooding during chaotic or intensive operations like indexing, builds, or large file transfers.
 
 #### Buffered Command Output
 

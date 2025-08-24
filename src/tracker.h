@@ -43,7 +43,7 @@ typedef struct tracker {
 	/* Watch associations */
 	watchref_t *watchrefs;                 /* Parent directory watch references */
 	int num_watchrefs;                     /* Number of parent watch references */
-	int cap_watchrefs;                     /* Capacity of the watchrefs array */
+	int watchrefs_capacity;                /* Capacity of the watchrefs array */
 	
 	/* Timing and state */
 	time_t created;                        /* When this file tracker was created */

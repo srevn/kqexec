@@ -5,8 +5,7 @@
 
 #include "registry.h"
 
-/* Maximum line length in config file */
-#define MAX_LINE_LEN 1024
+#define MAX_LINE_LEN 1024                  /* Maximum line length in config file */
 
 /* Event types that can be monitored */
 typedef enum filter {
@@ -32,28 +31,33 @@ typedef enum kind {
 
 /* Structure for a watch entry in the configuration */
 typedef struct watch {
+	/* Basic watch configuration */
 	char *name;                            /* Section name in config */
 	char *path;                            /* Path to watch */
 	target_t target;                       /* File or directory */
 	filter_t filter;                       /* Events to monitor */
 	char *command;                         /* Command to execute */
+	
+	/* Output handling */
 	bool log_output;                       /* Whether to capture and log command output */
 	bool buffer_output;                    /* Whether to buffer output until command completes */
-	bool recursive;                        /* Whether to recursively monitor (for directories) */
+	
+	/* Monitoring options */
 	bool hidden;                           /* Whether to monitor hidden files/directories */
+	bool recursive;                        /* Whether to recursively monitor (for directories) */
 	bool environment;                      /* Whether to inject KQ_* environment variables */
-	double complexity;                     /* Multiplier for quiet period calculation (default: 1.0) */
+	double complexity;                     /* Multiplier for system responsiveness (default: 1.0) */
 	bool requires_snapshot;                /* Whether snapshots are needed for this watch */
 	
-	/* Delays and batch timeouts */
+	/* Timing configuration */
 	int batch_timeout;                     /* Event batching timeout duration in ms */
 	int processing_delay;                  /* Delay before processing events */
 	
-	/* Exlude patterns */
+	/* Exclusion patterns */
 	char **exclude;                        /* Array of exclude patterns */
 	int num_exclude;                       /* Number of exclude patterns */
-
-	/* Dynamic watch tracking fields */
+	
+	/* Dynamic watch tracking */
 	bool is_dynamic;                       /* True if created from glob promotion */
 	char *source_pattern;                  /* Original glob pattern that created this watch */
 } watch_t;

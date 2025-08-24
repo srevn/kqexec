@@ -5,22 +5,30 @@
 
 #include "registry.h"
 
-/* Queued directory check queue entry */
+/* Queued directory check entry */
 typedef struct check {
+	/* Path information */
 	char *path;                            /* Path to the watched directory (unique key) */
+	
+	/* Timing information */
 	struct timespec next_check;            /* When this directory needs checking */
+	long scheduled_quiet;                  /* Quiet period used when scheduling this check */
+	bool verifying;                        /* True if in verification phase (skip quiet period checks) */
+	
+	/* Watch references */
 	watchref_t *watchrefs;                 /* Array of watch references for this path */
 	int num_watches;                       /* Number of watches for this path */
 	int watches_capacity;                  /* Allocated capacity for watches array */
-	bool verifying;                        /* True if in verification phase (skip quiet period checks) */
-	long scheduled_quiet;                  /* Quiet period used when scheduling this check */
 } check_t;
 
-/* Queued check queue structure */
+/* Directory check queue structure */
 typedef struct queue {
+	/* Queue storage */
 	check_t *items;                        /* Min-heap of queued checks */
 	int size;                              /* Current number of entries */
 	int items_capacity;                    /* Allocated capacity */
+	
+	/* Dependencies */
 	registry_t *registry;                  /* Registry reference for lookups */
 	observer_t observer;                   /* Observer registration for cleanup */
 } queue_t;

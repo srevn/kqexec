@@ -8,22 +8,22 @@
 #include "registry.h"
 
 /* Forward declarations */
+typedef struct diff diff_t;
 typedef struct monitor monitor_t;
 typedef struct resource resource_t;
 typedef struct subscription subscription_t;
-typedef struct diff diff_t;
 
 /* Logical operation types */
 typedef enum optype {
 	OP_NONE = 0,                           /* No operation */
-
+	
 	/* File operations */
 	OP_FILE_CONTENT_CHANGED,               /* File content was modified */
 	OP_FILE_CREATED,                       /* File was created */
 	OP_FILE_DELETED,                       /* File was deleted */
 	OP_FILE_RENAMED,                       /* File was renamed/moved */
 	OP_FILE_METADATA_CHANGED,              /* File attributes changed */
-
+	
 	/* Directory operations */
 	OP_DIR_CONTENT_CHANGED,                /* Directory content changed */
 	OP_DIR_CREATED,                        /* Directory was created */

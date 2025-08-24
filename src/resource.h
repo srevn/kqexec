@@ -16,16 +16,16 @@ typedef struct diff diff_t;
 typedef struct trackers trackers_t;
 
 /* Resource table configuration */
-#define PATH_HASH_SIZE 1024
 #define SUBSCRIPTION_MAGIC 0x4B514558      /* "KQEX" */
+#define PATH_HASH_SIZE 1024                /* Number of hash buckets for path lookups */
 
 /* Scanning profile for watches with compatible scan configurations */
 typedef struct profile {
-	uint64_t configuration_hash;           /* Hash of the scan configuration (recursive, hidden, snapshot, excludes) */
+	uint64_t configuration_hash;           /* Hash of the scan configuration */
 	
 	/* Configuration-specific state */
-	stability_t *stability;                /* Shared stability state for this profile */
 	scanner_t *scanner;                    /* Shared scanner state for this profile */
+	stability_t *stability;                /* Shared stability state for this profile */
 	
 	/* Snapshot state for accurate change detection */
 	snapshot_t *baseline_snapshot;         /* Baseline directory state */
@@ -34,6 +34,7 @@ typedef struct profile {
 	int subscription_count;                /* Reference counter for cleanup */
 	subscription_t *subscriptions;         /* Head of list of subscriptions with this profile */
 	
+	/* Linked list management */
 	struct profile *next;                  /* Next profile for the same resource */
 } profile_t;
 
@@ -50,15 +51,15 @@ typedef struct resource {
 	bool structure_changed;                /* Structural change occurred */
 	
 	/* Timestamps */
+	struct timespec op_time;               /* Timestamp of the last operation */
 	struct timespec last_time;             /* When state was last updated (MONOTONIC) */
 	struct timespec wall_time;             /* Wall clock time (REALTIME) */
-	struct timespec op_time;               /* Timestamp of the last operation to prevent duplicates */
 	
 	/* Scanning profiles */
 	profile_t *profiles;                   /* Head of list of scanning profiles */
 	
 	/* Execution state */
-	bool executing;                        /* Flag indicating command is currently executing on this path */
+	bool executing;                        /* Weather command is currently executing */
 	pthread_mutex_t mutex;                 /* Resource-level mutex */
 
 	/* Deferred events queue */
@@ -73,6 +74,7 @@ typedef struct resource {
 	struct timespec batch_start;           /* When current batch timeout began */
 	struct timespec last_event;            /* Timestamp of most recent event */
 	
+	/* Linked list management */
 	struct resource *next;                 /* Next resource in the hash bucket */
 } resource_t;
 
@@ -91,13 +93,13 @@ typedef struct subscription {
 	uint32_t magic;                        /* Magic number for corruption detection */
 	resource_t *resource;                  /* Back-pointer to the parent resource */
 	watchref_t watchref;                   /* Watch reference for this subscription */
-
+	
 	/* Command tracking */
 	time_t command_time;                   /* When a command was last triggered */
 	
 	/* Profile association */
 	profile_t *profile;                    /* The scanning profile this subscription belongs to */
-
+	
 	/* Linkage for all subscriptions under the same profile */
 	struct subscription *next;             /* Next subscription for the same profile */
 } subscription_t;

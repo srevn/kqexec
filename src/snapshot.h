@@ -7,9 +7,6 @@
 
 #include "config.h"
 
-/* Forward declarations */
-typedef struct watch watch_t;
-
 /* Single file/directory entry in a snapshot */
 typedef struct entry {
 	char *path;                            /* Relative path from snapshot root */
@@ -58,7 +55,7 @@ void diff_destroy(diff_t *diff);
 char *diff_list(const diff_t *diff, bool basename_only, const char *change_type);
 diff_t *diff_copy(const diff_t *source);
 
-/* Individual change type string lists for new placeholders */
+/* Individual change type string lists for placeholders */
 char *diff_created(const diff_t *diff, bool basename_only);
 char *diff_deleted(const diff_t *diff, bool basename_only);
 char *diff_renamed(const diff_t *diff, bool basename_only);

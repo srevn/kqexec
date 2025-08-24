@@ -154,9 +154,10 @@ kqexec.conf.sample:
 	@echo "[Configuration]" > $@
 	@echo "# Monitor system config files" >> $@
 	@echo "directory = /usr/local/etc" >> $@
-	@echo "events = CONTENT" >> $@
+	@echo "events = STRUCTURE" >> $@
 	@echo "command = logger -p daemon.notice \"Configuration changed in %p\"" >> $@
 	@echo "log_output = false" >> $@
+	@echo "complexity = 0.7" >> $@
 	@echo "buffer_output = false" >> $@
 	@echo "recursive = true" >> $@
 	@echo "hidden = false" >> $@
@@ -176,7 +177,7 @@ ifeq ($(UNAME_S),Darwin)
 else
 	@echo "directory = /home/user/.config" >> $@
 endif
-	@echo "events = CONTENT,STRUCTURE,METADATA" >> $@
+	@echo "events = STRUCTURE,CONTENT,METADATA" >> $@
 	@echo "command = logger -p user.notice \"User configuration changed in %p\"" >> $@
 	@echo "recursive = true" >> $@
 	@echo "hidden = true" >> $@
@@ -190,7 +191,8 @@ else
 	@echo "directory = /home/user/projects" >> $@
 	@echo "command = /home/user/scripts/build-deploy.sh" >> $@
 endif
-	@echo "events = CONTENT,STRUCTURE" >> $@
+	@echo "events = STRUCTURE,CONTENT" >> $@
+	@echo "batch_timeout = 15000" >> $@
 	@echo "environment = true" >> $@
 	@echo "log_output = true" >> $@
 	@echo "recursive = true" >> $@

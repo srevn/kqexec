@@ -20,16 +20,23 @@ typedef struct task {
 
 /* Thread pool structure */
 typedef struct threads {
+	/* Worker threads */
 	pthread_t threads[MAX_WORKER_THREADS]; /* Worker thread handles */
-	task_t *queue_head;                    /* Head of work queue */
-	task_t *queue_tail;                    /* Tail of work queue */
+	int thread_count;                      /* Number of active threads */
+	
+	/* Work queue */
 	int queue_size;                        /* Current queue size */
 	int active_tasks;                      /* Number of tasks currently executing */
-	int thread_count;                      /* Number of active threads */
-	bool shutdown;                         /* Shutdown flag */
+	task_t *queue_head;                    /* Head of work queue */
+	task_t *queue_tail;                    /* Tail of work queue */
+	
+	/* Synchronization */
 	pthread_mutex_t queue_mutex;           /* Queue access mutex */
 	pthread_cond_t work_available;         /* Work available condition */
 	pthread_cond_t work_done;              /* Work completion condition */
+	
+	/* Control */
+	bool shutdown;                         /* Shutdown flag */
 } threads_t;
 
 /* Thread pool function prototypes */

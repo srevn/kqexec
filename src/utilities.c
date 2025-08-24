@@ -165,7 +165,7 @@ double complexity_sensitivity(double complexity, int change_level) {
 
 /* Calculate temporary file threshold based on complexity (0.2s-5.0s range)
  * Higher complexity = higher threshold = more patient with recent file changes
- * Baseline: complexity 1.0 = threshold 1.0s (current hardcoded value) */
+ * Baseline: complexity 1.0 = threshold 1.0s (current default) */
 double complexity_temporary(double complexity) {
 	if (complexity <= 0.0) complexity = 1.0;
 

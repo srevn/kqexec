@@ -12,11 +12,11 @@
 #include "resource.h"
 
 /* Monitor configuration */
-#define MAX_WATCHES 128
-#define MAX_PATH_LEN 1024
-#define MAX_CHECKS_FAILED 3
-#define MAX_EVENTS 64
-#define GRAVEYARD_SECONDS 5
+#define MAX_WATCHES 128                    /* Maximum number of simultaneous watches */
+#define MAX_PATH_LEN 1024                  /* Maximum length for filesystem paths */
+#define MAX_CHECKS_FAILED 3                /* Maximum consecutive validation failures */
+#define MAX_EVENTS 64                      /* Maximum number of incoming events to process */
+#define GRAVEYARD_SECONDS 5                /* Time to wait before cleaning up stale watchers */
 
 /* Watched file/directory information */
 typedef struct watcher {
@@ -42,31 +42,31 @@ typedef struct monitor {
 	int kq;                                /* Kqueue descriptor */
 	config_t *config;                      /* Configuration */
 	mapper_t *mapper;                      /* FD -> Watcher mapping */
-	resources_t *resources;                /* Resource table for this monitor */
 	registry_t *registry;                  /* Watch registry */
+	resources_t *resources;                /* Resource table for this monitor */
 	graveyard_t graveyard;                 /* Graveyard for stale items */
-
+	
 	/* Watch tracking */
-	watcher_t **watches;                   /* Array of watch information */
 	int num_watches;                       /* Number of watches */
-
+	watcher_t **watches;                   /* Array of watch information */
+	
 	/* Pending watches for non-existent paths */
-	pending_t **pending;                   /* Array of pending watch information */
 	int num_pending;                       /* Number of pending watches */
-
+	pending_t **pending;                   /* Array of pending watch information */
+	
 	/* Queue for delayed events */
 	queue_t *check_queue;                  /* Queued checks queue */
 	struct delayed *delayed_events;        /* Array of delayed events */
 	int delayed_count;                     /* Current number of delayed events */
 	int delayed_capacity;                  /* Allocated capacity */
-
+	
 	/* Control flags & config */
 	bool running;                          /* Monitor running flag */
 	bool reload;                           /* Flag to indicate reload requested */
 	char *config_path;                     /* Copy of config file path for reloading */
-
+	
 	/* Observers for watcher cleanups */
-	observer_t monitor_observer;           /* Observer registration for direct watcher cleanup */
+	observer_t monitor_observer;           /* Observer registration for watcher cleanup */
 	observer_t pending_observer;           /* Observer registration for pending cleanup */
 } monitor_t;
 

@@ -3,10 +3,6 @@
 
 #include <stdbool.h>
 
-/* Forward declarations */
-struct watcher;
-struct tracker;
-
 /* A node in a linked list for watchers that share a file descriptor */
 typedef struct watcher_node {
 	struct watcher *watcher;               /* The watcher instance */
@@ -20,7 +16,7 @@ typedef struct map_entry {
 		MAP_TYPE_TRACKER,                  /* Fine-grained file tracker */
 		MAP_TYPE_WATCHER                   /* Coarse-grained directory/path watcher */
 	} type;
-
+	
 	union {
 		struct tracker *tracker;           /* Used for MAP_TYPE_TRACKER */
 		watcher_node_t *watchers;          /* Head of linked list for MAP_TYPE_WATCHER */

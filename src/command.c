@@ -221,10 +221,10 @@ static bool command_update(char **result, const char *placeholder, const char *v
 }
 
 /* Substitutes placeholders in the command string:
- * %created: List of created items
- * %deleted: List of deleted items
- * %renamed: List of renamed items (format: old -> new)
- * %modified: List of modified items
+ * %created: List of created items (newline-separated)
+ * %deleted: List of deleted items (newline-separated)
+ * %renamed: List of renamed items (format: old -> new, newline-separated)
+ * %modified: List of modified files (newline-separated)
  * %p: Path where the event occurred
  * %n: Filename (for files) or subdirectory name (for directories) which triggered the event
  * %d: Directory containing the path that triggered the event
