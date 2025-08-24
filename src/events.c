@@ -693,10 +693,10 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 							event_t event;
 							memset(&event, 0, sizeof(event));
 							event.path = watcher->path;
-								event.type = flags_to_filter(events[i].fflags, kind);
-								event.time = *time;
-								clock_gettime(CLOCK_REALTIME, &event.wall_time);
-								event.user_id = getuid();
+							event.type = flags_to_filter(events[i].fflags, kind);
+							event.time = *time;
+							clock_gettime(CLOCK_REALTIME, &event.wall_time);
+							event.user_id = getuid();
 
 							log_message(DEBUG, "Event: path=%s, flags=0x%x -> type=%s (watch: %s)", watcher->path,
 										events[i].fflags, filter_to_string(event.type), watch->name);
@@ -995,8 +995,8 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 		return false;
 	}
 
-	/* Check debounce/deferral logic */
-	if (stability_ready(monitor, subscription, optype, command_get_debounce_time())) {
+	/* Check cooldown/deferral logic */
+	if (stability_ready(monitor, subscription, optype, command_get_cooldown_time())) {
 		/* Execute command immediately (only for non-directory-content changes) */
 		event_t synthetic_event = {
 			.path = subscription->resource->path,
@@ -1038,7 +1038,7 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 			return false;
 		}
 	} else {
-		log_message(DEBUG, "Command for %s (optype %d) deferred or debounced",
+		log_message(DEBUG, "Command for %s (optype %d) deferred or blocked by cooldown",
 					subscription->resource->path, optype);
 		return false;
 	}

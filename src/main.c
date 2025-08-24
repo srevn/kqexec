@@ -24,7 +24,7 @@ static void print_usage(void) {
 	fprintf(stderr, "  -c, --config=FILE      Configuration file (default: %s)\n", DEFAULT_CONFIG_FILE);
 	fprintf(stderr, "  -d, --daemon           Run as daemon\n");
 	fprintf(stderr, "  -l, --loglevel=LEVEL   Set log level (0-7, default: 5)\n");
-	fprintf(stderr, "  -b, --debounce=MS      Set command debounce time in milliseconds (default: 500)\n");
+	fprintf(stderr, "  -r, --cooldown=MS      Set command cooldown time in milliseconds (default: 500)\n");
 	fprintf(stderr, "  -h, --help             Print this help message\n");
 }
 
@@ -59,11 +59,11 @@ int main(int argc, char *argv[]) {
 		{"config", required_argument, 0, 'c'},
 		{"daemon", no_argument, 0, 'd'},
 		{"loglevel", required_argument, 0, 'l'},
-		{"debounce", required_argument, 0, 'b'},
+		{"cooldown", required_argument, 0, 'r'},
 		{"help", no_argument, 0, 'h'},
 		{0, 0, 0, 0}};
 
-	while ((c = getopt_long(argc, argv, "c:dl:b:h", long_options, &option_index)) != -1) {
+	while ((c = getopt_long(argc, argv, "c:dl:r:h", long_options, &option_index)) != -1) {
 		switch (c) {
 			case 'c':
 				config_path = optarg;
@@ -78,8 +78,8 @@ int main(int argc, char *argv[]) {
 					return EXIT_FAILURE;
 				}
 				break;
-			case 'b':
-				command_debounce_time(atoi(optarg));
+			case 'r':
+				command_cooldown_time(atoi(optarg));
 				break;
 			case 'h':
 				print_usage();

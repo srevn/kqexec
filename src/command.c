@@ -28,8 +28,8 @@ static threads_t *command_threads = NULL;
 /* Maximum length of command */
 #define MAX_CMD_LEN 4096
 
-/* Debounce time in milliseconds */
-static int debounce_ms = DEFAULT_DEBOUNCE_TIME_MS;
+/* Cooldown time in milliseconds */
+static int cooldown_ms = DEFAULT_COOLDOWN_TIME_MS;
 
 /* Initialize command subsystem */
 bool command_init(threads_t *threads) {
@@ -53,16 +53,16 @@ bool command_init(threads_t *threads) {
 	return true;
 }
 
-/* Set debounce time */
-void command_debounce_time(int milliseconds) {
+/* Set cooldown time */
+void command_cooldown_time(int milliseconds) {
 	if (milliseconds >= 0) {
-		debounce_ms = milliseconds;
-		log_message(INFO, "Command debounce time set to %d ms", debounce_ms);
+		cooldown_ms = milliseconds;
+		log_message(INFO, "Command cooldown time set to %d ms", cooldown_ms);
 	}
 }
 
-/* Get debounce time */
-int command_get_debounce_time(void) { return debounce_ms; }
+/* Get cooldown time */
+int command_get_cooldown_time(void) { return cooldown_ms; }
 
 /* Shell-escape a single path by wrapping in single quotes */
 static char *command_escape(const char *path) {

@@ -15,7 +15,7 @@ A lightweight file and directory monitoring utility for FreeBSD and macOS that u
 - **File and Directory Exclusion**: Flexible pattern-based exclusion of files and directories from monitoring using glob syntax
 - **Hidden File Support**: Optional monitoring of hidden files and directories (starting with a dot)
 - **Resource-Based Event Processing**: Tracks filesystem resources and their scanning profiles to detect meaningful changes
-- **Command Debouncing**: Prevent command execution flooding when many events occur rapidly
+- **Command Cooldown**: Prevent command execution flooding when many events occur rapidly
 - **Placeholder Substitution**: Dynamic command generation based on event details
 - **Environment Variable Injection**: Event context provided to commands when enabled
 - **Feedback Loop Prevention**: Filters out self-generated events and establishes a new baseline after command execution
@@ -76,7 +76,7 @@ kqexec [options]
 - `-c, --config=FILE` : Configuration file (default: /usr/local/etc/kqexec.conf)
 - `-d, --daemon` : Run as daemon
 - `-l, --loglevel=LEVEL` : Set log level (0-7, default: 5)
-- `-b, --debounce=MS` : Set command debounce time in milliseconds (default: 500)
+- `-r, --cooldown=MS` : Set command cooldown time in milliseconds (default: 500)
 - `-h, --help` : Display help message
 
 ### Configuration File
@@ -295,19 +295,15 @@ launchctl kill SIGHUP gui/$(id -u)/com.kqexec.daemon
 
 ## Advanced Features
 
-#### Command Debouncing
+#### Command Cooldown
 
-To prevent flooding when many events occur in rapid succession, kqexec implements command debouncing based on resource state. This ensures the same command won't be executed more frequently than the debounce period.
+To prevent flooding when many events occur in rapid succession, kqexec implements a command cooldown mechanism. This rate limit applies per-watch, ensuring the same command won't be executed more frequently than the cooldown period while maintaining accurate baselines when changes occur.
 
-Adjust the debounce period with the `-b` option:
+Adjust the cooldown period with the `-r` option:
 
 ```sh
-kqexec -b 1000  # Set debounce period to 1000ms (1 second)
+kqexec -r 10000  # Set cooldown period to 10000ms (10 seconds)
 ```
-
-Different operations can have different debounce periods based on their importance:
-- Critical operations like file creation/deletion use shorter debounce times
-- Less critical operations like attribute changes use the full debounce time
 
 #### Hidden File Monitoring
 

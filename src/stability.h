@@ -52,7 +52,7 @@ subscription_t *stability_entry(monitor_t *monitor, check_t *check);
 void stability_queue(monitor_t *monitor, subscription_t *subscription);
 void stability_delay(monitor_t *monitor, check_t *check, subscription_t *root, struct timespec *current_time, long required_quiet);
 bool stability_quiet(monitor_t *monitor, subscription_t *root, struct timespec *current_time, long required_quiet);
-bool stability_ready(monitor_t *monitor, subscription_t *subscription, optype_t optype, int base_debounce_ms);
+bool stability_ready(monitor_t *monitor, subscription_t *subscription, optype_t optype, int cooldown_ms);
 
 /* Directory stability verification */
 bool stability_scan(monitor_t *monitor, subscription_t *root, const char *path, stats_t *stats_out);

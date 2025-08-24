@@ -64,8 +64,8 @@ subscription_t *stability_root(monitor_t *monitor, subscription_t *subscription)
 	return resources_subscription(monitor->resources, monitor->registry, watch->path, subscription->watchref, ENTITY_DIRECTORY);
 }
 
-/* Determine if a command should be executed based on operation type and debouncing */
-bool stability_ready(monitor_t *monitor, subscription_t *subscription, optype_t optype, int base_debounce_ms) {
+/* Determine if a command should be executed based on operation type and cooldown */
+bool stability_ready(monitor_t *monitor, subscription_t *subscription, optype_t optype, int cooldown_ms) {
 	if (!subscription) return false;
 
 	struct timespec current_time;
@@ -100,36 +100,23 @@ bool stability_ready(monitor_t *monitor, subscription_t *subscription, optype_t 
 		return false; /* Decision happens later */
 	}
 
-	/* Standard time-based debounce for non-directory-content operations */
+	/* Standard time-based cooldown for non-directory-content operations */
 	long elapsed_command = (current_time.tv_sec - subscription->command_time) * 1000;
 
-	/* Adjust debounce based on operation type */
-	int effective_debounce_ms = base_debounce_ms;
-	switch (optype) {
-		case OP_FILE_DELETED:
-		case OP_DIR_DELETED:
-		case OP_FILE_CREATED:
-		case OP_DIR_CREATED:
-			effective_debounce_ms = base_debounce_ms > 0 ? base_debounce_ms / 4 : 0; /* Shorter debounce */
-			break;
-		case OP_FILE_CONTENT_CHANGED:
-			effective_debounce_ms = base_debounce_ms > 0 ? base_debounce_ms / 2 : 0; /* Medium debounce */
-			break;
-		default: /* METADATA, RENAME etc. use default */
-			break;
-	}
-	if (effective_debounce_ms < 0) effective_debounce_ms = 0;
+	/* Use consistent cooldown period for all operations */
+	if (cooldown_ms < 0) cooldown_ms = 0;
 
-	log_message(DEBUG, "Debounce check for %s: %ld ms elapsed, %d ms required",
-				subscription->resource->path, elapsed_command, effective_debounce_ms);
+	log_message(DEBUG, "Cooldown check for %s: %ld ms elapsed, %d ms required", subscription->resource->path,
+				elapsed_command, cooldown_ms);
 
 	/* Check if enough time has passed or if it's the first command */
-	if (elapsed_command >= effective_debounce_ms || subscription->command_time == 0) {
-		log_message(DEBUG, "Debounce check passed for %s, command allowed", subscription->resource->path);
+	if (elapsed_command >= cooldown_ms || subscription->command_time == 0) {
+		log_message(DEBUG, "Cooldown check passed for %s, command allowed", subscription->resource->path);
 		return true;
 	}
 
-	log_message(DEBUG, "Command execution debounced for %s", subscription->resource->path);
+	/* Command blocked by cooldown */
+	log_message(DEBUG, "Command execution blocked by cooldown for %s", subscription->resource->path);
 	return false;
 }
 
@@ -645,11 +632,21 @@ bool stability_execute(monitor_t *monitor, check_t *check, subscription_t *root,
 			continue;
 		}
 
+		/* Check cooldown before executing command */
+		long elapsed_command = (current_time->tv_sec - subscription->command_time) * 1000;
+		int cooldown_ms = command_get_cooldown_time();
+		if (cooldown_ms > 0 && elapsed_command < cooldown_ms && subscription->command_time != 0) {
+			log_message(DEBUG, "Command execution blocked by cooldown for %s (watch: %s), resetting baseline",
+						check->path, watch->name);
+			stability_reset(monitor, root);
+			continue; /* Skip this command execution */
+		}
+
 		/* Execute command */
 		log_message(INFO, "Executing queued command for %s (watch: %s)", check->path, watch->name);
 		if (command_execute(monitor, check->watchrefs[i], &synthetic_event, true)) {
 			executed_count++;
-			/* Update the specific subscription's command time for debouncing purposes */
+			/* Update the specific subscription's command time for cooldown purposes */
 			subscription->command_time = current_time->tv_sec;
 		} else {
 			log_message(WARNING, "Command execution failed for %s (watch: %s)", check->path, watch->name);
