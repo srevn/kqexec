@@ -59,6 +59,80 @@ static watcher_t *pending_watcher(monitor_t *monitor, const char *target_path, w
 	return NULL;
 }
 
+/* Check if a path is reasonable for monitoring */
+static bool pending_reasonable(const char *path) {
+	if (!path) {
+		log_message(DEBUG, "Path validation failed: NULL path");
+		return false;
+	}
+
+	size_t path_len = strlen(path);
+
+	/* Reject empty paths */
+	if (path_len == 0) {
+		log_message(DEBUG, "Path validation failed: empty path");
+		return false;
+	}
+
+	/* Reject root directory */
+	if (strcmp(path, "/") == 0) {
+		log_message(WARNING, "Path validation failed: cannot monitor root directory");
+		return false;
+	}
+
+	/* Reject excessively long paths */
+	if (path_len > 4096) { /* PATH_MAX is typically 4096 */
+		log_message(WARNING, "Path validation failed: path too long (%zu bytes): %s", path_len, path);
+		return false;
+	}
+
+	/* Reject paths that are too shallow and avoid critical system directories */
+	int slash_count = 0;
+	size_t len = strlen(path);
+	size_t effective_len = len;
+
+	if (len > 1 && path[len - 1] == '/') {
+		effective_len = len - 1;
+	}
+
+	for (size_t i = 0; i < effective_len; i++) {
+		if (path[i] == '/') slash_count++;
+	}
+
+	/* Must have at least 2 path components (e.g., "/home/user", not just "/usr") */
+	if (slash_count < 2) {
+		log_message(WARNING, "Path validation failed: path too shallow for safe monitoring: %s", path);
+		return false;
+	}
+
+	/* Check for potentially problematic system directories */
+	static const char *system_prefixes[] = {
+		"/proc/", "/sys/", "/dev/", "/tmp/",
+		NULL};
+
+	for (int i = 0; system_prefixes[i]; i++) {
+		if (strncmp(path, system_prefixes[i], strlen(system_prefixes[i])) == 0) {
+			log_message(WARNING, "Path validation failed: system directory not recommended: %s", path);
+			return false;
+		}
+	}
+
+	/* Verify path accessibility */
+	struct stat info;
+	if (stat(path, &info) != 0) {
+		log_message(DEBUG, "Path validation failed: cannot access path: %s (%s)", path, strerror(errno));
+		return false;
+	}
+
+	/* Must be a directory for parent monitoring */
+	if (!S_ISDIR(info.st_mode)) {
+		log_message(DEBUG, "Path validation failed: not a directory: %s", path);
+		return false;
+	}
+
+	return true;
+}
+
 /* Find the deepest existing parent directory of a path */
 static char *pending_parent(const char *target_path) {
 	if (!target_path) return NULL;
@@ -66,9 +140,20 @@ static char *pending_parent(const char *target_path) {
 	char *test_path = strdup(target_path);
 	if (!test_path) return NULL;
 
+	char *deepest_valid = NULL;
+
+	/* Walk up the directory tree to find the deepest existing directory */
 	while (strlen(test_path) > 1) {
 		if (pending_directory(test_path)) {
-			return test_path;
+			/* Found an existing directory - validate if it's reasonable for monitoring */
+			if (pending_reasonable(test_path)) {
+				deepest_valid = strdup(test_path);
+				break;
+			} else {
+				/* Directory exists but is not reasonable for monitoring */
+				log_message(WARNING, "Found existing parent '%s' for target '%s', but it's not suitable for monitoring",
+							test_path, target_path);
+			}
 		}
 
 		char *last_slash = strrchr(test_path, '/');
@@ -76,15 +161,15 @@ static char *pending_parent(const char *target_path) {
 		*last_slash = '\0';
 	}
 
-	/* If we are here, the only parent could be "/" */
-	if (pending_directory("/")) {
-		/* Disallow watching "/" as a fallback for a non-existent path */
-		log_message(WARNING, "Pending watch creation for '%s' failed, parent path is root",
-					target_path);
+	free(test_path);
+
+	if (!deepest_valid) {
+		log_message(WARNING, "No suitable parent directory found for pending watch: %s", target_path);
+	} else {
+		log_message(DEBUG, "Found suitable parent '%s' for target '%s'", deepest_valid, target_path);
 	}
 
-	free(test_path);
-	return NULL;
+	return deepest_valid;
 }
 
 /* Extract next path component */
@@ -228,6 +313,16 @@ char **glob_scan(const char *pattern, int *count) {
 
 	for (size_t i = 0; i < glob_result.gl_pathc; i++) {
 		matches[i] = strdup(glob_result.gl_pathv[i]);
+		if (!matches[i]) {
+			log_message(ERROR, "Failed to allocate memory for glob match");
+			for (size_t j = 0; j < i; j++) {
+				free(matches[j]);
+			}
+			free(matches);
+			globfree(&glob_result);
+			*count = 0;
+			return NULL;
+		}
 	}
 
 	globfree(&glob_result);
