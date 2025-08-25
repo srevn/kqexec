@@ -323,6 +323,7 @@ config_t *config_create(void) {
 	}
 
 	/* Set default values */
+	config->socket_path = NULL;
 	config->daemon_mode = false;
 	config->syslog_level = NOTICE;
 
@@ -336,6 +337,7 @@ void config_destroy(config_t *config) {
 	}
 
 	free(config->config_path);
+	free(config->socket_path);
 	free(config);
 }
 

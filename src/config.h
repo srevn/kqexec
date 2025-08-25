@@ -72,6 +72,7 @@ typedef enum section {
 /* Global configuration structure */
 typedef struct config {
 	char *config_path;                     /* Path to config file */
+	char *socket_path;                     /* Path to control socket */
 	bool daemon_mode;                      /* Run as daemon */
 	int syslog_level;                      /* Syslog verbosity */
 } config_t;

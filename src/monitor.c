@@ -261,7 +261,7 @@ monitor_t *monitor_create(config_t *config, registry_t *registry) {
 	monitor->delayed_capacity = 0;
 
 	/* Initialize control server */
-	monitor->server = server_create(NULL); /* Use default socket path */
+	monitor->server = server_create(config->socket_path); /* Use configured socket path or default */
 	if (!monitor->server) {
 		log_message(WARNING, "Failed to create control server, continuing without socket control");
 	}
@@ -1013,9 +1013,19 @@ bool monitor_reload(monitor_t *monitor) {
 		return false;
 	}
 
-	/* Copy daemon mode and log level from existing config */
+	/* Copy daemon mode, log level, and socket path from existing config */
 	new_config->daemon_mode = old_config->daemon_mode;
 	new_config->syslog_level = old_config->syslog_level;
+	if (old_config->socket_path) {
+		new_config->socket_path = strdup(old_config->socket_path);
+		if (!new_config->socket_path) {
+			log_message(ERROR, "Failed to allocate memory for socket path during reload");
+			config_destroy(new_config);
+			registry_destroy(new_registry);
+			close(new_kq);
+			return false;
+		}
+	}
 
 	/* Parse configuration file */
 	if (!config_parse(new_config, new_registry, monitor->config_path)) {

@@ -28,18 +28,19 @@ typedef enum operation_mode {
 static void print_usage(void) {
 	fprintf(stderr, "Usage: %s [daemon options] | [client options]\n", program_name);
 	fprintf(stderr, "\nDaemon mode options:\n");
-	fprintf(stderr, "  -c, --config=FILE      Configuration file (default: %s)\n", DEFAULT_CONFIG_FILE);
-	fprintf(stderr, "  -d, --daemon           Run as daemon\n");
-	fprintf(stderr, "  -l, --loglevel=LEVEL   Set log level (0-7, default: 5)\n");
-	fprintf(stderr, "  -r, --cooldown=MS      Set command cooldown time in milliseconds (default: 500)\n");
-	fprintf(stderr, "  -h, --help             Print this help message\n");
+	fprintf(stderr, "  -c, --config=FILE        Configuration file (default: %s)\n", DEFAULT_CONFIG_FILE);
+	fprintf(stderr, "  -d, --daemon             Run as daemon\n");
+	fprintf(stderr, "  -l, --loglevel=LEVEL     Set log level (0-7, default: 5)\n");
+	fprintf(stderr, "  -r, --cooldown=MS        Set command cooldown time in milliseconds (default: 500)\n");
+	fprintf(stderr, "  -s, --socket-path=PATH   Socket path for control interface (default: /tmp/kqexec.sock)\n");
+	fprintf(stderr, "  -h, --help               Print this help message\n");
 	fprintf(stderr, "\nClient mode options:\n");
-	fprintf(stderr, "  --disable=WATCHES      Disable specific watches (comma-separated)\n");
-	fprintf(stderr, "  --enable=WATCHES       Enable specific watches (comma-separated)\n");
-	fprintf(stderr, "  --status               Show status of watches\n");
-	fprintf(stderr, "  --list                 List all configured watches\n");
-	fprintf(stderr, "  --reload               Reload configuration\n");
-	fprintf(stderr, "  --socket=PATH          Socket path to connect to (default: /tmp/kqexec.sock)\n");
+	fprintf(stderr, "  --disable=WATCHES        Temporarily disable specified watches (comma-separated)\n");
+	fprintf(stderr, "  --enable=WATCHES         Re-enable previously disabled watches (comma-separated)\n");
+	fprintf(stderr, "  --status                 Show status of current watches\n");
+	fprintf(stderr, "  --list                   List all configured watches\n");
+	fprintf(stderr, "  --reload                 Reload configuration from file\n");
+	fprintf(stderr, "  --socket=PATH            Socket path to connect to (default: /tmp/kqexec.sock)\n");
 }
 
 /* Main function */
@@ -52,6 +53,7 @@ int main(int argc, char *argv[]) {
 	int option_index = 0;
 	int loglevel = NOTICE;
 	const char *config_path = NULL;
+	const char *socket_path = NULL;
 
 	/* Get program name */
 	program_name = strrchr(argv[0], '/');
@@ -75,6 +77,7 @@ int main(int argc, char *argv[]) {
 		{"daemon", no_argument, 0, 'd'},
 		{"loglevel", required_argument, 0, 'l'},
 		{"cooldown", required_argument, 0, 'r'},
+		{"socket-path", required_argument, 0, 's'},
 		{"help", no_argument, 0, 'h'},
 
 		/* Client options */
@@ -90,7 +93,7 @@ int main(int argc, char *argv[]) {
 	operation_t mode = MODE_DAEMON;
 	options_t options = {0};
 
-	while ((c = getopt_long(argc, argv, "c:dl:r:h", long_options, &option_index)) != -1) {
+	while ((c = getopt_long(argc, argv, "c:dl:r:s:h", long_options, &option_index)) != -1) {
 		switch (c) {
 			case 'c':
 				config_path = optarg;
@@ -107,6 +110,9 @@ int main(int argc, char *argv[]) {
 				break;
 			case 'r':
 				command_cooldown_time(atoi(optarg));
+				break;
+			case 's':
+				socket_path = optarg;
 				break;
 			case 'h':
 				print_usage();
@@ -194,6 +200,18 @@ int main(int argc, char *argv[]) {
 	/* Set daemon mode */
 	config->daemon_mode = daemon_mode;
 	config->syslog_level = loglevel;
+
+	/* Set socket path if provided */
+	if (socket_path) {
+		config->socket_path = strdup(socket_path);
+		if (!config->socket_path) {
+			log_message(ERROR, "Failed to allocate memory for socket path");
+			config_destroy(config);
+			registry_destroy(registry);
+			log_close();
+			return EXIT_FAILURE;
+		}
+	}
 
 	/* Parse configuration file */
 	if (!config_parse(config, registry, config_path)) {
