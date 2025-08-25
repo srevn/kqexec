@@ -1,6 +1,7 @@
 #include "pending.h"
 
 #include <dirent.h>
+#include <errno.h>
 #include <fnmatch.h>
 #include <glob.h>
 #include <stdio.h>
@@ -627,8 +628,12 @@ static void process_glob(monitor_t *monitor, pending_t *pending) {
 	char **matches = NULL;
 	int match_count = 0;
 
-	/* Get the source watch to check exclude patterns */
+	/* Get the source watch to check exclude patterns and target type */
 	watch_t *watch = registry_get(monitor->registry, pending->watchref);
+	if (!watch) {
+		log_message(WARNING, "Could not find source watch for pending glob processing.");
+		return;
+	}
 
 	if (!glob_find(pending->current_parent, watch, pending->next_component, &matches, &match_count)) {
 		return;
@@ -641,8 +646,25 @@ static void process_glob(monitor_t *monitor, pending_t *pending) {
 		/* For each matching file, check if it completes the pattern */
 		for (int m = 0; m < match_count; m++) {
 			if (glob_matches(matches[m], pending->glob_pattern)) {
-				pending_promote(monitor, pending, matches[m]);
+				/* This match completes the full glob pattern, check its type before promoting */
+				struct stat info;
+				if (stat(matches[m], &info) != 0) {
+					log_message(WARNING, "Failed to stat glob match %s: %s", matches[m], strerror(errno));
+					continue;
+				}
+
+				bool type_match = (S_ISDIR(info.st_mode) && watch->target == WATCH_DIRECTORY) ||
+								  (S_ISREG(info.st_mode) && watch->target == WATCH_FILE);
+
+				if (type_match) {
+					pending_promote(monitor, pending, matches[m]);
+				} else {
+					log_message(DEBUG, "Skipping promotion of glob match %s: type mismatch (expected %s, found %s)",
+								matches[m], watch->target == WATCH_DIRECTORY ? "directory" : "file",
+								S_ISDIR(info.st_mode) ? "directory" : "file");
+				}
 			} else {
+				/* This is an intermediate match, must be a directory to continue */
 				pending_proxy(monitor, pending, matches[m]);
 			}
 		}
