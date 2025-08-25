@@ -1080,8 +1080,36 @@ bool monitor_reload(monitor_t *monitor) {
 		return false;
 	}
 
+	/* Handle control server recreation during reload */
+	server_t *old_server = monitor->server;
+	server_t *new_server = NULL;
+
 	/* Switch to new kqueue first */
 	monitor->kq = new_kq;
+
+	/* Stop old server first to free up the socket */
+	if (old_server) {
+		server_stop(old_server);
+		server_destroy(old_server);
+		monitor->server = NULL;
+	}
+
+	/* Create and start new control server */
+	new_server = server_create(new_config->socket_path);
+
+	if (new_server) {
+		if (server_start(new_server, new_kq)) {
+			monitor->server = new_server;
+			log_message(DEBUG, "Control server successfully recreated during reload");
+		} else {
+			log_message(ERROR, "Failed to start new control server during reload");
+			server_destroy(new_server);
+			monitor->server = NULL;
+		}
+	} else {
+		log_message(ERROR, "Failed to create new control server during reload");
+		monitor->server = NULL;
+	}
 
 	/* Switch configuration and registry */
 	monitor->config = new_config;
