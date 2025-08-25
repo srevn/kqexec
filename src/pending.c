@@ -150,7 +150,7 @@ static bool glob_find(const char *parent_path, const watch_t *watch, const char 
 			/* Check against exclude patterns */
 			char *full_path = pending_join(parent_path, dirent->d_name);
 			if (full_path) {
-				if (!watch || !config_exclude_match(watch, full_path)) {
+				if (!watch || !exclude_match(watch, full_path)) {
 					count++;
 				}
 				free(full_path);
@@ -185,7 +185,7 @@ static bool glob_find(const char *parent_path, const watch_t *watch, const char 
 			char *full_path = pending_join(parent_path, dirent->d_name);
 			if (full_path) {
 				/* Check against exclude patterns */
-				if (!watch || !config_exclude_match(watch, full_path)) {
+				if (!watch || !exclude_match(watch, full_path)) {
 					(*matches)[index++] = full_path;
 				} else {
 					free(full_path); /* Free excluded path */
@@ -314,7 +314,7 @@ static watchref_t proxy_create(monitor_t *monitor, const watch_t *watch, watchre
 	watchref_t proxyref = registry_add(monitor->registry, proxy_watch);
 	if (!watchref_valid(proxyref)) {
 		log_message(ERROR, "Failed to add proxy watch to registry");
-		config_destroy_watch(proxy_watch);
+		watch_destroy(proxy_watch);
 		return WATCHREF_INVALID;
 	}
 
@@ -459,7 +459,7 @@ static void pending_promote(monitor_t *monitor, pending_t *pending, const char *
 	}
 
 	/* Clone watch for resolved path */
-	watch_t *resolved_watch = config_clone_watch(pending_watch);
+	watch_t *resolved_watch = watch_clone(pending_watch);
 	if (!resolved_watch) {
 		log_message(ERROR, "Failed to clone watch for resolved path: %s", matched_path);
 		return;
@@ -473,12 +473,12 @@ static void pending_promote(monitor_t *monitor, pending_t *pending, const char *
 
 	if (!resolved_watch->path || !resolved_watch->source_pattern) {
 		log_message(ERROR, "Failed to allocate strings for resolved watch");
-		config_destroy_watch(resolved_watch);
+		watch_destroy(resolved_watch);
 		return;
 	}
 
 	/* Add dynamic watch to config */
-	if (!config_add_watch(monitor->config, monitor->registry, resolved_watch)) {
+	if (!watch_add(monitor->config, monitor->registry, resolved_watch)) {
 		log_message(ERROR, "Failed to add dynamic watch to config: %s", matched_path);
 		/* Clean up manually since config addition failed */
 		free(resolved_watch->name);
@@ -523,7 +523,7 @@ static void pending_promote(monitor_t *monitor, pending_t *pending, const char *
 		log_message(WARNING, "Failed to promote glob match: %s from pattern %s", matched_path,
 					pending->glob_pattern);
 		/* Remove from config since monitor add failed */
-		config_remove_watch(monitor->config, monitor->registry, resolvedref);
+		watch_remove(monitor->config, monitor->registry, resolvedref);
 	}
 }
 

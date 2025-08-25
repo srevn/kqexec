@@ -86,7 +86,7 @@ map_entry_t *mapper_get(mapper_t *mapper, int fd) {
 }
 
 /* Add a file tracker to the map */
-bool mapper_add_tracker(mapper_t *mapper, int fd, struct tracker *tracker) {
+bool map_tracker(mapper_t *mapper, int fd, struct tracker *tracker) {
 	if (!mapper || fd < 0 || !tracker) return false;
 	if (!mapper_resize(mapper, fd)) return false;
 
@@ -100,7 +100,7 @@ bool mapper_add_tracker(mapper_t *mapper, int fd, struct tracker *tracker) {
 }
 
 /* Remove a file tracker from the map */
-void mapper_remove_tracker(mapper_t *mapper, int fd) {
+void unmap_tracker(mapper_t *mapper, int fd) {
 	if (!mapper || fd < 0 || fd >= mapper->size) return;
 
 	if (mapper->entries[fd].type == MAP_TYPE_TRACKER) {
@@ -112,7 +112,7 @@ void mapper_remove_tracker(mapper_t *mapper, int fd) {
 }
 
 /* Add a directory watcher to the map */
-bool mapper_add_watcher(mapper_t *mapper, int fd, struct watcher *watcher) {
+bool map_watcher(mapper_t *mapper, int fd, struct watcher *watcher) {
 	if (!mapper || fd < 0 || !watcher) return false;
 	if (!mapper_resize(mapper, fd)) return false;
 
@@ -139,7 +139,7 @@ bool mapper_add_watcher(mapper_t *mapper, int fd, struct watcher *watcher) {
 }
 
 /* Remove a directory watcher from the map */
-bool mapper_remove_watcher(mapper_t *mapper, int fd, struct watcher *watcher) {
+bool unmap_watcher(mapper_t *mapper, int fd, struct watcher *watcher) {
 	if (!mapper || fd < 0 || fd >= mapper->size || !watcher) return false;
 
 	map_entry_t *entry = &mapper->entries[fd];

@@ -84,14 +84,14 @@ bool config_events(const char *events_str, filter_t *events);
 const char *filter_to_string(filter_t filter);
 
 /* Watch management functions */
-bool config_add_watch(config_t *config, registry_t *registry, watch_t *watch);
-void config_destroy_watch(watch_t *watch);
-watch_t *config_clone_watch(const watch_t *source);
-bool config_remove_watch(config_t *config, registry_t *registry, watchref_t watchref);
+bool watch_add(config_t *config, registry_t *registry, watch_t *watch);
+void watch_destroy(watch_t *watch);
+watch_t *watch_clone(const watch_t *source);
+bool watch_remove(config_t *config, registry_t *registry, watchref_t watchref);
 
 /* Exclude pattern functions */
-bool config_exclude_add(watch_t *watch, const char *pattern);
-bool config_exclude_match(const watch_t *watch, const char *path);
+bool exclude_add(watch_t *watch, const char *pattern);
+bool exclude_match(const watch_t *watch, const char *path);
 
 /* Snapshot detection functions */
 bool config_snapshot(const watch_t *watch);

@@ -134,7 +134,7 @@ bool scanner_scan(const char *dir_path, const watch_t *watch, stats_t *stats) {
 
 		if (S_ISREG(info.st_mode)) {
 			/* Check if file is excluded (by pattern or hidden status) */
-			if (hidden_item || (watch && config_exclude_match(watch, path))) {
+			if (hidden_item || (watch && exclude_match(watch, path))) {
 				/* Excluded file, update the counters and checksums */
 				stats->excluded_files++;
 				stats->excluded_size += info.st_size;
@@ -155,7 +155,7 @@ bool scanner_scan(const char *dir_path, const watch_t *watch, stats_t *stats) {
 			}
 		} else if (S_ISDIR(info.st_mode)) {
 			/* Check if directory is excluded (by pattern or hidden status) */
-			if (hidden_item || (watch && config_exclude_match(watch, path))) {
+			if (hidden_item || (watch && exclude_match(watch, path))) {
 				/* Excluded directory, update the counter */
 				stats->excluded_dirs++;
 				continue;
@@ -351,7 +351,7 @@ bool scanner_stable(monitor_t *monitor, const watch_t *watch, const char *dir_pa
 		/* Look for temporary files or recent changes */
 		if (S_ISREG(info.st_mode)) {
 			/* Check if file is excluded (by pattern or hidden status) */
-			if (hidden_item || (watch && config_exclude_match(watch, path))) {
+			if (hidden_item || (watch && exclude_match(watch, path))) {
 				/* Excluded file, update the counters and checksums */
 				stats->excluded_files++;
 				stats->excluded_size += info.st_size;
@@ -382,7 +382,7 @@ bool scanner_stable(monitor_t *monitor, const watch_t *watch, const char *dir_pa
 			}
 		} else if (S_ISDIR(info.st_mode)) {
 			/* Check if directory is excluded (by pattern or hidden status) */
-			if (hidden_item || (watch && config_exclude_match(watch, path))) {
+			if (hidden_item || (watch && exclude_match(watch, path))) {
 				/* Excluded directory, update the counter */
 				stats->excluded_dirs++;
 				continue;

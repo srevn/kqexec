@@ -37,11 +37,11 @@ void mapper_destroy(mapper_t *mapper);
 map_entry_t* mapper_get(mapper_t *mapper, int fd);
 
 /* Directory watcher management */
-bool mapper_add_watcher(mapper_t *mapper, int fd, struct watcher *watcher);
-bool mapper_remove_watcher(mapper_t *mapper, int fd, struct watcher *watcher);
+bool map_watcher(mapper_t *mapper, int fd, struct watcher *watcher);
+bool unmap_watcher(mapper_t *mapper, int fd, struct watcher *watcher);
 
 /* File tracker management */
-bool mapper_add_tracker(mapper_t *mapper, int fd, struct tracker *tracker);
-void mapper_remove_tracker(mapper_t *mapper, int fd);
+bool map_tracker(mapper_t *mapper, int fd, struct tracker *tracker);
+void unmap_tracker(mapper_t *mapper, int fd);
 
 #endif /* MAPPER_H */

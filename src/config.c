@@ -167,9 +167,9 @@ const char *filter_to_string(filter_t event) {
 }
 
 /* Add a watch entry to the configuration */
-bool config_add_watch(config_t *config, registry_t *registry, watch_t *watch) {
+bool watch_add(config_t *config, registry_t *registry, watch_t *watch) {
 	if (!config || !watch || !registry) {
-		log_message(ERROR, "Invalid parameters to config_add_watch");
+		log_message(ERROR, "Invalid parameters to watch_add");
 		return false;
 	}
 
@@ -208,7 +208,7 @@ bool config_add_watch(config_t *config, registry_t *registry, watch_t *watch) {
 }
 
 /* Remove a watch entry from the configuration */
-bool config_remove_watch(config_t *config, registry_t *registry, watchref_t watchref) {
+bool watch_remove(config_t *config, registry_t *registry, watchref_t watchref) {
 	if (!config || !registry || !watchref_valid(watchref)) {
 		return false;
 	}
@@ -226,7 +226,7 @@ bool config_remove_watch(config_t *config, registry_t *registry, watchref_t watc
 }
 
 /* Free a watch entry */
-void config_destroy_watch(watch_t *watch) {
+void watch_destroy(watch_t *watch) {
 	if (watch == NULL) {
 		return;
 	}
@@ -248,7 +248,7 @@ void config_destroy_watch(watch_t *watch) {
 }
 
 /* Create a deep copy of a watch structure */
-watch_t *config_clone_watch(const watch_t *source) {
+watch_t *watch_clone(const watch_t *source) {
 	if (source == NULL) {
 		return NULL;
 	}
@@ -307,7 +307,7 @@ watch_t *config_clone_watch(const watch_t *source) {
 	if ((source->name && !clone->name) || (source->path && !clone->path) || (source->command && !clone->command) ||
 		(source->source_pattern && !clone->source_pattern) || exclude_failure) {
 		log_message(ERROR, "Failed to allocate strings for watch clone");
-		config_destroy_watch(clone);
+		watch_destroy(clone);
 		return NULL;
 	}
 
@@ -442,28 +442,28 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 				/* Validate the previous watch entry */
 				if (current_watch->path == NULL) {
 					log_message(ERROR, "Missing path in section [%s]", current_watch->name);
-					config_destroy_watch(current_watch);
+					watch_destroy(current_watch);
 					fclose(fp);
 					return false;
 				}
 
 				if (current_watch->filter == EVENT_NONE) {
 					log_message(ERROR, "Missing or invalid events in section [%s]", current_watch->name);
-					config_destroy_watch(current_watch);
+					watch_destroy(current_watch);
 					fclose(fp);
 					return false;
 				}
 
 				if (current_watch->command == NULL) {
 					log_message(ERROR, "Missing command in section [%s]", current_watch->name);
-					config_destroy_watch(current_watch);
+					watch_destroy(current_watch);
 					fclose(fp);
 					return false;
 				}
 
 				/* Add the watch entry to the configuration */
-				if (!config_add_watch(config, registry, current_watch)) {
-					config_destroy_watch(current_watch);
+				if (!watch_add(config, registry, current_watch)) {
+					watch_destroy(current_watch);
 					fclose(fp);
 					return false;
 				}
@@ -507,7 +507,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 			key = strtok(str, "=");
 			if (key == NULL) {
 				log_message(ERROR, "Malformed key-value pair at line %d", line_number);
-				config_destroy_watch(current_watch);
+				watch_destroy(current_watch);
 				fclose(fp);
 				return false;
 			}
@@ -515,7 +515,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 			value = strtok(NULL, "");
 			if (value == NULL) {
 				log_message(ERROR, "Missing value at line %d", line_number);
-				config_destroy_watch(current_watch);
+				watch_destroy(current_watch);
 				fclose(fp);
 				return false;
 			}
@@ -527,7 +527,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 				current_watch->target = WATCH_FILE;
 				current_watch->path = config_canonize(value, line_number);
 				if (current_watch->path == NULL) {
-					config_destroy_watch(current_watch);
+					watch_destroy(current_watch);
 					fclose(fp);
 					return false;
 				}
@@ -535,7 +535,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 				current_watch->target = WATCH_DIRECTORY;
 				current_watch->path = config_canonize(value, line_number);
 				if (current_watch->path == NULL) {
-					config_destroy_watch(current_watch);
+					watch_destroy(current_watch);
 					fclose(fp);
 					return false;
 				}
@@ -543,7 +543,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 				if (!config_events(value, &current_watch->filter)) {
 					log_message(ERROR, "Invalid value for %s at line %d: %s", key,
 								line_number, value);
-					config_destroy_watch(current_watch);
+					watch_destroy(current_watch);
 					fclose(fp);
 					return false;
 				}
@@ -555,7 +555,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 				} else {
 					log_message(ERROR, "Invalid value for %s at line %d: %s", key,
 								line_number, value);
-					config_destroy_watch(current_watch);
+					watch_destroy(current_watch);
 					fclose(fp);
 					return false;
 				}
@@ -569,7 +569,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 				} else {
 					log_message(ERROR, "Invalid value for %s at line %d: %s", key,
 								line_number, value);
-					config_destroy_watch(current_watch);
+					watch_destroy(current_watch);
 					fclose(fp);
 					return false;
 				}
@@ -581,7 +581,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 				} else {
 					log_message(ERROR, "Invalid value for %s at line %d: %s", key,
 								line_number, value);
-					config_destroy_watch(current_watch);
+					watch_destroy(current_watch);
 					fclose(fp);
 					return false;
 				}
@@ -593,7 +593,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 				} else {
 					log_message(ERROR, "Invalid value for %s at line %d: %s", key,
 								line_number, value);
-					config_destroy_watch(current_watch);
+					watch_destroy(current_watch);
 					fclose(fp);
 					return false;
 				}
@@ -605,7 +605,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 				} else {
 					log_message(ERROR, "Invalid value for %s at line %d: %s", key,
 								line_number, value);
-					config_destroy_watch(current_watch);
+					watch_destroy(current_watch);
 					fclose(fp);
 					return false;
 				}
@@ -614,7 +614,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 				if (complexity_value < 0.1 || complexity_value > 5.0) {
 					log_message(ERROR, "Invalid %s value at line %d: %s, must be between 0.1 and 5.0",
 								key, line_number, value);
-					config_destroy_watch(current_watch);
+					watch_destroy(current_watch);
 					fclose(fp);
 					return false;
 				} else {
@@ -628,7 +628,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 				} else {
 					log_message(ERROR, "Invalid value for %s at line %d: %s", key,
 								line_number, value);
-					config_destroy_watch(current_watch);
+					watch_destroy(current_watch);
 					fclose(fp);
 					return false;
 				}
@@ -637,7 +637,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 				if (batch_timeout_value < 0) {
 					log_message(ERROR, "Invalid %s value at line %d: %s (must be >= 0)", key,
 								line_number, value);
-					config_destroy_watch(current_watch);
+					watch_destroy(current_watch);
 					fclose(fp);
 					return false;
 				} else {
@@ -648,7 +648,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 				if (processing_delay_value < 0) {
 					log_message(ERROR, "Invalid %s value at line %d: %s (must be >= 0)", key,
 								line_number, value);
-					config_destroy_watch(current_watch);
+					watch_destroy(current_watch);
 					fclose(fp);
 					return false;
 				} else {
@@ -659,7 +659,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 				if (patterns == NULL) {
 					log_message(ERROR, "Failed to allocate memory for exclude patterns at line %d",
 								line_number);
-					config_destroy_watch(current_watch);
+					watch_destroy(current_watch);
 					fclose(fp);
 					return false;
 				}
@@ -668,11 +668,11 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 				while (token != NULL) {
 					char *trimmed_pattern = config_trim(token);
 					if (strlen(trimmed_pattern) > 0) {
-						if (!config_exclude_add(current_watch, trimmed_pattern)) {
+						if (!exclude_add(current_watch, trimmed_pattern)) {
 							log_message(ERROR, "Failed to add exclude pattern '%s' at line %d",
 										trimmed_pattern, line_number);
 							free(patterns);
-							config_destroy_watch(current_watch);
+							watch_destroy(current_watch);
 							fclose(fp);
 							return false;
 						}
@@ -691,28 +691,28 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 		/* Validate the watch entry */
 		if (current_watch->path == NULL) {
 			log_message(ERROR, "Missing path in section [%s]", current_watch->name);
-			config_destroy_watch(current_watch);
+			watch_destroy(current_watch);
 			fclose(fp);
 			return false;
 		}
 
 		if (current_watch->filter == EVENT_NONE) {
 			log_message(ERROR, "Missing or invalid events in section [%s]", current_watch->name);
-			config_destroy_watch(current_watch);
+			watch_destroy(current_watch);
 			fclose(fp);
 			return false;
 		}
 
 		if (current_watch->command == NULL) {
 			log_message(ERROR, "Missing command in section [%s]", current_watch->name);
-			config_destroy_watch(current_watch);
+			watch_destroy(current_watch);
 			fclose(fp);
 			return false;
 		}
 
 		/* Add the watch entry to the configuration */
-		if (!config_add_watch(config, registry, current_watch)) {
-			config_destroy_watch(current_watch);
+		if (!watch_add(config, registry, current_watch)) {
+			watch_destroy(current_watch);
 			fclose(fp);
 			return false;
 		}
@@ -773,7 +773,7 @@ bool config_snapshot(const watch_t *watch) {
 }
 
 /* Add an exclude pattern to a watch */
-bool config_exclude_add(watch_t *watch, const char *pattern) {
+bool exclude_add(watch_t *watch, const char *pattern) {
 	if (!watch || !pattern || strlen(pattern) == 0) {
 		return false;
 	}
@@ -798,7 +798,7 @@ bool config_exclude_add(watch_t *watch, const char *pattern) {
 }
 
 /* Check if a path matches any exclude pattern in a watch */
-bool config_exclude_match(const watch_t *watch, const char *path) {
+bool exclude_match(const watch_t *watch, const char *path) {
 	if (!watch || !path || watch->num_exclude == 0 || !watch->exclude) {
 		return false;
 	}

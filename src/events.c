@@ -916,7 +916,7 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 	/* Check if a monitored file is excluded by patterns */
 	if (kind == ENTITY_FILE) {
 		/* For file events, check if the file itself is excluded */
-		if (config_exclude_match(watch, event->path)) {
+		if (exclude_match(watch, event->path)) {
 			log_message(DEBUG, "Skipping excluded file: %s", event->path);
 			return false;
 		}

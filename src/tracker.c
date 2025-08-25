@@ -112,7 +112,7 @@ static bool tracker_remove(monitor_t *monitor, trackers_t *registry, tracker_t *
 
 			/* Remove from fd mapping */
 			if (tracker->fd >= 0) {
-				mapper_remove_tracker(monitor->mapper, tracker->fd);
+				unmap_tracker(monitor->mapper, tracker->fd);
 				close(tracker->fd);
 			}
 
@@ -147,7 +147,7 @@ bool tracker_monitor(const watch_t *watch, const char *file_path) {
 	if (!((watch->filter & EVENT_CONTENT) || watch->filter == EVENT_ALL)) return false;
 
 	/* Check exclusion patterns */
-	if (config_exclude_match(watch, file_path)) return false;
+	if (exclude_match(watch, file_path)) return false;
 
 	/* Check hidden file policy */
 	if (!watch->hidden) {
@@ -363,7 +363,7 @@ bool tracker_add(monitor_t *monitor, resource_t *resource, const char *file_path
 	registry->buckets[bucket] = new_tracker;
 
 	/* Add to the central mapper */
-	if (!mapper_add_tracker(monitor->mapper, fd, new_tracker)) {
+	if (!map_tracker(monitor->mapper, fd, new_tracker)) {
 		log_message(WARNING, "Failed to add tracker for %s (fd: %d) to mapper", file_path, fd);
 		/* Cleanup logic might be needed here if this fails */
 	}
@@ -550,7 +550,7 @@ void tracker_cleanup(monitor_t *monitor, trackers_t *registry) {
 
 				/* Remove from fd mapping */
 				if (tracker->fd >= 0) {
-					mapper_remove_tracker(monitor->mapper, tracker->fd);
+					unmap_tracker(monitor->mapper, tracker->fd);
 					close(tracker->fd);
 				}
 
@@ -619,7 +619,7 @@ void directory_cleanup(monitor_t *monitor, trackers_t *registry, const char *dir
 
 				/* Remove from fd mapping */
 				if (tracker->fd >= 0) {
-					mapper_remove_tracker(monitor->mapper, tracker->fd);
+					unmap_tracker(monitor->mapper, tracker->fd);
 					close(tracker->fd);
 				}
 
@@ -683,7 +683,7 @@ void tracker_purge(monitor_t *monitor, trackers_t *registry, watchref_t watchref
 
 					/* Remove from fd mapping */
 					if (tracker->fd >= 0) {
-						mapper_remove_tracker(monitor->mapper, tracker->fd);
+						unmap_tracker(monitor->mapper, tracker->fd);
 						close(tracker->fd);
 					}
 

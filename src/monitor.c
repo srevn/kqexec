@@ -59,7 +59,7 @@ static void watcher_cleanup(monitor_t *monitor, watcher_t *watcher, bool is_stal
 			}
 		} else {
 			/* For active watchers use mapper */
-			if (monitor && monitor->mapper && mapper_remove_watcher(monitor->mapper, watcher->wd, watcher)) {
+			if (monitor && monitor->mapper && unmap_watcher(monitor->mapper, watcher->wd, watcher)) {
 				close(watcher->wd);
 			}
 		}
@@ -107,7 +107,7 @@ static bool watcher_add(monitor_t *monitor, watcher_t *watcher) {
 
 	/* Add the watcher to the mapper for fast event lookup */
 	if (monitor->mapper) {
-		mapper_add_watcher(monitor->mapper, watcher->wd, watcher);
+		map_watcher(monitor->mapper, watcher->wd, watcher);
 	}
 
 	return true;
@@ -538,7 +538,7 @@ bool monitor_tree(monitor_t *monitor, const char *dir_path, watchref_t watchref)
 	}
 
 	/* Skip excluded directories */
-	if (config_exclude_match(watch, dir_path)) {
+	if (exclude_match(watch, dir_path)) {
 		log_message(DEBUG, "Skipping excluded directory: %s", dir_path);
 		return true; /* Not an error, just skipping */
 	}
@@ -592,7 +592,7 @@ bool monitor_tree(monitor_t *monitor, const char *dir_path, watchref_t watchref)
 		}
 
 		/* Skip excluded paths */
-		if (config_exclude_match(watch, path)) {
+		if (exclude_match(watch, path)) {
 			continue;
 		}
 
@@ -757,9 +757,9 @@ bool monitor_setup(monitor_t *monitor) {
 	if (!config_watch) return true;
 
 	/* Try to add to config structure */
-	if (!config_add_watch(monitor->config, monitor->registry, config_watch)) {
+	if (!watch_add(monitor->config, monitor->registry, config_watch)) {
 		log_message(WARNING, "Failed to add config watch to config structure");
-		config_destroy_watch(config_watch);
+		watch_destroy(config_watch);
 		return true;
 	}
 
@@ -787,7 +787,7 @@ bool monitor_setup(monitor_t *monitor) {
 
 	if (!monitor_add(monitor, config_watchref, false)) {
 		log_message(WARNING, "Failed to add config file watch for %s", monitor->config_path);
-		config_remove_watch(monitor->config, monitor->registry, config_watchref);
+		watch_remove(monitor->config, monitor->registry, config_watchref);
 	} else {
 		log_message(DEBUG, "Added config file watch for %s", monitor->config_path);
 	}
@@ -1033,9 +1033,9 @@ bool monitor_reload(monitor_t *monitor) {
 	/* Add config file watch to the new config */
 	watch_t *config_watch = monitor_config(monitor->config_path);
 	if (config_watch) {
-		if (!config_add_watch(new_config, new_registry, config_watch)) {
+		if (!watch_add(new_config, new_registry, config_watch)) {
 			log_message(WARNING, "Failed to add config watch to new config structure");
-			config_destroy_watch(config_watch);
+			watch_destroy(config_watch);
 		}
 	}
 
@@ -1287,7 +1287,7 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 
 			/* Remove dynamic watch from config to prevent resurrection during reload */
 			if (target_watch && target_watch->is_dynamic) {
-				config_remove_watch(monitor->config, monitor->registry, watcher->watchref);
+				watch_remove(monitor->config, monitor->registry, watcher->watchref);
 				i = monitor->num_watches;
 				list_modified = true;
 				continue;

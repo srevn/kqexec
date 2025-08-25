@@ -62,7 +62,7 @@ void registry_destroy(registry_t *registry) {
 	/* Free all active watches */
 	for (uint32_t i = 0; i < registry->capacity; i++) {
 		if (registry->watches[i]) {
-			config_destroy_watch(registry->watches[i]);
+			watch_destroy(registry->watches[i]);
 		}
 	}
 
@@ -343,7 +343,7 @@ void registry_garbage(registry_t *registry) {
 			watch_t *watch = registry->watches[i];
 			log_message(DEBUG, "Garbage collecting watch '%s' (watch_id=%u)", watch->name, i);
 
-			config_destroy_watch(watch);
+			watch_destroy(watch);
 			registry->watches[i] = NULL;
 			freed_count++;
 		}
