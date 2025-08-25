@@ -579,11 +579,8 @@ static void pending_promote(monitor_t *monitor, pending_t *pending, const char *
 	/* Add dynamic watch to config */
 	if (!watch_add(monitor->config, monitor->registry, resolved_watch)) {
 		log_message(ERROR, "Failed to add dynamic watch to config: %s", matched_path);
-		/* Clean up manually since config addition failed */
-		free(resolved_watch->name);
-		free(resolved_watch->path);
-		free(resolved_watch->command);
-		free(resolved_watch);
+		/* Clean up avoid memory leaks */
+		watch_destroy(resolved_watch);
 		return;
 	}
 
