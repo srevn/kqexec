@@ -150,22 +150,37 @@ static void monitor_deactivation(watchref_t watchref, void *context) {
 		}
 	}
 
-	/* Scan monitor watchers for the deactivated watch */
+	/* Scan monitor watchers for the deactivated watch and move them to the graveyard */
 	for (int i = monitor->num_watches - 1; i >= 0; i--) {
 		watcher_t *watcher = monitor->watches[i];
 		if (watcher && watchref_equal(watcher->watchref, watchref)) {
-			log_message(DEBUG, "Removing watcher for deactivated watch: %s (fd %d)",
+			log_message(DEBUG, "Retiring watcher for deactivated watch: %s (fd %d)",
 						watcher->path, watcher->wd);
 
-			/* Remove the watcher from the array and destroy it */
-			watcher_destroy(monitor, watcher, false);
+			/* Remove from the mapper to prevent further events */
+			unmap_watcher(monitor->mapper, watcher->wd, watcher);
 
-			/* Shift remaining watchers down */
+			/* Add to graveyard */
+			watcher_t **new_stale_watches = realloc(monitor->graveyard.stale_watches,
+													(monitor->graveyard.num_stale + 1) * sizeof(watcher_t *));
+			if (new_stale_watches) {
+				monitor->graveyard.stale_watches = new_stale_watches;
+				monitor->graveyard.stale_watches[monitor->graveyard.num_stale++] = watcher;
+			} else {
+				log_message(ERROR, "Failed to allocate memory for graveyard, leaking watcher");
+			}
+
+			/* Remove the watcher from the active list by shifting */
 			for (int j = i; j < monitor->num_watches - 1; j++) {
 				monitor->watches[j] = monitor->watches[j + 1];
 			}
 			monitor->num_watches--;
 		}
+	}
+
+	/* Set retirement time to ensure graveyard is processed on the next poll */
+	if (monitor->graveyard.num_stale > 0) {
+		monitor->graveyard.retirement_time = time(NULL);
 	}
 }
 

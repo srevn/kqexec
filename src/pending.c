@@ -304,6 +304,7 @@ static watchref_t proxy_create(monitor_t *monitor, const watch_t *watch, watchre
 	proxy_watch->path = strdup(parent_path);
 	proxy_watch->target = WATCH_DIRECTORY;
 	proxy_watch->filter = EVENT_STRUCTURE;
+	proxy_watch->enabled = true;
 	proxy_watch->command = NULL;
 	proxy_watch->is_dynamic = false;
 	proxy_watch->source_pattern = NULL;

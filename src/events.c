@@ -682,56 +682,74 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 
 			case MAP_TYPE_WATCHER:
 			{
+				/* Copy watchers to a temporary list */
+				watcher_t *watchers_copy[16];
+				int count = 0;
 				watcher_node_t *node = entry->ptr.watchers;
-				while (node) {
-					watcher_t *watcher = node->watcher;
+				while (node && count < 16) {
+					watchers_copy[count++] = node->watcher;
+					node = node->next;
+				}
+
+				for (int j = 0; j < count; j++) {
+					watcher_t *watcher = watchers_copy[j];
 					if (watcher) {
-						watch_t *watch = registry_get(monitor->registry, watcher->watchref);
-						if (watch) {
-							kind_t kind = (watch->target == WATCH_FILE) ? ENTITY_FILE : ENTITY_DIRECTORY;
+						/* Keep watchref before pending_process, as watcher may be freed during deactivation */
+						watchref_t savedref = watcher->watchref;
+						char *savedpath = strdup(watcher->path);
+						if (!savedpath) {
+							log_message(ERROR, "Failed to allocate memory for saved path");
+							continue;
+						}
 
-							event_t event;
-							memset(&event, 0, sizeof(event));
-							event.path = watcher->path;
-							event.type = flags_to_filter(events[i].fflags, kind);
-							event.time = *time;
-							clock_gettime(CLOCK_REALTIME, &event.wall_time);
-							event.user_id = getuid();
+						/* Process pending watches for any event that might create new paths */
+						if (monitor->num_pending > 0) {
+							pending_process(monitor, savedpath);
+						}
 
-							log_message(DEBUG, "Event: path=%s, flags=0x%x -> type=%s (watch: %s)", watcher->path,
-										events[i].fflags, filter_to_string(event.type), watch->name);
+						/* Re-fetch the watch to ensure it's still valid after pending_process */
+						watch_t *watch = registry_get(monitor->registry, savedref);
+						if (!watch) {
+							free(savedpath);
+							continue; /* Watch was deallocated */
+						}
 
-							/* Proactive validation for directory events */
-							if (watch->target == WATCH_DIRECTORY && (events[i].fflags & NOTE_WRITE)) {
-								if (validate) {
-									validate_add(validate, watcher->path);
-								}
-							}
+						kind_t kind = (watch->target == WATCH_FILE) ? ENTITY_FILE : ENTITY_DIRECTORY;
 
-							/* Keep watchref before pending_process, as watcher may be freed during deactivation */
-							watchref_t savedref = watcher->watchref;
+						event_t event;
+						memset(&event, 0, sizeof(event));
+						event.path = savedpath;
+						event.type = flags_to_filter(events[i].fflags, kind);
+						event.time = *time;
+						clock_gettime(CLOCK_REALTIME, &event.wall_time);
+						event.user_id = getuid();
 
-							/* Process pending watches for any event that might create new paths */
-							if (monitor->num_pending > 0) {
-								pending_process(monitor, watcher->path);
-							}
+						log_message(DEBUG, "Event: path=%s, flags=0x%x -> type=%s (watch: %s)", savedpath,
+									events[i].fflags, filter_to_string(event.type), watch->name);
 
-							/* Check if this watch has a processing delay configured */
-							if (watch->processing_delay > 0) {
-								/* Schedule the event for delayed processing */
-								events_delay(monitor, savedref, &event, kind);
-							} else {
-								/* Process the event immediately */
-								events_process(monitor, savedref, &event, kind, false);
-							}
-
-							/* Recreate file watch after rename or delete */
-							if (kind == ENTITY_FILE && (events[i].fflags & (NOTE_RENAME | NOTE_DELETE))) {
-								monitor_sync(monitor, watcher->path);
+						/* Proactive validation for directory events */
+						if (watch->target == WATCH_DIRECTORY && (events[i].fflags & NOTE_WRITE)) {
+							if (validate) {
+								validate_add(validate, savedpath);
 							}
 						}
+
+						/* Check if this watch has a processing delay configured */
+						if (watch->processing_delay > 0) {
+							/* Schedule the event for delayed processing */
+							events_delay(monitor, savedref, &event, kind);
+						} else {
+							/* Process the event immediately */
+							events_process(monitor, savedref, &event, kind, false);
+						}
+
+						/* Recreate file watch after rename or delete */
+						if (kind == ENTITY_FILE && (events[i].fflags & (NOTE_RENAME | NOTE_DELETE))) {
+							monitor_sync(monitor, savedpath);
+						}
+
+						free(savedpath);
 					}
-					node = node->next;
 				}
 				break;
 			}
