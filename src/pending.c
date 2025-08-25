@@ -37,12 +37,12 @@ static char *pending_join(const char *parent_path, const char *component) {
 	int component_len = strlen(component);
 	bool needs_slash = (parent_len > 0 && parent_path[parent_len - 1] != '/');
 
-	char *result = malloc(parent_len + (needs_slash ? 1 : 0) + component_len + 1);
+	int size = parent_len + (needs_slash ? 1 : 0) + component_len + 1;
+	char *result = malloc(size);
 	if (!result) return NULL;
 
-	strcpy(result, parent_path);
-	if (needs_slash) strcat(result, "/");
-	strcat(result, component);
+	/* Use snprintf for safer string construction */
+	snprintf(result, size, "%s%s%s", parent_path, needs_slash ? "/" : "", component);
 	return result;
 }
 
