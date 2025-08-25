@@ -583,6 +583,7 @@ void directory_cleanup(monitor_t *monitor, trackers_t *registry, const char *dir
 	if (!registry || !dir_path) return;
 
 	int removed_count = 0;
+	int path_len = strlen(dir_path);
 
 	for (size_t bucket_index = 0; bucket_index < registry->bucket_count; bucket_index++) {
 		tracker_t *tracker = registry->buckets[bucket_index];
@@ -590,27 +591,49 @@ void directory_cleanup(monitor_t *monitor, trackers_t *registry, const char *dir
 
 		while (tracker) {
 			tracker_t *next_tracker = tracker->next;
+			bool should_remove = false;
 
-			/* Remove from list */
-			if (previous_tracker) {
-				previous_tracker->next = next_tracker;
+			/* Check if this tracker's path is within the deleted directory */
+			if (tracker->path) {
+				/* Exact match (file with same path as directory - shouldn't happen but handle it) */
+				if (strcmp(tracker->path, dir_path) == 0) {
+					should_remove = true;
+				}
+				/* Check if tracker path is within the deleted directory */
+				else if (strncmp(tracker->path, dir_path, path_len) == 0) {
+					char next_char = tracker->path[path_len];
+					/* Must be followed by '/' to be a subdirectory/file within the directory */
+					if (next_char == '/') {
+						should_remove = true;
+					}
+				}
+			}
+
+			if (should_remove) {
+				/* Remove from list */
+				if (previous_tracker) {
+					previous_tracker->next = next_tracker;
+				} else {
+					registry->buckets[bucket_index] = next_tracker;
+				}
+
+				/* Remove from fd mapping */
+				if (tracker->fd >= 0) {
+					mapper_remove_tracker(monitor->mapper, tracker->fd);
+					close(tracker->fd);
+				}
+
+				/* Free memory */
+				free(tracker->path);
+				free(tracker->watchrefs);
+				free(tracker);
+
+				registry->total_count--;
+				removed_count++;
 			} else {
-				registry->buckets[bucket_index] = next_tracker;
+				/* Keep this tracker, advance previous pointer */
+				previous_tracker = tracker;
 			}
-
-			/* Remove from fd mapping */
-			if (tracker->fd >= 0) {
-				mapper_remove_tracker(monitor->mapper, tracker->fd);
-				close(tracker->fd);
-			}
-
-			/* Free memory */
-			free(tracker->path);
-			free(tracker->watchrefs);
-			free(tracker);
-
-			registry->total_count--;
-			removed_count++;
 
 			tracker = next_tracker;
 		}
