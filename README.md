@@ -21,6 +21,7 @@ A lightweight file and directory monitoring utility for FreeBSD and macOS that u
 - **Feedback Loop Prevention**: Filters out self-generated events and establishes a new baseline after command execution
 - **Directory Stability Verification**: Uses `stat()` to recursively verify directory stability before executing commands
 - **Configuration Hot-Reload**: Monitors the configuration file and automatically reloads when it changes
+- **Control Interface**: Runtime control via Unix socket for enabling/disabling watches and querying status
 - **Syslog Integration**: Comprehensive logging with configurable verbosity
 - **Daemon Mode**: Run as a background service
 
@@ -77,7 +78,37 @@ kqexec [options]
 - `-d, --daemon` : Run as daemon
 - `-l, --loglevel=LEVEL` : Set log level (0-7, default: 5)
 - `-r, --cooldown=MS` : Set command cooldown time in milliseconds (default: 500)
+- `-s, --socket-path=PATH` : Socket path for control interface (default: /tmp/kqexec.sock)
 - `-h, --help` : Display help message
+
+#### Control Commands
+
+When running as a daemon, kqexec provides a control interface for runtime management:
+
+- `--disable=WATCHES` : Temporarily disable specified watches (comma-separated names)
+- `--enable=WATCHES` : Re-enable previously disabled watches (comma-separated names)  
+- `--status` : Display current daemon and watch status
+- `--list` : List all configured watches
+- `--reload` : Reload configuration from file
+- `--socket=PATH` : Socket path to connect to (default: /tmp/kqexec.sock)
+
+Examples:
+```sh
+# Disable specific watches
+kqexec --disable "Web Content,Log File"
+
+# Enable all disabled watches  
+kqexec --enable "Web Content,Log File"
+
+# Check daemon status
+kqexec --status
+
+# List all configured watches
+kqexec --list
+
+# Reload configuration
+kqexec --reload
+```
 
 ### Configuration File
 
@@ -89,6 +120,7 @@ The configuration file uses an INI-like format with sections for each watch entr
 file = /path/to/file          # For monitoring a single file
 directory = /path/to/dir      # For monitoring a directory
 events = EVENT1,EVENT2        # Comma-separated list of events
+enabled = true                # Whether the watch is initially enabled (default: true)
 command = command to execute  # Command to run when events occur
 environment = false           # Whether to set KQ_* environment variables (default: false)
 processing_delay = 5000       # Delay in milliseconds before processing events (default: 0)
@@ -247,6 +279,7 @@ exclude = .git/*,node_modules/*,*.tmp
 6. **Sync files or folders**: Keep mirror of documents in multiple locations with rsync
 7. **Git workflow automation**: Use `batch_timeout` to handle git operations (clone, merge, checkout) that create many files rapidly
 8. **Build system integration**: Use `processing_delay` for individual file changes and `batch_timeout` for bulk operations
+9. **Runtime watch management**: Enable/disable watches based on system load or maintenance windows using the control interface
 
 ## Running as a Service
 
@@ -294,6 +327,17 @@ launchctl kill SIGHUP gui/$(id -u)/com.kqexec.daemon
 **Note:** kqexec automatically monitors changes to its configuration file and reloads when modified.
 
 ## Advanced Features
+
+#### Runtime Control Interface
+
+kqexec provides a Unix domain socket-based control interface for runtime management of watches. This allows you to:
+
+- **Enable/Disable watches**: Temporarily turn watches on or off without restarting the daemon
+- **Query status**: Check which watches are currently active or disabled  
+- **List watches**: View all configured watches and their current state
+- **Reload configuration**: Trigger a configuration reload without sending SIGHUP
+
+**Watch State Management**: Watches can be configured to start in a disabled state using `enabled = false` in the configuration, then selectively enabled via the control interface as needed.
 
 #### Command Cooldown
 
