@@ -79,7 +79,6 @@ char *control_format(const result_t *result);
 void control_cleanup(result_t *result);
 
 /* KV protocol utilities */
-bool kv_parse(const char *line, char **key, char **value);
 char *kv_value(const char *text, const char *key);
 char **kv_split(const char *value, const char *delimiter, int *count);
 

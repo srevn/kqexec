@@ -490,33 +490,6 @@ void control_cleanup(result_t *result) {
 	memset(result, 0, sizeof(result_t));
 }
 
-/* Parse a key=value line */
-bool kv_parse(const char *line, char **key, char **value) {
-	if (!line || !key || !value) return false;
-
-	*key = NULL;
-	*value = NULL;
-
-	char *equals = strchr(line, '=');
-	if (!equals) return false;
-
-	size_t key_len = equals - line;
-	*key = malloc(key_len + 1);
-	if (!*key) return false;
-
-	strncpy(*key, line, key_len);
-	(*key)[key_len] = '\0';
-
-	*value = strdup(equals + 1);
-	if (!*value) {
-		free(*key);
-		*key = NULL;
-		return false;
-	}
-
-	return true;
-}
-
 /* Get value for a specific key from KV text */
 char *kv_value(const char *text, const char *key) {
 	if (!text || !key) return NULL;
