@@ -646,12 +646,10 @@ static result_t process_enable(monitor_t *monitor, const char *command_text) {
 			/* Find the watch by name regardless of state */
 			watchref_t watchref = registry_find(monitor->registry, watch_names[i]);
 
-			if (watchref_valid(watchref)) {
-				if (monitor_activate(monitor, watchref)) {
-					enabled_count++;
-				}
+			if (monitor_activate(monitor, watchref)) {
+				enabled_count++;
 			} else {
-				log_message(WARNING, "Watch '%s' not found for enable command", watch_names[i]);
+				log_message(WARNING, "Watch '%s' not found or failed to enable", watch_names[i]);
 			}
 
 			free(watch_names[i]);

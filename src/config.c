@@ -547,6 +547,18 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 					fclose(fp);
 					return false;
 				}
+			} else if (strcasecmp(key, "enabled") == 0) {
+				if (strcasecmp(value, "true") == 0 || strcmp(value, "1") == 0) {
+					current_watch->enabled = true;
+				} else if (strcasecmp(value, "false") == 0 || strcmp(value, "0") == 0) {
+					current_watch->enabled = false;
+				} else {
+					log_message(ERROR, "Invalid value for %s at line %d: %s", key,
+								line_number, value);
+					config_destroy_watch(current_watch);
+					fclose(fp);
+					return false;
+				}
 			} else if (strcasecmp(key, "command") == 0) {
 				current_watch->command = strdup(value);
 			} else if (strcasecmp(key, "log_output") == 0 || strcasecmp(key, "log") == 0) {

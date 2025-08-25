@@ -605,9 +605,9 @@ bool monitor_add(monitor_t *monitor, watchref_t watchref, bool skip_pending) {
 	watch_t *watch = registry_get(monitor->registry, watchref);
 	if (monitor == NULL || !watch || watch->path == NULL) return false;
 
-	/* Check if watch is dynamically disabled */
+	/* Check if watch is disabled */
 	if (!watch->enabled) {
-		log_message(INFO, "Watch '%s' disabled via runtime control", watch->name ? watch->name : "unknown");
+		log_message(INFO, "Watch '%s' is disabled, skipping setup", watch->name ? watch->name : "unknown");
 		return true; /* Success but no monitoring */
 	}
 
@@ -669,10 +669,10 @@ static watch_t *monitor_config(const char *config_file_path) {
 	}
 
 	config_watch->name = strdup("__config_file__");
-	config_watch->enabled = true;
 	config_watch->path = strdup(config_file_path);
 	config_watch->target = WATCH_FILE;
 	config_watch->filter = EVENT_CONTENT;
+	config_watch->enabled = true;
 	config_watch->command = strdup("__config_reload__");
 	config_watch->log_output = false;
 	config_watch->buffer_output = false;
@@ -1360,54 +1360,56 @@ void monitor_stop(monitor_t *monitor) {
 bool monitor_activate(monitor_t *monitor, watchref_t watchref) {
 	if (!monitor || !watchref_valid(watchref)) return false;
 
-	/* Atomically attempt to transition from INACTIVE to ACTIVE state */
-	pthread_rwlock_wrlock(&monitor->registry->lock);
-	bool was_inactive = false;
+	watch_t *watch = registry_get(monitor->registry, watchref);
 
-	/* Defensive validation: bounds check, generation check, and state check */
-	if (watchref.watch_id < monitor->registry->capacity &&
-		monitor->registry->generations[watchref.watch_id] == watchref.generation &&
-		monitor->registry->states[watchref.watch_id] == WATCH_STATE_INACTIVE) {
-
-		monitor->registry->states[watchref.watch_id] = WATCH_STATE_ACTIVE;
-		monitor->registry->count++;
-		was_inactive = true;
-
-		log_message(DEBUG, "Transitioned watch (watch_id=%u, gen=%u) from INACTIVE to ACTIVE",
-					watchref.watch_id, watchref.generation);
+	/* If watch is already active and enabled, nothing to do */
+	if (watch && watch->enabled) {
+		log_message(DEBUG, "Watch '%s' is already active and enabled", watch->name);
+		return true;
 	}
-	pthread_rwlock_unlock(&monitor->registry->lock);
 
-	/* Handle different state cases */
-	if (!was_inactive) {
-		/* Check if watch is already active */
-		if (registry_valid(monitor->registry, watchref)) {
-			watch_t *watch = registry_get(monitor->registry, watchref);
-			if (watch) {
-				log_message(DEBUG, "Watch '%s' is already active", watch->name);
-				watch->enabled = true;
-				return true; /* Ensure it's marked as enabled and return success */
-			}
+	/* Watch might be inactive, try to transition it */
+	if (!watch) {
+		pthread_rwlock_wrlock(&monitor->registry->lock);
+		bool was_inactive = false;
+
+		/* Defensive validation: bounds check, generation check, and state check */
+		if (watchref.watch_id < monitor->registry->capacity &&
+			monitor->registry->generations[watchref.watch_id] == watchref.generation &&
+			monitor->registry->states[watchref.watch_id] == WATCH_STATE_INACTIVE) {
+
+			monitor->registry->states[watchref.watch_id] = WATCH_STATE_ACTIVE;
+			monitor->registry->count++;
+			was_inactive = true;
+
+			log_message(DEBUG, "Transitioned watch (watch_id=%u, gen=%u) from INACTIVE to ACTIVE",
+						watchref.watch_id, watchref.generation);
 		}
+		pthread_rwlock_unlock(&monitor->registry->lock);
 
 		/* Invalid reference, neither inactive nor active */
-		log_message(WARNING, "Cannot activate watch, invalid reference (watch_id=%u, gen=%u)",
-					watchref.watch_id, watchref.generation);
-		return false;
+		if (!was_inactive) {
+			log_message(WARNING, "Cannot activate watch, invalid reference (watch_id=%u, gen=%u)",
+						watchref.watch_id, watchref.generation);
+			return false;
+		}
+
+		/* Get the watch again now that it's active */
+		watch = registry_get(monitor->registry, watchref);
+		if (!watch) {
+			log_message(ERROR, "Watch reference became invalid after state transition");
+			return false;
+		}
 	}
 
-	/* Successfully transitioned from inactive - get watch and enable it */
-	watch_t *watch = registry_get(monitor->registry, watchref);
-	if (!watch) {
-		log_message(ERROR, "Watch reference became invalid after state transition");
-		return false;
-	}
-
+	/* Valid and active watch that is currently disabled */
 	watch->enabled = true;
 
 	/* Use the existing monitor_add function to set up monitoring */
 	if (!monitor_add(monitor, watchref, false)) {
 		log_message(ERROR, "Failed to set up monitoring for watch %s", watch->name ? watch->name : "unknown");
+		/* Rollback enabled flag on failure */
+		watch->enabled = false;
 		return false;
 	}
 
