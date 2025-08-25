@@ -627,6 +627,9 @@ static result_t process_disable(monitor_t *monitor, const char *command_text) {
 		char **watch_names = kv_split(watches_value, ",", &count);
 
 		int disabled_count = 0;
+		char disabled_names[512] = "";
+		int message_len = 0;
+
 		for (int i = 0; i < count; i++) {
 			/* Find the watch by name in the registry */
 			uint32_t num_watches = 0;
@@ -638,6 +641,13 @@ static result_t process_disable(monitor_t *monitor, const char *command_text) {
 				if (watch && watch->name && strcmp(watch->name, watch_names[i]) == 0) {
 					if (monitor_disable(monitor, watchrefs[j])) {
 						disabled_count++;
+						/* Add to disabled names list */
+						if (disabled_count > 1) {
+							message_len += snprintf(disabled_names + message_len,
+													sizeof(disabled_names) - message_len, ", ");
+						}
+						message_len += snprintf(disabled_names + message_len,
+												sizeof(disabled_names) - message_len, "%s", watch_names[i]);
 					}
 					found = true;
 					break;
@@ -654,9 +664,14 @@ static result_t process_disable(monitor_t *monitor, const char *command_text) {
 		free(watch_names);
 
 		result.success = true;
-		result.message = malloc(128);
+		result.message = malloc(256);
 		if (result.message) {
-			snprintf(result.message, 128, "Disabled %d watches", disabled_count);
+			if (disabled_count > 0) {
+				snprintf(result.message, 256, "Disabled %d watch%s: %s",
+						 disabled_count, (disabled_count == 1) ? "" : "es", disabled_names);
+			} else {
+				snprintf(result.message, 256, "No watches were disabled");
+			}
 		}
 	} else {
 		result.success = false;
@@ -680,12 +695,22 @@ static result_t process_enable(monitor_t *monitor, const char *command_text) {
 		char **watch_names = kv_split(watches_value, ",", &count);
 
 		int enabled_count = 0;
+		char enabled_names[512] = "";
+		int message_len = 0;
+
 		for (int i = 0; i < count; i++) {
 			/* Find the watch by name regardless of state */
 			watchref_t watchref = registry_find(monitor->registry, watch_names[i]);
 
 			if (monitor_activate(monitor, watchref)) {
 				enabled_count++;
+				/* Add to enabled names list */
+				if (enabled_count > 1) {
+					message_len += snprintf(enabled_names + message_len,
+											sizeof(enabled_names) - message_len, ", ");
+				}
+				message_len += snprintf(enabled_names + message_len,
+										sizeof(enabled_names) - message_len, "%s", watch_names[i]);
 			} else {
 				log_message(WARNING, "Watch '%s' not found or failed to enable", watch_names[i]);
 			}
@@ -695,9 +720,14 @@ static result_t process_enable(monitor_t *monitor, const char *command_text) {
 		free(watch_names);
 
 		result.success = true;
-		result.message = malloc(128);
+		result.message = malloc(256);
 		if (result.message) {
-			snprintf(result.message, 128, "Enabled %d watches", enabled_count);
+			if (enabled_count > 0) {
+				snprintf(result.message, 256, "Enabled %d watch%s: %s",
+						 enabled_count, (enabled_count == 1) ? "" : "es", enabled_names);
+			} else {
+				snprintf(result.message, 256, "No watches were enabled");
+			}
 		}
 	} else {
 		result.success = false;
@@ -862,34 +892,103 @@ static result_t process_list(monitor_t *monitor, const char *command_text) {
 
 	(void) command_text; /* Unused parameter */
 
+	registry_t *registry = monitor->registry;
+	if (!registry) {
+		result.success = false;
+		result.message = strdup("Invalid registry");
+		return result;
+	}
+
+	/* Build table format with header */
+	size_t message_size = 4096;
+	char *message = malloc(message_size);
+	if (!message) {
+		result.success = false;
+		result.message = strdup("Memory allocation failed");
+		return result;
+	}
+
+	/* Header line */
+	int written = snprintf(message, message_size,
+						   "%-20s %-44s %-24s %s\n",
+						   "NAME", "PATH", "EVENTS", "STATUS");
+
 	/* Get active watches from registry */
 	uint32_t num_watches = 0;
 	watchref_t *watchrefs = registry_active(monitor->registry, &num_watches);
 
-	result.success = true;
-	result.message = malloc(128);
-	if (result.message) {
-		snprintf(result.message, 128, "Found %u total watches", num_watches);
-	}
+	/* Build table with deduplication */
+	char processed_names[MAX_CLIENTS][256]; /* Track processed names for deduplication */
+	int processed_count = 0;
 
-	if (watchrefs && num_watches > 0) {
-		result.data_keys = malloc(num_watches * sizeof(char *));
-		result.data_values = malloc(num_watches * sizeof(char *));
+	/* Iterate through all active watches */
+	for (uint32_t i = 0; i < num_watches; i++) {
+		watch_t *watch = registry_get(monitor->registry, watchrefs[i]);
+		if (!watch || !watch->name) continue;
 
-		if (result.data_keys && result.data_values) {
-			int valid_count = 0;
-			for (uint32_t i = 0; i < num_watches; i++) {
-				watch_t *watch = registry_get(monitor->registry, watchrefs[i]);
-				if (watch && watch->name) {
-					result.data_keys[valid_count] = strdup("watch");
-					result.data_values[valid_count] = strdup(watch->name);
-					valid_count++;
-				}
+		/* Skip internal watches */
+		if (strncmp(watch->name, "__proxy_", 8) == 0) continue;
+		if (strcmp(watch->name, "__config_file__") == 0) continue;
+
+		/* Prevent duplicates */
+		bool duplicate = false;
+		for (int j = 0; j < processed_count; j++) {
+			if (strcmp(processed_names[j], watch->name) == 0) {
+				duplicate = true;
+				break;
 			}
-			result.data_count = valid_count;
 		}
-		free(watchrefs);
+		if (duplicate) continue;
+
+		/* Add to processed names list */
+		if (processed_count < MAX_CLIENTS) {
+			strncpy(processed_names[processed_count], watch->name, 255);
+			processed_names[processed_count][255] = '\0';
+			processed_count++;
+		}
+
+		/* Get status */
+		const char *status = watch->enabled ? "Active" : "Disabled";
+
+		/* Get event type string */
+		const char *events_str = filter_to_string(watch->filter);
+
+		/* Add watch to table */
+		if (written < (int) message_size - 256) {
+			/* Smart path truncation for display */
+			char display_path[41];
+			const char *path = watch->path ? watch->path : "N/A";
+
+			if (strlen(path) > 40) {
+				/* Truncate from the beginning, keep filename visible */
+				const char *filename = strrchr(path, '/');
+				if (filename && strlen(filename) < 35) {
+					snprintf(display_path, sizeof(display_path), "...%s", filename);
+				} else {
+					/* Just truncate and add ... */
+					strncpy(display_path, path, 37);
+					display_path[37] = '\0';
+					strcat(display_path, "...");
+				}
+			} else {
+				strncpy(display_path, path, 40);
+				display_path[40] = '\0';
+			}
+
+			written += snprintf(message + written, message_size - written,
+								"%-20s %-44s %-24s %s\n",
+								watch->name,
+								display_path,
+								events_str,
+								status);
+		}
 	}
+
+	/* Free watchrefs */
+	free(watchrefs);
+
+	result.success = true;
+	result.message = message;
 
 	return result;
 }
