@@ -191,8 +191,6 @@ bool tracker_register(monitor_t *monitor, tracker_t *tracker) {
 	}
 
 	tracker->tracker_state = TRACKER_ACTIVE;
-	log_message(DEBUG, "Registered one-shot file tracker for %s (fd %d)",
-				tracker->path, tracker->fd);
 
 	return true;
 }
@@ -370,8 +368,6 @@ bool tracker_add(monitor_t *monitor, resource_t *resource, const char *file_path
 
 	registry->total_count++;
 
-	log_message(DEBUG, "Added file tracker for %s (fd: %d, total: %d)",
-				file_path, fd, registry->total_count);
 	return true;
 }
 

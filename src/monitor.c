@@ -796,8 +796,6 @@ bool monitor_setup(monitor_t *monitor) {
 	if (monitor->server) {
 		if (!server_start(monitor->server, monitor->kq)) {
 			log_message(WARNING, "Failed to start control server, socket control will be unavailable");
-		} else {
-			log_message(INFO, "Control server started successfully");
 		}
 	}
 

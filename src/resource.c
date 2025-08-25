@@ -531,7 +531,7 @@ subscription_t *profile_subscribe(profile_t *profile, resource_t *resource, watc
 	profile->subscriptions = subscription;
 	profile->subscription_count++;
 
-	log_message(DEBUG, "Subscription created for resource: %s (watch_id=%u, gen=%u, total_subscriptions=%d)",
+	log_message(DEBUG, "Subscription created for resource: %s (watch_id=%u, gen=%u, subscriptions=%d)",
 				resource->path ? resource->path : "<unknown>", watchref.watch_id,
 				watchref.generation, profile->subscription_count);
 
@@ -696,7 +696,7 @@ subscription_t *resources_subscription(resources_t *resources, registry_t *regis
 		}
 	} else {
 		profile->baseline_snapshot = NULL;
-		log_message(DEBUG, "Skipping baseline snapshot creation for %s (snapshots not needed)", path);
+		log_message(DEBUG, "Skipping baseline snapshot creation for %s", path);
 	}
 
 	log_message(DEBUG, "Initial baseline established for %s: files=%d, dirs=%d, depth=%d, size=%s",

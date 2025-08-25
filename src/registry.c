@@ -401,6 +401,5 @@ watchref_t *registry_active(registry_t *registry, uint32_t *count) {
 	*count = active_count;
 	pthread_rwlock_unlock(&registry->lock);
 
-	log_message(DEBUG, "Retrieved %u active watch references from registry", active_count);
 	return watchrefs;
 }

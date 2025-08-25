@@ -312,6 +312,11 @@ void control_handle(monitor_t *monitor, struct kevent *event) {
 		*end_marker = '\0'; /* Terminate command string */
 
 		/* Process the command */
+		char *command = kv_value(client->buffer, "command");
+		if (command) {
+			log_message(DEBUG, "Processing '%s' command from session (fd %d)", command, client_fd);
+			free(command);
+		}
 		result_t result = control_process(monitor, client->buffer);
 		char *response = control_format(&result);
 
