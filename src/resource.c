@@ -50,7 +50,7 @@ static void resources_deactivation(watchref_t watchref, void *context) {
 		return;
 	}
 
-	log_message(DEBUG, "Watch ID %u (gen %u) deactivated, cleaning up resources",
+	log_message(DEBUG, "Watch (watch_id=%u, gen=%u) deactivated, cleaning up resources",
 				watchref.watch_id, watchref.generation);
 
 	int subscriptions_removed = 0;

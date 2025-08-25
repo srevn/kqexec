@@ -795,7 +795,7 @@ void pending_deactivation(watchref_t watchref, void *context) {
 	monitor_t *monitor = (monitor_t *) context;
 	if (!monitor || !monitor->pending) return;
 
-	log_message(DEBUG, "Watch ID %u (gen %u) deactivated, cleaning up pending entries",
+	log_message(DEBUG, "Watch (watch_id=%u, gen=%u) deactivated, cleaning up pending entries",
 				watchref.watch_id, watchref.generation);
 
 	int entries_removed = 0;

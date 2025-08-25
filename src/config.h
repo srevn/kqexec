@@ -43,6 +43,7 @@ typedef struct watch {
 	bool buffer_output;                    /* Whether to buffer output until command completes */
 	
 	/* Monitoring options */
+	bool enabled;                          /* Whether the watch is currently enabled */
 	bool hidden;                           /* Whether to monitor hidden files/directories */
 	bool recursive;                        /* Whether to recursively monitor (for directories) */
 	bool environment;                      /* Whether to inject KQ_* environment variables */

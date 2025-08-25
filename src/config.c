@@ -266,6 +266,7 @@ watch_t *config_clone_watch(const watch_t *source) {
 	clone->source_pattern = source->source_pattern ? strdup(source->source_pattern) : NULL;
 	clone->target = source->target;
 	clone->filter = source->filter;
+	clone->enabled = source->enabled;
 	clone->log_output = source->log_output;
 	clone->buffer_output = source->buffer_output;
 	clone->recursive = source->recursive;
@@ -477,6 +478,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 			}
 
 			current_watch->name = strdup(str + 1);
+			current_watch->enabled = true;		  /* Default to enabled */
 			current_watch->log_output = false;	  /* Default to not logging command output */
 			current_watch->buffer_output = false; /* Default to not buffering output */
 			current_watch->recursive = true;	  /* Default to recursive for directories */

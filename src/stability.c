@@ -611,7 +611,7 @@ bool stability_execute(monitor_t *monitor, check_t *check, subscription_t *root,
 		watch_t *watch = registry_get(monitor->registry, check->watchrefs[i]);
 
 		if (!watch) {
-			log_message(DEBUG, "Skipping command for stale watch reference: ID %u (gen %u)",
+			log_message(DEBUG, "Skipping command for stale watch reference: (watch_id=%u, gen=%u)",
 						check->watchrefs[i].watch_id, check->watchrefs[i].generation);
 			continue;
 		}

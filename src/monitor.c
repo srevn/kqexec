@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include "command.h"
+#include "control.h"
 #include "events.h"
 #include "logger.h"
 #include "mapper.h"
@@ -133,7 +134,7 @@ static void monitor_deactivation(watchref_t watchref, void *context) {
 	monitor_t *monitor = (monitor_t *) context;
 	if (!monitor || !monitor->watches) return;
 
-	log_message(DEBUG, "Monitor observer: Watch ID %u (gen %u) deactivated, cleaning up watcher resources",
+	log_message(DEBUG, "Watch (watch_id=%u, gen=%u) deactivated, cleaning up watcher resources",
 				watchref.watch_id, watchref.generation);
 
 	/* Scan monitor watchers for the deactivated watch */
@@ -246,6 +247,12 @@ monitor_t *monitor_create(config_t *config, registry_t *registry) {
 	monitor->delayed_count = 0;
 	monitor->delayed_capacity = 0;
 
+	/* Initialize control server */
+	monitor->server = server_create(NULL); /* Use default socket path */
+	if (!monitor->server) {
+		log_message(WARNING, "Failed to create control server, continuing without socket control");
+	}
+
 	return monitor;
 }
 
@@ -307,6 +314,11 @@ void monitor_destroy(monitor_t *monitor) {
 
 	/* Clean up resource table */
 	resources_destroy(monitor->resources);
+
+	/* Clean up control server */
+	if (monitor->server) {
+		server_destroy(monitor->server);
+	}
 
 	/* Perform final garbage collection before destroying registry */
 	if (monitor->registry) {
@@ -593,6 +605,12 @@ bool monitor_add(monitor_t *monitor, watchref_t watchref, bool skip_pending) {
 	watch_t *watch = registry_get(monitor->registry, watchref);
 	if (monitor == NULL || !watch || watch->path == NULL) return false;
 
+	/* Check if watch is dynamically disabled */
+	if (!watch->enabled) {
+		log_message(INFO, "Watch '%s' disabled via runtime control", watch->name ? watch->name : "unknown");
+		return true; /* Success but no monitoring */
+	}
+
 	/* Proactively validate the path to handle re-creations before adding watches */
 	monitor_sync(monitor, watch->path);
 
@@ -651,6 +669,7 @@ static watch_t *monitor_config(const char *config_file_path) {
 	}
 
 	config_watch->name = strdup("__config_file__");
+	config_watch->enabled = true;
 	config_watch->path = strdup(config_file_path);
 	config_watch->target = WATCH_FILE;
 	config_watch->filter = EVENT_CONTENT;
@@ -756,13 +775,22 @@ bool monitor_setup(monitor_t *monitor) {
 		log_message(DEBUG, "Added config file watch for %s", monitor->config_path);
 	}
 
+	/* Start control server if available */
+	if (monitor->server) {
+		if (!server_start(monitor->server, monitor->kq)) {
+			log_message(WARNING, "Failed to start control server, socket control will be unavailable");
+		} else {
+			log_message(INFO, "Control server started successfully");
+		}
+	}
+
 	return true;
 }
 
 /* Process events from kqueue and handle commands */
 bool monitor_poll(monitor_t *monitor) {
 	struct kevent events[MAX_EVENTS];
-	int nev;
+	int new_event;
 	struct timespec timeout, *p_timeout;
 
 	/* Check for reload request */
@@ -785,14 +813,14 @@ bool monitor_poll(monitor_t *monitor) {
 	p_timeout = timeout_calculate(monitor, &timeout, &now_monotonic);
 
 	/* Wait for events */
-	nev = kevent(monitor->kq, NULL, 0, events, MAX_EVENTS, p_timeout);
+	new_event = kevent(monitor->kq, NULL, 0, events, MAX_EVENTS, p_timeout);
 
 	/* Get time after kevent returns */
 	struct timespec kevent_time;
 	clock_gettime(CLOCK_MONOTONIC, &kevent_time);
 
 	/* Handle kevent result */
-	if (nev == -1) {
+	if (new_event == -1) {
 		if (errno == EINTR) {
 			log_message(DEBUG, "kevent interrupted by signal, returning to main loop");
 			return true; /* Return to main loop where running flag will be checked */
@@ -802,15 +830,49 @@ bool monitor_poll(monitor_t *monitor) {
 	}
 
 	/* Process new events */
-	if (nev > 0) {
-		log_message(DEBUG, "Processing %d new kqueue events", nev);
+	if (new_event > 0) {
+		log_message(DEBUG, "Processing %d new kqueue events", new_event);
 
 		/* Initialize validate request for collecting paths that need validation */
 		validate_t validate;
 		validate_init(&validate);
 
-		/* Process events and collect validate requests */
-		events_handle(monitor, events, nev, &kevent_time, &validate);
+		/* Separate control events from file system events */
+		struct kevent filesystem_event[MAX_EVENTS];
+		int num_events = 0;
+
+		for (int i = 0; i < new_event; i++) {
+			bool is_control_event = false;
+
+			/* Check if event is from control server socket */
+			if (monitor->server && events[i].filter == EVFILT_READ &&
+				events[i].ident == (uintptr_t) monitor->server->socket_fd) {
+				/* Handle new client connection */
+				control_accept(monitor->server, monitor->kq);
+				is_control_event = true;
+			}
+			/* Check if event is from a control client */
+			else if (monitor->server && control_event(monitor->server, &events[i])) {
+				if (events[i].filter == EVFILT_READ) {
+					/* Handle client command */
+					control_handle(monitor, &events[i]);
+				} else if (events[i].filter == EVFILT_WRITE) {
+					/* Handle client write ready */
+					control_write(monitor, &events[i]);
+				}
+				is_control_event = true;
+			}
+
+			/* If not a control event, add to file system events for normal processing */
+			if (!is_control_event) {
+				filesystem_event[num_events++] = events[i];
+			}
+		}
+
+		/* Process filesystem events with existing handler */
+		if (num_events > 0) {
+			events_handle(monitor, filesystem_event, num_events, &kevent_time, &validate);
+		}
 
 		/* Handle any validate requests */
 		if (validate.paths_count > 0) {
@@ -823,7 +885,7 @@ bool monitor_poll(monitor_t *monitor) {
 		/* Clean up validate request */
 		validate_cleanup(&validate);
 	} else {
-		/* nev == 0 means timeout occurred */
+		/* new_event == 0 means timeout occurred */
 		if (p_timeout) {
 			log_message(DEBUG, "Timeout occurred after %ld.%09ld seconds, checking queued scans",
 						p_timeout->tv_sec, p_timeout->tv_nsec);
@@ -1292,4 +1354,84 @@ void monitor_stop(monitor_t *monitor) {
 	if (monitor == NULL) return;
 
 	monitor->running = false;
+}
+
+/* Activate a watch dynamically */
+bool monitor_activate(monitor_t *monitor, watchref_t watchref) {
+	if (!monitor || !watchref_valid(watchref)) return false;
+
+	/* Atomically attempt to transition from INACTIVE to ACTIVE state */
+	pthread_rwlock_wrlock(&monitor->registry->lock);
+	bool was_inactive = false;
+
+	/* Defensive validation: bounds check, generation check, and state check */
+	if (watchref.watch_id < monitor->registry->capacity &&
+		monitor->registry->generations[watchref.watch_id] == watchref.generation &&
+		monitor->registry->states[watchref.watch_id] == WATCH_STATE_INACTIVE) {
+
+		monitor->registry->states[watchref.watch_id] = WATCH_STATE_ACTIVE;
+		monitor->registry->count++;
+		was_inactive = true;
+
+		log_message(DEBUG, "Transitioned watch (watch_id=%u, gen=%u) from INACTIVE to ACTIVE",
+					watchref.watch_id, watchref.generation);
+	}
+	pthread_rwlock_unlock(&monitor->registry->lock);
+
+	/* Handle different state cases */
+	if (!was_inactive) {
+		/* Check if watch is already active */
+		if (registry_valid(monitor->registry, watchref)) {
+			watch_t *watch = registry_get(monitor->registry, watchref);
+			if (watch) {
+				log_message(DEBUG, "Watch '%s' is already active", watch->name);
+				watch->enabled = true;
+				return true; /* Ensure it's marked as enabled and return success */
+			}
+		}
+
+		/* Invalid reference, neither inactive nor active */
+		log_message(WARNING, "Cannot activate watch, invalid reference (watch_id=%u, gen=%u)",
+					watchref.watch_id, watchref.generation);
+		return false;
+	}
+
+	/* Successfully transitioned from inactive - get watch and enable it */
+	watch_t *watch = registry_get(monitor->registry, watchref);
+	if (!watch) {
+		log_message(ERROR, "Watch reference became invalid after state transition");
+		return false;
+	}
+
+	watch->enabled = true;
+
+	/* Use the existing monitor_add function to set up monitoring */
+	if (!monitor_add(monitor, watchref, false)) {
+		log_message(ERROR, "Failed to set up monitoring for watch %s", watch->name ? watch->name : "unknown");
+		return false;
+	}
+
+	log_message(INFO, "Watch %s activated successfully", watch->name ? watch->name : "unknown");
+	return true;
+}
+
+/* Deactivate a watch dynamically */
+bool monitor_deactivate(monitor_t *monitor, watchref_t watchref) {
+	if (!monitor || !watchref_valid(watchref)) return false;
+
+	/* Get the watch from the registry */
+	watch_t *watch = registry_get(monitor->registry, watchref);
+	if (!watch) {
+		log_message(WARNING, "Cannot deactivate watch, reference not found in registry");
+		return false;
+	}
+
+	/* Set the watch as disabled */
+	watch->enabled = false;
+
+	/* Use the registry's deactivation mechanism to trigger observer cleanup */
+	registry_deactivate(monitor->registry, watchref);
+
+	log_message(INFO, "Watch %s deactivated successfully", watch->name ? watch->name : "unknown");
+	return true;
 }

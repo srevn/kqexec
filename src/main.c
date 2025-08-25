@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+#include "client.h"
 #include "command.h"
 #include "config.h"
 #include "daemon.h"
@@ -17,15 +18,28 @@
 /* Program name */
 static const char *program_name;
 
+/* Application operation modes */
+typedef enum operation_mode {
+	MODE_DAEMON,                           /* Run as background daemon monitoring files */
+	MODE_CLIENT                            /* Run as client sending commands to daemon */
+} operation_t;
+
 /* Print usage */
 static void print_usage(void) {
-	fprintf(stderr, "Usage: %s [options]\n", program_name);
-	fprintf(stderr, "Options:\n");
+	fprintf(stderr, "Usage: %s [daemon options] | [client options]\n", program_name);
+	fprintf(stderr, "\nDaemon mode options:\n");
 	fprintf(stderr, "  -c, --config=FILE      Configuration file (default: %s)\n", DEFAULT_CONFIG_FILE);
 	fprintf(stderr, "  -d, --daemon           Run as daemon\n");
 	fprintf(stderr, "  -l, --loglevel=LEVEL   Set log level (0-7, default: 5)\n");
 	fprintf(stderr, "  -r, --cooldown=MS      Set command cooldown time in milliseconds (default: 500)\n");
 	fprintf(stderr, "  -h, --help             Print this help message\n");
+	fprintf(stderr, "\nClient mode options:\n");
+	fprintf(stderr, "  --disable=WATCHES      Disable specific watches (comma-separated)\n");
+	fprintf(stderr, "  --enable=WATCHES       Enable specific watches (comma-separated)\n");
+	fprintf(stderr, "  --status               Show status of watches\n");
+	fprintf(stderr, "  --list                 List all configured watches\n");
+	fprintf(stderr, "  --reload               Reload configuration\n");
+	fprintf(stderr, "  --socket=PATH          Socket path to connect to (default: /tmp/kqexec.sock)\n");
 }
 
 /* Main function */
@@ -56,12 +70,25 @@ int main(int argc, char *argv[]) {
 
 	/* Parse command line options */
 	static struct option long_options[] = {
+		/* Daemon options */
 		{"config", required_argument, 0, 'c'},
 		{"daemon", no_argument, 0, 'd'},
 		{"loglevel", required_argument, 0, 'l'},
 		{"cooldown", required_argument, 0, 'r'},
 		{"help", no_argument, 0, 'h'},
+
+		/* Client options */
+		{"disable", required_argument, 0, 1000},
+		{"enable", required_argument, 0, 1001},
+		{"status", no_argument, 0, 1002},
+		{"list", no_argument, 0, 1003},
+		{"reload", no_argument, 0, 1004},
+		{"socket", required_argument, 0, 1005},
 		{0, 0, 0, 0}};
+
+	/* Client options */
+	operation_t mode = MODE_DAEMON;
+	options_t options = {0};
 
 	while ((c = getopt_long(argc, argv, "c:dl:r:h", long_options, &option_index)) != -1) {
 		switch (c) {
@@ -84,12 +111,59 @@ int main(int argc, char *argv[]) {
 			case 'h':
 				print_usage();
 				return EXIT_SUCCESS;
+
+			/* Client options */
+			case 1000: /* --disable */
+				mode = MODE_CLIENT;
+				options.command = CMD_DISABLE;
+				options.watch_names = client_parse(optarg);
+				if (options.watch_names) {
+					/* Count watches */
+					int count = 0;
+					while (options.watch_names[count]) count++;
+					options.num_watches = count;
+				}
+				break;
+			case 1001: /* --enable */
+				mode = MODE_CLIENT;
+				options.command = CMD_ENABLE;
+				options.watch_names = client_parse(optarg);
+				if (options.watch_names) {
+					/* Count watches */
+					int count = 0;
+					while (options.watch_names[count]) count++;
+					options.num_watches = count;
+				}
+				break;
+			case 1002: /* --status */
+				mode = MODE_CLIENT;
+				options.command = CMD_STATUS;
+				break;
+			case 1003: /* --list */
+				mode = MODE_CLIENT;
+				options.command = CMD_LIST;
+				break;
+			case 1004: /* --reload */
+				mode = MODE_CLIENT;
+				options.command = CMD_RELOAD;
+				break;
+			case 1005: /* --socket */
+				options.socket_path = strdup(optarg);
+				break;
+
 			case '?':
 				print_usage();
 				return EXIT_FAILURE;
 			default:
 				abort();
 		}
+	}
+
+	/* Route to appropriate mode */
+	if (mode == MODE_CLIENT) {
+		int result = client_main(&options);
+		client_cleanup(&options);
+		return result;
 	}
 
 	/* Use default config file if not specified */

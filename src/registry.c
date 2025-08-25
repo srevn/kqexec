@@ -142,7 +142,7 @@ watchref_t registry_add(registry_t *registry, struct watch *watch) {
 
 	pthread_rwlock_unlock(&registry->lock);
 
-	log_message(DEBUG, "Added watch '%s' to registry with ID %u", watch->name, watch_id);
+	log_message(DEBUG, "Added watch '%s' to registry with watch_id=%u", watch->name, watch_id);
 	return watchref;
 }
 
@@ -161,6 +161,28 @@ struct watch *registry_get(registry_t *registry, watchref_t watchref) {
 
 	pthread_rwlock_unlock(&registry->lock);
 	return watch;
+}
+
+/* Find a watch by name regardless of state */
+watchref_t registry_find(registry_t *registry, const char *watch_name) {
+	if (!registry || !watch_name) return WATCHREF_INVALID;
+
+	pthread_rwlock_rdlock(&registry->lock);
+
+	/* Search through all watches regardless of state */
+	for (uint32_t i = 1; i < registry->next_id && i < registry->capacity; i++) {
+		if (registry->watches[i] && registry->watches[i]->name &&
+			strcmp(registry->watches[i]->name, watch_name) == 0) {
+			watchref_t watchref = {i, registry->generations[i]};
+			pthread_rwlock_unlock(&registry->lock);
+			log_message(DEBUG, "Found watch '%s' (watch_id=%u, gen=%u, state=%d)", watch_name, i,
+						registry->generations[i], registry->states[i]);
+			return watchref;
+		}
+	}
+
+	pthread_rwlock_unlock(&registry->lock);
+	return WATCHREF_INVALID;
 }
 
 /* Check if a watch reference is valid */
@@ -292,7 +314,7 @@ void registry_deactivate(registry_t *registry, watchref_t watchref) {
 	}
 
 	watch_t *watch = registry->watches[watchref.watch_id];
-	log_message(DEBUG, "Deactivating watch '%s' (ID: %u, Gen: %u)",
+	log_message(DEBUG, "Deactivating watch '%s' (watch_id=%u, gen=%u)",
 				watch->name, watchref.watch_id, watchref.generation);
 
 	/* Phase 1: Notify all observers (releases and reacquires lock) */
@@ -319,7 +341,7 @@ void registry_garbage(registry_t *registry) {
 	for (uint32_t i = 1; i < registry->next_id && i < registry->capacity; i++) {
 		if (registry->states[i] == WATCH_STATE_INACTIVE && registry->watches[i]) {
 			watch_t *watch = registry->watches[i];
-			log_message(DEBUG, "Garbage collecting watch '%s' (ID: %u)", watch->name, i);
+			log_message(DEBUG, "Garbage collecting watch '%s' (watch_id=%u)", watch->name, i);
 
 			config_destroy_watch(watch);
 			registry->watches[i] = NULL;

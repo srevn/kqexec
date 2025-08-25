@@ -14,7 +14,7 @@ static void queue_deactivation(watchref_t watchref, void *context) {
 	queue_t *queue = (queue_t *) context;
 	if (!queue || !queue->items) return;
 
-	log_message(DEBUG, "Queue observer: Watch ID %u (gen %u) deactivated, cleaning up queue",
+	log_message(DEBUG, "Watch (watch_id=%u, gen=%u) deactivated, cleaning up queue",
 				watchref.watch_id, watchref.generation);
 
 	/* Scan all queue items for the deactivated watch */

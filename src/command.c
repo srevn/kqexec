@@ -829,7 +829,7 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 		char buffer[8192] = {0};
 		char line_buffer[8192] = {0};
 		size_t line_pos = 0;
-		ssize_t bytes_read;
+		ssize_t data_read;
 		fd_set read_fds;
 		int max_fd = (stdout_pipe[0] > stderr_pipe[0]) ? stdout_pipe[0] : stderr_pipe[0];
 		bool stdout_open = true, stderr_open = true;
@@ -852,15 +852,15 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 
 			/* Process stdout */
 			if (stdout_open && FD_ISSET(stdout_pipe[0], &read_fds)) {
-				bytes_read = read(stdout_pipe[0], buffer, sizeof(buffer) - 1);
+				data_read = read(stdout_pipe[0], buffer, sizeof(buffer) - 1);
 
-				if (bytes_read <= 0) {
+				if (data_read <= 0) {
 					stdout_open = false;
 				} else {
-					buffer[bytes_read] = '\0';
+					buffer[data_read] = '\0';
 
 					/* Process line by line */
-					for (size_t i = 0; i < (size_t) bytes_read; i++) {
+					for (size_t i = 0; i < (size_t) data_read; i++) {
 						if (buffer[i] == '\n') {
 							line_buffer[line_pos] = '\0';
 							if (line_pos > 0) {
@@ -886,12 +886,12 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 
 			/* Process stderr */
 			if (stderr_open && FD_ISSET(stderr_pipe[0], &read_fds)) {
-				bytes_read = read(stderr_pipe[0], buffer, sizeof(buffer) - 1);
+				data_read = read(stderr_pipe[0], buffer, sizeof(buffer) - 1);
 
-				if (bytes_read <= 0) {
+				if (data_read <= 0) {
 					stderr_open = false;
 				} else {
-					buffer[bytes_read] = '\0';
+					buffer[data_read] = '\0';
 					log_message(WARNING, "[%s]: %s", watch->name, buffer);
 				}
 			}

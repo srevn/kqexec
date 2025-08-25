@@ -1,6 +1,7 @@
 #ifndef MONITOR_H
 #define MONITOR_H
 
+#include <pthread.h>
 #include <stdbool.h>
 
 #include "config.h"
@@ -10,6 +11,9 @@
 #include "queue.h"
 #include "registry.h"
 #include "resource.h"
+
+/* Forward declaration */
+typedef struct server server_t;
 
 /* Monitor configuration */
 #define MAX_WATCHES 128                    /* Maximum number of simultaneous watches */
@@ -65,6 +69,9 @@ typedef struct monitor {
 	bool reload;                           /* Flag to indicate reload requested */
 	char *config_path;                     /* Copy of config file path for reloading */
 	
+	/* Unix socket control server */
+	server_t *server;                      /* Control socket server */
+	
 	/* Observers for watcher cleanups */
 	observer_t monitor_observer;           /* Observer registration for watcher cleanup */
 	observer_t pending_observer;           /* Observer registration for pending cleanup */
@@ -86,6 +93,10 @@ bool monitor_add(monitor_t *monitor, watchref_t watchref, bool skip_pending);
 bool monitor_tree(monitor_t *monitor, const char *dir_path, watchref_t watchref);
 bool monitor_path(monitor_t *monitor, const char *path, watchref_t watchref);
 void monitor_graveyard(monitor_t *monitor);
+
+/* Dynamic watch control */
+bool monitor_activate(monitor_t *monitor, watchref_t watchref);
+bool monitor_deactivate(monitor_t *monitor, watchref_t watchref);
 
 /* Path synchronization */
 bool monitor_sync(monitor_t *monitor, const char *path);
