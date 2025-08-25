@@ -1322,8 +1322,7 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 
 				/* Store watch config before watcher becomes invalid */
 				watch_t *target_watch = registry_get(monitor->registry, watcher->watchref);
-				watchref_t file_watchref = watcher->watchref;
-				bool file_watch = (target_watch && target_watch->target == WATCH_FILE);
+				watchref_t target_watchref = watcher->watchref;
 
 				/* Clear any pending queued checks to prevent use-after-free */
 				queue_remove(monitor->check_queue, path);
@@ -1354,9 +1353,16 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 				list_modified = true;
 
 				/* If a file watch was deleted, re-establish it as a pending watch */
-				if (file_watch) {
+				if (target_watch && target_watch->target == WATCH_FILE) {
 					log_message(DEBUG, "Re-establishing pending watch for deleted file: %s", path);
-					monitor_add(monitor, file_watchref, false);
+					monitor_add(monitor, target_watchref, false);
+				} else if (target_watch && target_watch->target == WATCH_DIRECTORY) {
+					if (target_watch->is_dynamic) {
+						log_message(DEBUG, "Dynamic directory watch for '%s' deleted, not be re-establishing", path);
+					} else {
+						log_message(DEBUG, "Re-establishing pending watch for deleted directory: %s", path);
+						monitor_add(monitor, target_watchref, false);
+					}
 				}
 			}
 		}
