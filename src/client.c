@@ -202,7 +202,7 @@ void client_display(const char *response) {
 
 			/* Remove any trailing whitespace */
 			while (message_len > 0 && (message_text[message_len - 1] == '\n' ||
-								   message_text[message_len - 1] == '\r')) {
+									   message_text[message_len - 1] == '\r')) {
 				message_text[--message_len] = '\0';
 			}
 
@@ -225,67 +225,66 @@ void client_display(const char *response) {
 char *client_build(options_t *options) {
 	if (!options) return NULL;
 
-	/* Calculate required buffer size */
-	size_t buffer_size = 50; /* Base size for "command=disable\n" etc. */
+	size_t buffer_size = 0;
+	const char *command_str = NULL;
 
+	/* Determine base command string */
+	switch (options->command) {
+		case CMD_DISABLE:
+			command_str = "command=disable\n";
+			break;
+		case CMD_ENABLE:
+			command_str = "command=enable\n";
+			break;
+		case CMD_STATUS:
+			command_str = "command=status\n";
+			break;
+		case CMD_LIST:
+			command_str = "command=list\n";
+			break;
+		case CMD_RELOAD:
+			command_str = "command=reload\n";
+			break;
+		default:
+			return NULL;
+	}
+	buffer_size += strlen(command_str);
+
+	/* Calculate size for watch names */
 	if (options->watch_names && options->num_watches > 0) {
-		buffer_size += 10; /* "watches=" */
+		buffer_size += strlen("watches=");
 		for (int i = 0; i < options->num_watches; i++) {
 			if (options->watch_names[i]) {
 				buffer_size += strlen(options->watch_names[i]);
-				if (i > 0) buffer_size += 1; /* comma */
+				if (i < options->num_watches - 1) {
+					buffer_size += 1; /* For comma */
+				}
 			}
 		}
-		buffer_size += 1; /* newline */
+		buffer_size += 1; /* For newline */
 	}
 
-	buffer_size += 10; /* Safety margin */
-
-	char *command = malloc(buffer_size);
-	if (!command) return NULL;
-
-	int written = 0;
-
-	/* Add command type */
-	switch (options->command) {
-		case CMD_DISABLE:
-			written = snprintf(command, buffer_size, "command=disable\n");
-			break;
-		case CMD_ENABLE:
-			written = snprintf(command, buffer_size, "command=enable\n");
-			break;
-		case CMD_STATUS:
-			written = snprintf(command, buffer_size, "command=status\n");
-			break;
-		case CMD_LIST:
-			written = snprintf(command, buffer_size, "command=list\n");
-			break;
-		case CMD_RELOAD:
-			written = snprintf(command, buffer_size, "command=reload\n");
-			break;
-		default:
-			free(command);
-			return NULL;
+	/* Allocate exact buffer size + null terminator */
+	char *command = malloc(buffer_size + 1);
+	if (!command) {
+		fprintf(stderr, "Error: Failed to allocate memory for command\n");
+		return NULL;
 	}
 
-	/* Add watch names if specified */
+	/* Build the command string */
+	int written = snprintf(command, buffer_size + 1, "%s", command_str);
+
 	if (options->watch_names && options->num_watches > 0) {
-		written += snprintf(command + written, buffer_size - written, "watches=");
-
+		written += snprintf(command + written, buffer_size + 1 - written, "watches=");
 		for (int i = 0; i < options->num_watches; i++) {
-			if (i > 0) {
-				written += snprintf(command + written, buffer_size - written, ",");
-			}
-			written += snprintf(command + written, buffer_size - written, "%s", options->watch_names[i]);
-
-			/* Check for buffer overflow */
-			if (written >= (int) buffer_size - 10) {
-				fprintf(stderr, "Error: Command too long for buffer\n");
-				free(command);
-				return NULL;
+			if (options->watch_names[i]) {
+				written += snprintf(command + written, buffer_size + 1 - written, "%s", options->watch_names[i]);
+				if (i < options->num_watches - 1) {
+					written += snprintf(command + written, buffer_size + 1 - written, ",");
+				}
 			}
 		}
-		written += snprintf(command + written, buffer_size - written, "\n");
+		snprintf(command + written, buffer_size + 1 - written, "\n");
 	}
 
 	return command;
