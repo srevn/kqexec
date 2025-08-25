@@ -82,6 +82,7 @@ bool tracker_scan(monitor_t *monitor, resource_t *resource, watchref_t watchref,
 
 /* Cleanup and maintenance */
 void tracker_cleanup(monitor_t *monitor, trackers_t *registry);
+void tracker_purge(monitor_t *monitor, trackers_t *registry, watchref_t watchref);
 void directory_cleanup(monitor_t *monitor, trackers_t *registry, const char *dir_path);
 
 /* Stability integration */

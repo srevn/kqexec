@@ -137,6 +137,19 @@ static void monitor_deactivation(watchref_t watchref, void *context) {
 	log_message(DEBUG, "Watch (watch_id=%u, gen=%u) deactivated, cleaning up watcher resources",
 				watchref.watch_id, watchref.generation);
 
+	/* Get watch info before deactivation to check if it monitored file content */
+	watch_t *watch = registry_get(monitor->registry, watchref);
+	if (watch && ((watch->filter & EVENT_CONTENT) || watch->filter == EVENT_ALL) && watch->path) {
+		/* Clean up file trackers associated with this watch */
+		resource_t *resource = resource_get(monitor->resources, watch->path, ENTITY_DIRECTORY);
+		if (resource && resource->trackers) {
+			log_message(DEBUG, "Cleaning up file trackers for disabled watch: %s", watch->path);
+			resource_lock(resource);
+			tracker_purge(monitor, resource->trackers, watchref);
+			resource_unlock(resource);
+		}
+	}
+
 	/* Scan monitor watchers for the deactivated watch */
 	for (int i = monitor->num_watches - 1; i >= 0; i--) {
 		watcher_t *watcher = monitor->watches[i];

@@ -163,11 +163,14 @@ bool tracker_monitor(const watch_t *watch, const char *file_path) {
 bool tracker_register(monitor_t *monitor, tracker_t *tracker) {
 	if (!monitor || !tracker || tracker->num_watchrefs == 0) return false;
 
-	/* Consolidate event filters from all watches on this file */
+	/* Consolidate event filters from enabled watches on this file */
 	u_int fflags = 0;
 	for (int watchref_index = 0; watchref_index < tracker->num_watchrefs; watchref_index++) {
 		watch_t *watch = registry_get(monitor->registry, tracker->watchrefs[watchref_index]);
 		if (!watch) continue;
+
+		/* Only process enabled watches */
+		if (!watch->enabled) continue;
 
 		if (watch->filter & EVENT_CONTENT) {
 			fflags |= NOTE_DELETE | NOTE_WRITE | NOTE_RENAME | NOTE_REVOKE;
@@ -615,6 +618,80 @@ void directory_cleanup(monitor_t *monitor, trackers_t *registry, const char *dir
 
 	if (removed_count > 0) {
 		log_message(DEBUG, "Removed %d file trackers from directory %s", removed_count, dir_path);
+	}
+}
+
+/* Clean up file trackers associated with a specific watch reference */
+void tracker_purge(monitor_t *monitor, trackers_t *registry, watchref_t watchref) {
+	if (!registry || !watchref_valid(watchref)) return;
+
+	int removed_count = 0;
+	int updated_count = 0;
+
+	for (size_t bucket_index = 0; bucket_index < registry->bucket_count; bucket_index++) {
+		tracker_t *tracker = registry->buckets[bucket_index];
+		tracker_t *previous_tracker = NULL;
+
+		while (tracker) {
+			tracker_t *next_tracker = tracker->next;
+			bool watchref_removed = false;
+
+			/* Remove the watchref from this tracker's watchrefs array */
+			for (int i = 0; i < tracker->num_watchrefs; i++) {
+				if (watchref_equal(tracker->watchrefs[i], watchref)) {
+					/* Shift remaining watchrefs down */
+					for (int j = i; j < tracker->num_watchrefs - 1; j++) {
+						tracker->watchrefs[j] = tracker->watchrefs[j + 1];
+					}
+					tracker->num_watchrefs--;
+					watchref_removed = true;
+					break;
+				}
+			}
+
+			if (watchref_removed) {
+				if (tracker->num_watchrefs == 0) {
+					/* No more watches reference this tracker, remove it completely */
+					if (previous_tracker) {
+						previous_tracker->next = next_tracker;
+					} else {
+						registry->buckets[bucket_index] = next_tracker;
+					}
+
+					/* Remove from fd mapping */
+					if (tracker->fd >= 0) {
+						mapper_remove_tracker(monitor->mapper, tracker->fd);
+						close(tracker->fd);
+					}
+
+					/* Free memory */
+					free(tracker->path);
+					free(tracker->watchrefs);
+					free(tracker);
+
+					registry->total_count--;
+					removed_count++;
+				} else {
+					/* Still has other watches, re-register with updated event flags */
+					if (tracker_reregister(monitor, tracker)) {
+						updated_count++;
+					} else {
+						/* Re-registration failed, mark for cleanup */
+						tracker->tracker_state = TRACKER_PENDING_CLEANUP;
+					}
+					previous_tracker = tracker;
+				}
+			} else {
+				previous_tracker = tracker;
+			}
+
+			tracker = next_tracker;
+		}
+	}
+
+	if (removed_count > 0 || updated_count > 0) {
+		log_message(DEBUG, "Cleaned up trackers for disabled watch: removed %d, updated %d",
+					removed_count, updated_count);
 	}
 }
 
