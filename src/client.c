@@ -202,7 +202,7 @@ void client_display(const char *response) {
 
 			/* Remove any trailing whitespace */
 			while (message_len > 0 && (message_text[message_len - 1] == '\n' ||
-									   message_text[message_len - 1] == '\r')) {
+								   message_text[message_len - 1] == '\r')) {
 				message_text[--message_len] = '\0';
 			}
 
@@ -213,17 +213,9 @@ void client_display(const char *response) {
 			}
 			free(message_text);
 		}
-	}
-
-	/* Display any additional key=value pairs (excluding message and status) */
-	char *line = strtok(response_copy, "\n");
-	while (line) {
-		if (strchr(line, '=') != NULL &&
-			strncmp(line, "status=", 7) != 0 &&
-			strncmp(line, "message=", 8) != 0) {
-			printf("%s\n", line);
-		}
-		line = strtok(NULL, "\n");
+	} else if (!is_success) {
+		/* If there is an error status but no message, print the raw response */
+		fprintf(stderr, "Error from daemon: %s", response);
 	}
 
 	free(response_copy);
