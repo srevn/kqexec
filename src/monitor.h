@@ -96,6 +96,7 @@ void monitor_graveyard(monitor_t *monitor);
 
 /* Dynamic watch control */
 bool monitor_activate(monitor_t *monitor, watchref_t watchref);
+bool monitor_disable(monitor_t *monitor, watchref_t watchref);
 bool monitor_deactivate(monitor_t *monitor, watchref_t watchref);
 
 /* Path synchronization */

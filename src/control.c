@@ -598,7 +598,7 @@ static result_t process_disable(monitor_t *monitor, const char *command_text) {
 			for (uint32_t j = 0; j < num_watches; j++) {
 				watch_t *watch = registry_get(monitor->registry, watchrefs[j]);
 				if (watch && watch->name && strcmp(watch->name, watch_names[i]) == 0) {
-					if (monitor_deactivate(monitor, watchrefs[j])) {
+					if (monitor_disable(monitor, watchrefs[j])) {
 						disabled_count++;
 					}
 					found = true;

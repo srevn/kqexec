@@ -1434,6 +1434,53 @@ bool monitor_activate(monitor_t *monitor, watchref_t watchref) {
 	return true;
 }
 
+/* Disable a watch dynamically (preserves for re-enabling) */
+bool monitor_disable(monitor_t *monitor, watchref_t watchref) {
+	if (!monitor || !watchref_valid(watchref)) return false;
+
+	/* Get the watch from the registry */
+	watch_t *watch = registry_get(monitor->registry, watchref);
+	if (!watch) {
+		log_message(WARNING, "Cannot disable watch, reference not found in registry");
+		return false;
+	}
+
+	/* Set the watch as disabled */
+	watch->enabled = false;
+
+	/* Clean up file trackers if this watch monitors file content */
+	if (((watch->filter & EVENT_CONTENT) || watch->filter == EVENT_ALL) && watch->path) {
+		resource_t *resource = resource_get(monitor->resources, watch->path, ENTITY_DIRECTORY);
+		if (resource && resource->trackers) {
+			log_message(DEBUG, "Cleaning up file trackers for disabled watch: %s", watch->path);
+			resource_lock(resource);
+			tracker_purge(monitor, resource->trackers, watchref);
+			resource_unlock(resource);
+		}
+	}
+
+	/* Clean up directory watchers associated with this watch */
+	for (int i = monitor->num_watches - 1; i >= 0; i--) {
+		watcher_t *watcher = monitor->watches[i];
+		if (watcher && watchref_equal(watcher->watchref, watchref)) {
+			log_message(DEBUG, "Removing watcher for disabled watch: %s (fd %d)",
+						watcher->path, watcher->wd);
+
+			/* Remove the watcher from the array and destroy it */
+			watcher_destroy(monitor, watcher, false);
+
+			/* Shift remaining watchers down */
+			for (int j = i; j < monitor->num_watches - 1; j++) {
+				monitor->watches[j] = monitor->watches[j + 1];
+			}
+			monitor->num_watches--;
+		}
+	}
+
+	log_message(INFO, "Watch %s disabled successfully", watch->name ? watch->name : "unknown");
+	return true;
+}
+
 /* Deactivate a watch dynamically */
 bool monitor_deactivate(monitor_t *monitor, watchref_t watchref) {
 	if (!monitor || !watchref_valid(watchref)) return false;
