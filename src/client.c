@@ -180,25 +180,47 @@ void client_display(const char *response) {
 	char *response_copy = strdup(response);
 	if (!response_copy) return;
 
-	char *line = strtok(response_copy, "\n");
-	bool is_success = false;
+	/* Find the message= line and handle multi-line values properly */
+	char *message_start = strstr(response_copy, "message=");
+	bool is_success = (strstr(response_copy, "status=success") != NULL);
 
-	/* Parse first line to check status */
-	if (line && strncmp(line, "status=", 7) == 0) {
-		is_success = strcmp(line + 7, "success") == 0;
+	if (message_start) {
+		message_start += 8; /* Skip "message=" */
+
+		/* Find the end of the message value */
+		char *message_end = strstr(message_start, "\n\n");
+		if (!message_end) {
+			message_end = message_start + strlen(message_start);
+		}
+
+		/* Extract and display the complete message */
+		size_t message_len = message_end - message_start;
+		char *message_text = malloc(message_len + 1);
+		if (message_text) {
+			memcpy(message_text, message_start, message_len);
+			message_text[message_len] = '\0';
+
+			/* Remove any trailing whitespace */
+			while (message_len > 0 && (message_text[message_len - 1] == '\n' ||
+									   message_text[message_len - 1] == '\r')) {
+				message_text[--message_len] = '\0';
+			}
+
+			if (is_success) {
+				printf("%s\n", message_text);
+			} else {
+				fprintf(stderr, "%s\n", message_text);
+			}
+			free(message_text);
+		}
 	}
 
-	/* Display all lines */
-	line = strtok(NULL, "\n");
+	/* Display any additional key=value pairs (excluding message and status) */
+	char *line = strtok(response_copy, "\n");
 	while (line) {
-		if (strncmp(line, "message=", 8) == 0) {
-			if (is_success) {
-				printf("%s\n", line + 8);
-			} else {
-				fprintf(stderr, "%s\n", line + 8);
-			}
-		} else if (strchr(line, '=') != NULL) {
-			/* Display other key=value pairs */
+		if (strchr(line, '=') != NULL &&
+			strncmp(line, "status=", 7) != 0 &&
+			strncmp(line, "message=", 8) != 0) {
 			printf("%s\n", line);
 		}
 		line = strtok(NULL, "\n");

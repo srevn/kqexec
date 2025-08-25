@@ -717,47 +717,139 @@ static result_t process_status(monitor_t *monitor, const char *command_text) {
 
 	result.success = true;
 
-	/* Count disabled watches by iterating through the registry */
+	/* Get all watches from registry */
 	uint32_t num_watches = 0;
 	watchref_t *watchrefs = registry_active(monitor->registry, &num_watches);
 
-	int disabled_count = 0;
+	/* Collect pending watches and their target paths */
+	char pending_paths[MAX_CLIENTS][256];
+	char pending_watch_names[MAX_CLIENTS][256];
+	int pending_count = 0;
+
+	for (int i = 0; i < monitor->num_pending && pending_count < MAX_CLIENTS; i++) {
+		pending_t *pending = monitor->pending[i];
+		if (pending && pending->target_path) {
+			/* Get the original watch name for exclusion purposes */
+			watch_t *watch = registry_get(monitor->registry, pending->watchref);
+			if (watch && watch->name) {
+				/* Store target path for display */
+				strncpy(pending_paths[pending_count], pending->target_path, 255);
+				pending_paths[pending_count][255] = '\0';
+
+				/* Store watch name for exclusion */
+				strncpy(pending_watch_names[pending_count], watch->name, 255);
+				pending_watch_names[pending_count][255] = '\0';
+
+				pending_count++;
+			}
+		}
+	}
+
+	/* Collect active/disabled watches, excluding those that are pending */
+	char active_names[MAX_CLIENTS][256];
+	char disabled_names[MAX_CLIENTS][256];
+	int active_count = 0, disabled_count = 0;
+
 	for (uint32_t i = 0; i < num_watches; i++) {
 		watch_t *watch = registry_get(monitor->registry, watchrefs[i]);
-		if (watch && !watch->enabled) {
-			disabled_count++;
+		if (!watch || !watch->name) continue;
+
+		/* Skip internal watches */
+		if (strncmp(watch->name, "__proxy_", 8) == 0) continue;
+		if (strcmp(watch->name, "__config_file__") == 0) continue;
+
+		/* Check if this watch is pending */
+		bool is_pending = false;
+		for (int j = 0; j < pending_count; j++) {
+			if (strcmp(pending_watch_names[j], watch->name) == 0) {
+				is_pending = true;
+				break;
+			}
 		}
-	}
 
-	/* Build status message */
-	char *message = malloc(512);
-	if (message) {
-		if (disabled_count > 0) {
-			snprintf(message, 512, "%d watches disabled", disabled_count);
-		} else {
-			snprintf(message, 512, "All watches enabled");
-		}
-	}
-	result.message = message;
+		/* Skip pending watches */
+		if (is_pending) continue;
 
-	/* Add data about disabled watches */
-	if (disabled_count > 0) {
-		result.data_keys = malloc(disabled_count * sizeof(char *));
-		result.data_values = malloc(disabled_count * sizeof(char *));
-
-		if (result.data_keys && result.data_values) {
-			int data_index = 0;
-			for (uint32_t i = 0; i < num_watches && data_index < disabled_count; i++) {
-				watch_t *watch = registry_get(monitor->registry, watchrefs[i]);
-				if (watch && !watch->enabled && watch->name) {
-					result.data_keys[data_index] = strdup("disabled_watch");
-					result.data_values[data_index] = strdup(watch->name);
-					data_index++;
+		/* Add to active or disabled list (with deduplication) */
+		if (watch->enabled) {
+			/* Check for duplicates */
+			bool duplicate = false;
+			for (int j = 0; j < active_count; j++) {
+				if (strcmp(active_names[j], watch->name) == 0) {
+					duplicate = true;
+					break;
 				}
 			}
-			result.data_count = data_index;
+			if (!duplicate && active_count < MAX_CLIENTS) {
+				strncpy(active_names[active_count], watch->name, 255);
+				active_names[active_count][255] = '\0';
+				active_count++;
+			}
+		} else {
+			/* Check for duplicates */
+			bool duplicate = false;
+			for (int j = 0; j < disabled_count; j++) {
+				if (strcmp(disabled_names[j], watch->name) == 0) {
+					duplicate = true;
+					break;
+				}
+			}
+			if (!duplicate && disabled_count < MAX_CLIENTS) {
+				strncpy(disabled_names[disabled_count], watch->name, 255);
+				disabled_names[disabled_count][255] = '\0';
+				disabled_count++;
+			}
 		}
 	}
+
+	/* Build enhanced status message */
+	size_t message_size = 1024;
+	char *message = malloc(message_size);
+	if (!message) {
+		free(watchrefs);
+		result.success = false;
+		result.message = strdup("Memory allocation failed");
+		return result;
+	}
+
+	/* Summary line */
+	int written = snprintf(message, message_size, "Watches: %d active, %d disabled, %d pending",
+						   active_count, disabled_count, pending_count);
+
+	/* Add active watches list */
+	if (active_count > 0 && written < (int) message_size - 20) {
+		written += snprintf(message + written, message_size - written, "\nActive: ");
+		for (int i = 0; i < active_count && written < (int) message_size - 100; i++) {
+			if (i > 0) {
+				written += snprintf(message + written, message_size - written, ", ");
+			}
+			written += snprintf(message + written, message_size - written, "%s", active_names[i]);
+		}
+	}
+
+	/* Add disabled watches list */
+	if (disabled_count > 0 && written < (int) message_size - 20) {
+		written += snprintf(message + written, message_size - written, "\nDisabled: ");
+		for (int i = 0; i < disabled_count && written < (int) message_size - 100; i++) {
+			if (i > 0) {
+				written += snprintf(message + written, message_size - written, ", ");
+			}
+			written += snprintf(message + written, message_size - written, "%s", disabled_names[i]);
+		}
+	}
+
+	/* Add pending watches list - show target paths */
+	if (pending_count > 0 && written < (int) message_size - 20) {
+		written += snprintf(message + written, message_size - written, "\nPending: ");
+		for (int i = 0; i < pending_count && written < (int) message_size - 100; i++) {
+			if (i > 0) {
+				written += snprintf(message + written, message_size - written, ", ");
+			}
+			written += snprintf(message + written, message_size - written, "%s", pending_paths[i]);
+		}
+	}
+
+	result.message = message;
 
 	free(watchrefs);
 	return result;
