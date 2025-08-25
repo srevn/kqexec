@@ -521,25 +521,49 @@ bool kv_parse(const char *line, char **key, char **value) {
 char *kv_value(const char *text, const char *key) {
 	if (!text || !key) return NULL;
 
-	char *text_copy = strdup(text);
-	if (!text_copy) return NULL;
+	const char *line_start = text;
+	size_t key_len = strlen(key);
 
-	char *line = strtok(text_copy, "\n");
-	while (line) {
-		char *line_key, *line_value;
-		if (kv_parse(line, &line_key, &line_value)) {
-			if (strcmp(line_key, key) == 0) {
-				free(line_key);
-				free(text_copy);
-				return line_value;
-			}
-			free(line_key);
-			free(line_value);
+	while (*line_start) {
+		/* Find end of current line */
+		const char *line_end = strchr(line_start, '\n');
+		if (!line_end) {
+			line_end = line_start + strlen(line_start);
 		}
-		line = strtok(NULL, "\n");
+
+		/* Skip empty lines */
+		if (line_end > line_start) {
+			/* Find '=' separator in this line */
+			const char *equals = memchr(line_start, '=', line_end - line_start);
+			if (equals) {
+				/* Check if key matches exactly */
+				size_t line_key_len = equals - line_start;
+				if (line_key_len == key_len && memcmp(line_start, key, key_len) == 0) {
+					/* Found matching key - extract value */
+					size_t value_len = line_end - equals - 1;
+					if (value_len > 0) {
+						char *value = malloc(value_len + 1);
+						if (value) {
+							memcpy(value, equals + 1, value_len);
+							value[value_len] = '\0';
+						}
+						return value;
+					} else {
+						/* Empty value */
+						return strdup("");
+					}
+				}
+			}
+		}
+
+		/* Move to next line */
+		if (*line_end == '\n') {
+			line_start = line_end + 1;
+		} else {
+			break; /* End of text */
+		}
 	}
 
-	free(text_copy);
 	return NULL;
 }
 
@@ -548,18 +572,11 @@ char **kv_split(const char *value, const char *delimiter, int *count) {
 	if (!value || !delimiter || !count) return NULL;
 
 	*count = 0;
-
-	/* Count occurrences */
-	int delim_count = 1;
-	const char *p = value;
-	while ((p = strstr(p, delimiter)) != NULL) {
-		delim_count++;
-		p += strlen(delimiter);
-	}
-
-	char **result = malloc(delim_count * sizeof(char *));
+	int capacity = 4; /* Start with small capacity */
+	char **result = malloc(capacity * sizeof(char *));
 	if (!result) return NULL;
 
+	/* Single pass with dynamic growth */
 	char *value_copy = strdup(value);
 	if (!value_copy) {
 		free(result);
@@ -567,7 +584,23 @@ char **kv_split(const char *value, const char *delimiter, int *count) {
 	}
 
 	char *token = strtok(value_copy, delimiter);
-	while (token && *count < delim_count) {
+	while (token) {
+		/* Grow array if needed */
+		if (*count >= capacity) {
+			capacity *= 2;
+			char **new_result = realloc(result, capacity * sizeof(char *));
+			if (!new_result) {
+				/* Cleanup on failure */
+				for (int i = 0; i < *count; i++) {
+					free(result[i]);
+				}
+				free(result);
+				free(value_copy);
+				return NULL;
+			}
+			result = new_result;
+		}
+
 		/* Trim whitespace */
 		while (*token == ' ' || *token == '\t') token++;
 		char *end = token + strlen(token) - 1;
