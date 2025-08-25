@@ -75,9 +75,11 @@ static char *pending_parent(const char *target_path) {
 		*last_slash = '\0';
 	}
 
+	/* If we are here, the only parent could be "/" */
 	if (pending_directory("/")) {
-		strcpy(test_path, "/");
-		return test_path;
+		/* Disallow watching "/" as a fallback for a non-existent path */
+		log_message(WARNING, "Pending watch creation for '%s' failed, parent path is root",
+					target_path);
 	}
 
 	free(test_path);

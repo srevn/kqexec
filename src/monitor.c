@@ -1284,63 +1284,65 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 	bool list_modified = false;
 
 	if (!path_exists) {
-		/* Path deleted - clean up all related resources */
-		log_message(DEBUG, "Path deleted: %s, cleaning up watch resources", path);
+		/* Path does not exist, clean up only if it was being watched */
+		if (watcher_find(monitor, path)) {
+			log_message(DEBUG, "Path deleted: %s, cleaning up watch resources", path);
 
-		/* Clean up associated file watches from the resource's trackers */
-		resource_t *resource = resource_get(monitor->resources, path, ENTITY_UNKNOWN);
-		if (resource && resource->trackers) {
-			log_message(DEBUG, "Cleaning up file watches for deleted directory: %s", path);
-			resource_lock(resource);
-			directory_cleanup(monitor, resource->trackers, path);
-			resource_unlock(resource);
-		}
+			/* Clean up associated file watches from the resource's trackers */
+			resource_t *resource = resource_get(monitor->resources, path, ENTITY_UNKNOWN);
+			if (resource && resource->trackers) {
+				log_message(DEBUG, "Cleaning up file watches for deleted directory: %s", path);
+				resource_lock(resource);
+				directory_cleanup(monitor, resource->trackers, path);
+				resource_unlock(resource);
+			}
 
-		/* Handle pending watches that might be affected by this deletion */
-		pending_delete(monitor, path);
+			/* Handle pending watches that might be affected by this deletion */
+			pending_delete(monitor, path);
 
-		/* Iterate and clean up any remaining watchers for this specific path */
-		for (int i = monitor->num_watches - 1; i >= 0; i--) {
-			watcher_t *watcher = monitor->watches[i];
-			if (!watcher || !watcher->path || strcmp(watcher->path, path) != 0) continue;
+			/* Iterate and clean up any remaining watchers for this specific path */
+			for (int i = monitor->num_watches - 1; i >= 0; i--) {
+				watcher_t *watcher = monitor->watches[i];
+				if (!watcher || !watcher->path || strcmp(watcher->path, path) != 0) continue;
 
-			/* Store watch config before watcher becomes invalid */
-			watch_t *target_watch = registry_get(monitor->registry, watcher->watchref);
-			watchref_t file_watchref = watcher->watchref;
-			bool file_watch = (target_watch && target_watch->target == WATCH_FILE);
+				/* Store watch config before watcher becomes invalid */
+				watch_t *target_watch = registry_get(monitor->registry, watcher->watchref);
+				watchref_t file_watchref = watcher->watchref;
+				bool file_watch = (target_watch && target_watch->target == WATCH_FILE);
 
-			/* Clear any pending queued checks to prevent use-after-free */
-			queue_remove(monitor->check_queue, path);
+				/* Clear any pending queued checks to prevent use-after-free */
+				queue_remove(monitor->check_queue, path);
 
-			/* Remove subdirectory watchers if this was a recursive directory */
-			if (target_watch && target_watch->target == WATCH_DIRECTORY && target_watch->recursive) {
-				if (monitor_prune(monitor, path)) {
+				/* Remove subdirectory watchers if this was a recursive directory */
+				if (target_watch && target_watch->target == WATCH_DIRECTORY && target_watch->recursive) {
+					if (monitor_prune(monitor, path)) {
+						i = monitor->num_watches;
+						list_modified = true;
+						continue;
+					}
+				}
+
+				/* Remove dynamic watch from config to prevent resurrection during reload */
+				if (target_watch && target_watch->is_dynamic) {
+					watch_remove(monitor->config, monitor->registry, watcher->watchref);
 					i = monitor->num_watches;
 					list_modified = true;
 					continue;
 				}
-			}
 
-			/* Remove dynamic watch from config to prevent resurrection during reload */
-			if (target_watch && target_watch->is_dynamic) {
-				watch_remove(monitor->config, monitor->registry, watcher->watchref);
-				i = monitor->num_watches;
+				/* Remove the watcher - destroy it and shift array elements */
+				watcher_destroy(monitor, watcher, false);
+				for (int j = i; j < monitor->num_watches - 1; j++) {
+					monitor->watches[j] = monitor->watches[j + 1];
+				}
+				monitor->num_watches--;
 				list_modified = true;
-				continue;
-			}
 
-			/* Remove the watcher - destroy it and shift array elements */
-			watcher_destroy(monitor, watcher, false);
-			for (int j = i; j < monitor->num_watches - 1; j++) {
-				monitor->watches[j] = monitor->watches[j + 1];
-			}
-			monitor->num_watches--;
-			list_modified = true;
-
-			/* If a file watch was deleted, re-establish it as a pending watch */
-			if (file_watch) {
-				log_message(DEBUG, "Re-establishing pending watch for deleted file: %s", path);
-				monitor_add(monitor, file_watchref, false);
+				/* If a file watch was deleted, re-establish it as a pending watch */
+				if (file_watch) {
+					log_message(DEBUG, "Re-establishing pending watch for deleted file: %s", path);
+					monitor_add(monitor, file_watchref, false);
+				}
 			}
 		}
 	} else {
