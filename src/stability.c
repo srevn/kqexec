@@ -241,7 +241,13 @@ void stability_queue(monitor_t *monitor, subscription_t *subscription) {
 	struct timespec next_check = root->profile->scanner->latest_time;
 	timespec_add(&next_check, required_quiet);
 
-	/* Add to queue */
+	/* Add to queue, but only if the path still exists */
+	struct stat info;
+	if (stat(root->resource->path, &info) != 0) {
+		log_message(DEBUG, "Path %s no longer exists, skipping stability check queue.", root->resource->path);
+		resource_unlock(root->resource);
+		return;
+	}
 	queue_upsert(monitor->check_queue, root->resource->path, root->watchref, next_check);
 
 	/* Store the calculated quiet period for consistent use */
