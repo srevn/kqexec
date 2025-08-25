@@ -593,65 +593,71 @@ static result_t process_disable(monitor_t *monitor, const char *command_text) {
 	control_result(&result);
 
 	char *watches_value = kv_value(command_text, "watches");
-
-	if (watches_value) {
-		/* Disable specific watches */
-		int count = 0;
-		char **watch_names = kv_split(watches_value, ",", &count);
-
-		int disabled_count = 0;
-		char disabled_names[512] = "";
-		int message_len = 0;
-
-		for (int i = 0; i < count; i++) {
-			/* Find the watch by name in the registry */
-			uint32_t num_watches = 0;
-			watchref_t *watchrefs = registry_active(monitor->registry, &num_watches);
-
-			bool found = false;
-			for (uint32_t j = 0; j < num_watches; j++) {
-				watch_t *watch = registry_get(monitor->registry, watchrefs[j]);
-				if (watch && watch->name && strcmp(watch->name, watch_names[i]) == 0) {
-					if (monitor_disable(monitor, watchrefs[j])) {
-						disabled_count++;
-						/* Add to disabled names list */
-						if (disabled_count > 1) {
-							message_len += snprintf(disabled_names + message_len,
-													sizeof(disabled_names) - message_len, ", ");
-						}
-						message_len += snprintf(disabled_names + message_len,
-												sizeof(disabled_names) - message_len, "%s", watch_names[i]);
-					}
-					found = true;
-					break;
-				}
-			}
-
-			if (!found) {
-				log_message(WARNING, "Watch '%s' not found for disable command", watch_names[i]);
-			}
-
-			free(watchrefs);
-			free(watch_names[i]);
-		}
-		free(watch_names);
-
-		result.success = true;
-		result.message = malloc(256);
-		if (result.message) {
-			if (disabled_count > 0) {
-				snprintf(result.message, 256, "Disabled %d watch%s: %s",
-						 disabled_count, (disabled_count == 1) ? "" : "es", disabled_names);
-			} else {
-				snprintf(result.message, 256, "No watches were disabled");
-			}
-		}
-	} else {
+	if (!watches_value) {
 		result.success = false;
 		result.message = strdup("Missing 'watches' parameter for disable command");
+		return result;
 	}
 
-	free(watches_value);
+	/* Disable specific watches */
+	int count = 0;
+	char **watch_names = kv_split(watches_value, ",", &count);
+	free(watches_value); /* No longer needed */
+
+	if (!watch_names) {
+		result.success = false;
+		result.message = strdup("Failed to parse 'watches' parameter");
+		return result;
+	}
+
+	int disabled_count = 0;
+	char disabled_names[2048] = "";
+	int message_len = 0;
+
+	/* Get active watches once before the loop */
+	uint32_t num_watches = 0;
+	watchref_t *watchrefs = registry_active(monitor->registry, &num_watches);
+
+	for (int i = 0; i < count; i++) {
+		bool found = false;
+		for (uint32_t j = 0; j < num_watches; j++) {
+			watch_t *watch = registry_get(monitor->registry, watchrefs[j]);
+			if (watch && watch->name && strcmp(watch->name, watch_names[i]) == 0) {
+				if (monitor_disable(monitor, watchrefs[j])) {
+					disabled_count++;
+					/* Add to disabled names list */
+					if (disabled_count > 1) {
+						message_len += snprintf(disabled_names + message_len,
+												sizeof(disabled_names) - message_len, ", ");
+					}
+					message_len += snprintf(disabled_names + message_len,
+											sizeof(disabled_names) - message_len, "%s", watch_names[i]);
+				}
+				found = true;
+				break; /* Found the unique watch, no need to continue inner loop */
+			}
+		}
+
+		if (!found) {
+			log_message(WARNING, "Watch '%s' not found for disable command", watch_names[i]);
+		}
+		free(watch_names[i]);
+	}
+
+	free(watchrefs);
+	free(watch_names);
+
+	result.success = true;
+	result.message = malloc(256);
+	if (result.message) {
+		if (disabled_count > 0) {
+			snprintf(result.message, 256, "Disabled %d watch%s: %s",
+					 disabled_count, (disabled_count == 1) ? "" : "es", disabled_names);
+		} else {
+			snprintf(result.message, 256, "No watches were disabled");
+		}
+	}
+
 	return result;
 }
 
@@ -661,53 +667,59 @@ static result_t process_enable(monitor_t *monitor, const char *command_text) {
 	control_result(&result);
 
 	char *watches_value = kv_value(command_text, "watches");
-
-	if (watches_value) {
-		/* Enable specific watches */
-		int count = 0;
-		char **watch_names = kv_split(watches_value, ",", &count);
-
-		int enabled_count = 0;
-		char enabled_names[512] = "";
-		int message_len = 0;
-
-		for (int i = 0; i < count; i++) {
-			/* Find the watch by name regardless of state */
-			watchref_t watchref = registry_find(monitor->registry, watch_names[i]);
-
-			if (monitor_activate(monitor, watchref)) {
-				enabled_count++;
-				/* Add to enabled names list */
-				if (enabled_count > 1) {
-					message_len += snprintf(enabled_names + message_len,
-											sizeof(enabled_names) - message_len, ", ");
-				}
-				message_len += snprintf(enabled_names + message_len,
-										sizeof(enabled_names) - message_len, "%s", watch_names[i]);
-			} else {
-				log_message(WARNING, "Watch '%s' not found or failed to enable", watch_names[i]);
-			}
-
-			free(watch_names[i]);
-		}
-		free(watch_names);
-
-		result.success = true;
-		result.message = malloc(256);
-		if (result.message) {
-			if (enabled_count > 0) {
-				snprintf(result.message, 256, "Enabled %d watch%s: %s",
-						 enabled_count, (enabled_count == 1) ? "" : "es", enabled_names);
-			} else {
-				snprintf(result.message, 256, "No watches were enabled");
-			}
-		}
-	} else {
+	if (!watches_value) {
 		result.success = false;
 		result.message = strdup("Missing 'watches' parameter for enable command");
+		return result;
 	}
 
-	free(watches_value);
+	/* Enable specific watches */
+	int count = 0;
+	char **watch_names = kv_split(watches_value, ",", &count);
+	free(watches_value); /* No longer needed */
+
+	if (!watch_names) {
+		result.success = false;
+		result.message = strdup("Failed to parse 'watches' parameter");
+		return result;
+	}
+
+	int enabled_count = 0;
+	char enabled_names[2048] = "";
+	int message_len = 0;
+
+	for (int i = 0; i < count; i++) {
+		/* Find the watch by name regardless of state */
+		watchref_t watchref = registry_find(monitor->registry, watch_names[i]);
+
+		if (monitor_activate(monitor, watchref)) {
+			enabled_count++;
+			/* Add to enabled names list */
+			if (enabled_count > 1) {
+				message_len += snprintf(enabled_names + message_len,
+										sizeof(enabled_names) - message_len, ", ");
+			}
+			message_len += snprintf(enabled_names + message_len,
+									sizeof(enabled_names) - message_len, "%s", watch_names[i]);
+		} else {
+			log_message(WARNING, "Watch '%s' not found or failed to enable", watch_names[i]);
+		}
+
+		free(watch_names[i]);
+	}
+	free(watch_names);
+
+	result.success = true;
+	result.message = malloc(256);
+	if (result.message) {
+		if (enabled_count > 0) {
+			snprintf(result.message, 256, "Enabled %d watch%s: %s",
+					 enabled_count, (enabled_count == 1) ? "" : "es", enabled_names);
+		} else {
+			snprintf(result.message, 256, "No watches were enabled");
+		}
+	}
+
 	return result;
 }
 
