@@ -532,32 +532,7 @@ static void pending_promote(monitor_t *monitor, pending_t *pending, const char *
 	watch_t *pending_watch = registry_get(monitor->registry, pending->watchref);
 	if (!pending_watch) return;
 
-	/* Check if a watch for this path with the same name already exists */
-	if (!monitor->config || !matched_path) {
-		/* Skip check if no config or path */
-	} else {
-		uint32_t num_active = 0;
-		watchref_t *watchrefs = registry_active(monitor->registry, &num_active);
-		if (!watchrefs) {
-			/* No watchrefs to check */
-		} else {
-			for (uint32_t i = 0; i < num_active; i++) {
-				watch_t *watch = registry_get(monitor->registry, watchrefs[i]);
-				if (!watch || !watch->path || !watch->name ||
-					strcmp(watch->path, matched_path) != 0 ||
-					strcmp(watch->name, pending_watch->name) != 0) {
-					continue;
-				}
-				log_message(INFO, "Watch for %s with name '%s' from pattern %s already exists, skipping promotion",
-							matched_path, watch->name, pending->glob_pattern);
-				free(watchrefs);
-				return;
-			}
-			free(watchrefs);
-		}
-	}
-
-	/* Clone watch for resolved path */
+	/* Clone watch for resolved path first */
 	watch_t *resolved_watch = watch_clone(pending_watch);
 	if (!resolved_watch) {
 		log_message(ERROR, "Failed to clone watch for resolved path: %s", matched_path);
@@ -576,7 +551,35 @@ static void pending_promote(monitor_t *monitor, pending_t *pending, const char *
 		return;
 	}
 
-	/* Add dynamic watch to config */
+	/* Use registry lock for atomic duplicate check to prevent race conditions */
+	pthread_rwlock_rdlock(&monitor->registry->lock);
+
+	bool duplicate_found = false;
+	if (monitor->config && matched_path) {
+		/* Scan active watches under the lock to prevent race conditions */
+		for (uint32_t i = 1; i < monitor->registry->next_id && i < monitor->registry->capacity; i++) {
+			if (monitor->registry->states[i] == WATCH_STATE_ACTIVE && monitor->registry->watches[i]) {
+				watch_t *existing_watch = monitor->registry->watches[i];
+				if (existing_watch && existing_watch->path && existing_watch->name &&
+					strcmp(existing_watch->path, matched_path) == 0 &&
+					strcmp(existing_watch->name, pending_watch->name) == 0) {
+					log_message(INFO, "Watch for %s with name '%s' from pattern %s already exists, skipping promotion",
+								matched_path, existing_watch->name, pending->glob_pattern);
+					duplicate_found = true;
+					break;
+				}
+			}
+		}
+	}
+
+	pthread_rwlock_unlock(&monitor->registry->lock);
+
+	if (duplicate_found) {
+		watch_destroy(resolved_watch);
+		return;
+	}
+
+	/* Add dynamic watch to config, the registry lock in watch_add() provides additional protection */
 	if (!watch_add(monitor->config, monitor->registry, resolved_watch)) {
 		log_message(ERROR, "Failed to add dynamic watch to config: %s", matched_path);
 		/* Clean up avoid memory leaks */
