@@ -343,13 +343,17 @@ static bool monitor_kq(monitor_t *monitor, watcher_t *watcher) {
 	int flags = 0;
 	int shared_count = 0;
 
-	/* Consolidate event filters from ALL watches on this file descriptor */
+	/* Consolidate event filters from enabled watches on this file descriptor */
 	for (int i = 0; i < monitor->num_watches; i++) {
 		if (monitor->watches[i]->wd != watcher->wd) continue;
 
-		shared_count++;
 		watch_t *shared_watch = registry_get(monitor->registry, monitor->watches[i]->watchref);
 		if (!shared_watch) continue;
+
+		/* Only process enabled watches */
+		if (!shared_watch->enabled) continue;
+
+		shared_count++;
 
 		if (shared_watch->filter & EVENT_STRUCTURE) {
 			flags |= NOTE_WRITE | NOTE_EXTEND;
