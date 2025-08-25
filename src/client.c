@@ -75,15 +75,29 @@ bool client_send(int sock_fd, const char *command_text) {
 		}
 	}
 
-	ssize_t data_sent = write(sock_fd, full_command, strlen(full_command));
+	size_t command_length = strlen(full_command);
+	size_t total_sent = 0;
+	ssize_t data_sent;
 
-	free(full_command);
+	/* Handle partial writes and signal interruptions */
+	while (total_sent < command_length) {
+		data_sent = write(sock_fd, full_command + total_sent, command_length - total_sent);
 
-	if (data_sent == -1) {
-		fprintf(stderr, "Error: Failed to send command: %s\n", strerror(errno));
-		return false;
+		if (data_sent == -1) {
+			if (errno == EINTR) {
+				/* Interrupted by signal, retry */
+				continue;
+			} else {
+				fprintf(stderr, "Error: Failed to send command: %s\n", strerror(errno));
+				free(full_command);
+				return false;
+			}
+		}
+
+		total_sent += data_sent;
 	}
 
+	free(full_command);
 	return true;
 }
 
@@ -121,6 +135,9 @@ char *client_receive(int sock_fd) {
 		if (data_received <= 0) {
 			if (data_received == 0) {
 				break; /* Connection closed */
+			} else if (errno == EINTR) {
+				/* Interrupted by signal, retry */
+				continue;
 			} else {
 				fprintf(stderr, "Error: Failed to receive response: %s\n", strerror(errno));
 				free(buffer);
