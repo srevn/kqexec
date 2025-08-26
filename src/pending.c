@@ -885,7 +885,7 @@ void pending_delete(monitor_t *monitor, const char *deleted_path) {
 	/* Iterate backwards to safely remove entries */
 	for (int i = monitor->num_pending - 1; i >= 0; i--) {
 		pending_t *pending = monitor->pending[i];
-		if (!pending) continue;
+		if (!pending || !pending->current_parent) continue;
 
 		/* Check if this pending watch is affected by the deletion */
 		bool affected = (strcmp(pending->current_parent, deleted_path) == 0) ||
@@ -908,6 +908,76 @@ void pending_delete(monitor_t *monitor, const char *deleted_path) {
 				free(target_path);
 			}
 		}
+	}
+}
+
+/* Check for deleted child directories that may affect pending watches */
+void pending_check(monitor_t *monitor, const char *changed_path) {
+	if (!monitor || !changed_path || monitor->num_pending == 0) return;
+
+	log_message(DEBUG, "Directory content changed, checking for deleted child directories: %s",
+				changed_path);
+
+	int deleted_count = 0;
+	int deleted_capacity = 0;
+	char **deleted_parents = NULL;
+
+	for (int i = 0; i < monitor->num_pending; i++) {
+		pending_t *pending = monitor->pending[i];
+		if (!pending || !pending->current_parent) continue;
+
+		/* Check if the pending parent is a child of the directory that changed */
+		size_t parent_len = strlen(changed_path);
+		if (strlen(pending->current_parent) <= parent_len ||
+			strncmp(pending->current_parent, changed_path, parent_len) != 0 ||
+			pending->current_parent[parent_len] != '/') {
+			continue;
+		}
+
+		/* Check if the pending parent path still exists */
+		struct stat info;
+		if (stat(pending->current_parent, &info) == 0) continue;
+
+		/* The path was deleted, check if we've already queued it for processing */
+		bool found = false;
+		for (int j = 0; j < deleted_count; j++) {
+			if (strcmp(deleted_parents[j], pending->current_parent) == 0) {
+				found = true;
+				break;
+			}
+		}
+		
+		if (found) continue;
+
+		/* This is a new deleted path, add it to our list */
+		if (deleted_count >= deleted_capacity) {
+			deleted_capacity = (deleted_capacity == 0) ? 4 : deleted_capacity * 2;
+			char **new_parents = realloc(deleted_parents, deleted_capacity * sizeof(char *));
+			if (!new_parents) {
+				log_message(ERROR, "Failed to allocate memory for deleted parent paths");
+				for (int k = 0; k < deleted_count; k++) {
+					free(deleted_parents[k]);
+				}
+				free(deleted_parents);
+				deleted_parents = NULL;
+				break;
+			}
+			deleted_parents = new_parents;
+		}
+		
+		deleted_parents[deleted_count] = strdup(pending->current_parent);
+		if (deleted_parents[deleted_count]) deleted_count++;
+	}
+
+	/* Now process the deletions */
+	if (deleted_parents) {
+		for (int i = 0; i < deleted_count; i++) {
+			log_message(DEBUG, "Detected deletion of pending watch parent: %s", deleted_parents[i]);
+			pending_delete(monitor, deleted_parents[i]);
+			free(deleted_parents[i]);
+		}
+		
+		free(deleted_parents);
 	}
 }
 

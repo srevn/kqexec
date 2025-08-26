@@ -961,27 +961,7 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 
 	/* Handle directory content changes, check for deleted child directories */
 	if (optype == OP_DIR_CONTENT_CHANGED && monitor->num_pending > 0) {
-		log_message(DEBUG, "Directory content changed, checking for deleted child directories: %s",
-					subscription->resource->path);
-
-		/* Check all pending watches to see if any are waiting for children of this directory */
-		for (int i = monitor->num_pending - 1; i >= 0; i--) {
-			pending_t *pending = monitor->pending[i];
-			if (!pending || !pending->current_parent) continue;
-
-			/* Check if this pending watch's current_parent is a child of the changed directory */
-			size_t parent_len = strlen(subscription->resource->path);
-			if (strlen(pending->current_parent) > parent_len &&
-				strncmp(pending->current_parent, subscription->resource->path, parent_len) == 0 &&
-				pending->current_parent[parent_len] == '/') {
-				/* Check if the current_parent still exists */
-				struct stat info;
-				if (stat(pending->current_parent, &info) != 0) {
-					log_message(DEBUG, "Detected deletion of pending watch parent: %s", pending->current_parent);
-					pending_delete(monitor, pending->current_parent);
-				}
-			}
-		}
+		pending_check(monitor, subscription->resource->path);
 	}
 
 	/* If this is a proxy watch, its only purpose is to trigger the check above */

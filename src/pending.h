@@ -34,6 +34,7 @@ typedef struct pending {
 bool pending_add(monitor_t *monitor, const char *target_path, watchref_t watchref);
 void pending_process(monitor_t *monitor, const char *parent_path);
 void pending_delete(monitor_t *monitor, const char *deleted_path);
+void pending_check(monitor_t *monitor, const char *changed_path);
 
 /* Pending cleanup functions */
 void pending_cleanup(monitor_t *monitor, registry_t *registry);
