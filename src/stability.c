@@ -1,5 +1,6 @@
 #include "stability.h"
 
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -377,29 +378,43 @@ failure_t stability_fail(monitor_t *monitor, check_t *check, subscription_t *roo
 
 	/* Check if the directory still exists */
 	struct stat info;
-	if (stat(check->path, &info) != 0 || !S_ISDIR(info.st_mode)) {
+	if (stat(check->path, &info) != 0) {
+		if (errno == ENOENT) {
+			/* Directory does not exist, this is a definitive state */
+			log_message(INFO, "Directory %s confirmed deleted, cleaning up immediately", check->path);
+			root->profile->scanner->active = false;
+			root->resource->exists = false;
+			return SCAN_FAILURE_MAX_ATTEMPTS_REACHED; /* Signal to remove from queue */
+		}
+
+		/* For other errors (e.g., EIO, EACCES), retry a few times */
 		root->profile->stability->checks_failed++;
-		log_message(DEBUG, "Directory %s not found (attempt %d/%d)", check->path,
+		log_message(WARNING, "Failed to stat directory %s: %s (attempt %d/%d)", check->path, strerror(errno),
 					root->profile->stability->checks_failed, MAX_CHECKS_FAILED);
 
 		/* After multiple consecutive failures, consider it permanently deleted */
 		if (root->profile->stability->checks_failed >= MAX_CHECKS_FAILED) {
-			log_message(INFO, "Directory %s confirmed deleted after %d failed checks, cleaning up",
+			log_message(ERROR, "Giving up on directory %s after %d failed stat attempts",
 						check->path, root->profile->stability->checks_failed);
 
 			/* Mark as not active for all watches */
 			root->profile->scanner->active = false;
 			root->resource->exists = false;
-
 			return SCAN_FAILURE_MAX_ATTEMPTS_REACHED;
 		}
-
-		return SCAN_FAILURE_DIRECTORY_DELETED;
-	} else {
-		/* Scan failed for other reasons */
-		root->profile->stability->checks_failed = 0; /* Reset counter */
-		return SCAN_FAILURE_TEMPORARY_ERROR;
+		return SCAN_FAILURE_DIRECTORY_DELETED; /* Signals a retry */
 	}
+
+	if (!S_ISDIR(info.st_mode)) {
+		log_message(WARNING, "Path %s exists but is not a directory, cleaning up", check->path);
+		root->profile->scanner->active = false;
+		root->resource->exists = false;
+		return SCAN_FAILURE_MAX_ATTEMPTS_REACHED;
+	}
+
+	/* Scan failed for other reasons (e.g. temp files found during scan) */
+	root->profile->stability->checks_failed = 0; /* Reset counter */
+	return SCAN_FAILURE_TEMPORARY_ERROR;
 }
 
 /* Calculate required stability checks based on complexity */
