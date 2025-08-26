@@ -912,19 +912,12 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 		return false; /* Error already logged by registry */
 	}
 
-	/* Handle internal watches - they only trigger pending_process, not commands */
-	if (watch->name != NULL && strncmp(watch->name, "__", 2) == 0) {
-		/* Specifically allow __config_file__ to pass through for hot-reloading */
-		if (strcmp(watch->name, "__config_file__") != 0) {
-			log_message(DEBUG, "Filtered proxy watch event: %s (watch: %s), served pending resolution purpose",
-						event->path, watch->name);
-			return false; /* Don't process further, event has served its purpose */
-		}
-	}
+	/* Check if this is a proxy watch */
+	bool is_proxy = strncmp(watch->name, "__proxy_", 8) == 0 && strcmp(watch->name, "__config_file__") != 0;
 
 	/* Additional safety checks for watch structure */
-	if (!watch->name || !watch->command) {
-		log_message(ERROR, "events_process: Watch has NULL name or command");
+	if (!watch->name || (!watch->command && !is_proxy)) {
+		log_message(ERROR, "Watch has NULL name or command");
 		return false;
 	}
 
@@ -955,22 +948,6 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 
 	subscription_t *root = stability_root(monitor, subscription);
 	resource_t *root_resource = root ? root->resource : subscription->resource;
-
-	/* Check if this watch has batch timeout configured */
-	if (watch->batch_timeout > 0 && !is_deferred) {
-		/* Get root resource to ensure consistent gating across watch hierarchies */
-		events_defer(monitor, root_resource, watchref, event, kind);
-		return false; /* Stop further processing */
-	}
-
-	/* Check if command is executing for this path or its root, defer events during execution */
-	if (root_resource->executing) {
-		log_message(DEBUG, "Deferring event for %s, command is currently executing for %s",
-					event->path, root_resource->path);
-		/* Defer event on the resource itself until the current command completes */
-		events_defer(monitor, root_resource, watchref, event, kind);
-		return false;
-	}
 
 	/* Update timestamps before determining operation */
 	subscription->resource->last_time = event->time;
@@ -1006,6 +983,47 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 			}
 		}
 	}
+
+	/* If this is a proxy watch, its only purpose is to trigger the check above */
+	if (is_proxy) {
+		log_message(DEBUG, "Filtered proxy watch event: %s (watch: %s), served pending resolution purpose",
+					event->path, watch->name);
+
+		/* Proactively sync file watches in this directory to handle atomic saves */
+		size_t parent_len = strlen(event->path);
+		for (int i = 0; i < monitor->num_watches; i++) {
+			watcher_t *watcher = monitor->watches[i];
+			if (watcher && watcher->path && strlen(watcher->path) > parent_len &&
+				strncmp(watcher->path, event->path, parent_len) == 0 && watcher->path[parent_len] == '/') {
+				watch_t *child_watch = registry_get(monitor->registry, watcher->watchref);
+				if (child_watch && child_watch->target == WATCH_FILE) {
+					log_message(DEBUG, "Proactively syncing file watch for '%s' due to parent change", watcher->path);
+					monitor_sync(monitor, watcher->path);
+				}
+			}
+		}
+		return false;
+	}
+
+	/* Check if this watch has batch timeout configured */
+	if (watch->batch_timeout > 0 && !is_deferred) {
+		/* Get root resource to ensure consistent gating across watch hierarchies */
+		events_defer(monitor, root_resource, watchref, event, kind);
+		return false; /* Stop further processing */
+	}
+
+	/* Check if command is executing for this path or its root, defer events during execution */
+	if (root_resource->executing) {
+		log_message(DEBUG, "Deferring event for %s, command is currently executing for %s",
+					event->path, root_resource->path);
+		/* Defer event on the resource itself until the current command completes */
+		events_defer(monitor, root_resource, watchref, event, kind);
+		return false;
+	}
+
+	if (optype == OP_NONE) return false; /* No relevant change detected */
+
+	log_message(DEBUG, "Determined operation type %d for %s", optype, subscription->resource->path);
 
 	/* Check if operation is included in watch mask */
 	filter_t filter_for_mask = operation_to_filter(optype);

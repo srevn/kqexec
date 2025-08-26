@@ -885,6 +885,7 @@ void pending_delete(monitor_t *monitor, const char *deleted_path) {
 	/* Iterate backwards to safely remove entries */
 	for (int i = monitor->num_pending - 1; i >= 0; i--) {
 		pending_t *pending = monitor->pending[i];
+		if (!pending) continue;
 
 		/* Check if this pending watch is affected by the deletion */
 		bool affected = (strcmp(pending->current_parent, deleted_path) == 0) ||
