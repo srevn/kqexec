@@ -633,7 +633,7 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 		/* Look up the fd in our mapper for O(1) dispatch */
 		map_entry_t *entry = mapper_get(monitor->mapper, fd);
 		if (!entry) {
-			log_message(DEBUG, "Event for an unknown or out-of-bounds fd: %d", fd);
+			log_message(DEBUG, "Event for an unknown or out-of-bounds (fd=%d)", fd);
 			continue;
 		}
 
@@ -755,7 +755,7 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 			}
 
 			case MAP_TYPE_NONE:
-				log_message(DEBUG, "Event for a closed or unmapped fd: %d", fd);
+				log_message(DEBUG, "Event for a closed or unmapped (fd=%d)", fd);
 				break;
 		}
 	}

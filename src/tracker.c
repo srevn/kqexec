@@ -362,7 +362,7 @@ bool tracker_add(monitor_t *monitor, resource_t *resource, const char *file_path
 
 	/* Add to the central mapper */
 	if (!map_tracker(monitor->mapper, fd, new_tracker)) {
-		log_message(WARNING, "Failed to add tracker for %s (fd: %d) to mapper", file_path, fd);
+		log_message(WARNING, "Failed to add tracker for %s (fd=%d) to mapper", file_path, fd);
 		/* Cleanup logic might be needed here if this fails */
 	}
 

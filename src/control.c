@@ -210,7 +210,7 @@ void control_accept(server_t *server, int kqueue_fd) {
 		return;
 	}
 
-	log_message(DEBUG, "Accepted control client connection (fd %d), total clients: %d",
+	log_message(DEBUG, "Accepted control client connection (fd=%d), total clients: %d",
 				client_fd, server->num_clients);
 }
 
@@ -241,7 +241,7 @@ void control_remove(server_t *server, int client_fd, int kqueue_fd) {
 			server->num_clients--;
 			server->clients[server->num_clients] = NULL;
 
-			log_message(DEBUG, "Removed client (fd %d), remaining clients: %d", client_fd,
+			log_message(DEBUG, "Removed client (fd=%d), remaining clients: %d", client_fd,
 						server->num_clients);
 			break;
 		}
@@ -285,7 +285,7 @@ void control_handle(monitor_t *monitor, struct kevent *event) {
 
 	/* Handle client disconnection */
 	if (event->flags & EV_EOF || event->data == 0) {
-		log_message(DEBUG, "Client (fd %d) disconnected", client_fd);
+		log_message(DEBUG, "Client (fd=%d) disconnected", client_fd);
 		control_remove(server, client_fd, monitor->kq);
 		return;
 	}
@@ -296,7 +296,7 @@ void control_handle(monitor_t *monitor, struct kevent *event) {
 
 	if (data_read <= 0) {
 		if (data_read == 0 || (data_read == -1 && errno != EAGAIN && errno != EWOULDBLOCK)) {
-			log_message(DEBUG, "Client (fd %d) closed connection or error occurred: %s",
+			log_message(DEBUG, "Client (fd=%d) closed connection or error occurred: %s",
 						client_fd, strerror(errno));
 			control_remove(server, client_fd, monitor->kq);
 		}
@@ -314,7 +314,7 @@ void control_handle(monitor_t *monitor, struct kevent *event) {
 		/* Process the command */
 		char *command = kv_value(client->buffer, "command");
 		if (command) {
-			log_message(DEBUG, "Processing '%s' command from session (fd %d)", command, client_fd);
+			log_message(DEBUG, "Processing '%s' command from session (fd=%d)", command, client_fd);
 			free(command);
 		}
 		result_t result = control_process(monitor, client->buffer);
@@ -323,7 +323,7 @@ void control_handle(monitor_t *monitor, struct kevent *event) {
 		if (response) {
 			/* Send response to client using buffered approach */
 			if (!control_send(monitor, client, response)) {
-				log_message(WARNING, "Failed to send response to client (fd %d)", client_fd);
+				log_message(WARNING, "Failed to send response to client (fd=%d)", client_fd);
 				control_remove(server, client_fd, monitor->kq);
 				free(response);
 				control_cleanup(&result);
@@ -339,7 +339,7 @@ void control_handle(monitor_t *monitor, struct kevent *event) {
 		client->buffer[0] = '\0';
 	} else if (client->buffer_pos >= BUFFER_SIZE - 1) {
 		/* Buffer overflow, disconnect client */
-		log_message(WARNING, "Client (fd %d) buffer overflow: %zu data attempted, max %d data allowed",
+		log_message(WARNING, "Client (fd=%d) buffer overflow: %zu data attempted, max %d data allowed",
 					client_fd, client->buffer_pos, BUFFER_SIZE - 1);
 		control_remove(server, client_fd, monitor->kq);
 	}
@@ -464,7 +464,7 @@ void control_write(monitor_t *monitor, struct kevent *event) {
 
 	/* Handle the pending write */
 	if (!control_pending(monitor, client)) {
-		log_message(DEBUG, "Client (fd %d) write failed, disconnecting", client_fd);
+		log_message(DEBUG, "Client (fd=%d) write failed, disconnecting", client_fd);
 		control_remove(server, client_fd, monitor->kq);
 	}
 }

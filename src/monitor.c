@@ -120,7 +120,7 @@ static watcher_t *watcher_find(monitor_t *monitor, const char *path) {
 	for (int i = 0; i < monitor->num_watches; i++) {
 		if (monitor->watches[i] && monitor->watches[i]->path) {
 			if (strcmp(monitor->watches[i]->path, path) == 0) {
-				log_message(DEBUG, "Found existing watcher for path %s (fd %d)",
+				log_message(DEBUG, "Found existing watcher for path %s (fd=%d)",
 							path, monitor->watches[i]->wd);
 				return monitor->watches[i];
 			}
@@ -154,7 +154,7 @@ static void monitor_deactivation(watchref_t watchref, void *context) {
 	for (int i = monitor->num_watches - 1; i >= 0; i--) {
 		watcher_t *watcher = monitor->watches[i];
 		if (watcher && watchref_equal(watcher->watchref, watchref)) {
-			log_message(DEBUG, "Retiring watcher for deactivated watch: %s (fd %d)",
+			log_message(DEBUG, "Retiring watcher for deactivated watch: %s (fd=%d)",
 						watcher->path, watcher->wd);
 
 			/* Remove from the mapper to prevent further events */
@@ -403,7 +403,7 @@ static bool monitor_kq(monitor_t *monitor, watcher_t *watcher) {
 	EV_SET(&changes[0], watcher->wd, EVFILT_VNODE, EV_ADD | EV_CLEAR, flags, 0, watcher);
 
 	if (kevent(monitor->kq, changes, 1, NULL, 0, NULL) == -1) {
-		log_message(ERROR, "Failed to register kqueue events for %s (fd %d): %s", watcher->path,
+		log_message(ERROR, "Failed to register kqueue events for %s (fd=%d): %s", watcher->path,
 					watcher->wd, strerror(errno));
 		return false;
 	}
@@ -1524,7 +1524,7 @@ bool monitor_disable(monitor_t *monitor, watchref_t watchref) {
 	for (int i = monitor->num_watches - 1; i >= 0; i--) {
 		watcher_t *watcher = monitor->watches[i];
 		if (watcher && watchref_equal(watcher->watchref, watchref)) {
-			log_message(DEBUG, "Removing watcher for disabled watch: %s (fd %d)",
+			log_message(DEBUG, "Removing watcher for disabled watch: %s (fd=%d)",
 						watcher->path, watcher->wd);
 
 			/* Remove the watcher from the array and destroy it */

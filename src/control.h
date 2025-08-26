@@ -4,7 +4,6 @@
 #include <pthread.h>
 #include <stdbool.h>
 #include <sys/event.h>
-#include <sys/socket.h>
 #include <sys/un.h>
 
 /* Forward declarations */
