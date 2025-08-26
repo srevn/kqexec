@@ -28,6 +28,7 @@ typedef struct protocol {
 	
 	/* Data payload */
 	int data_count;                        /* Number of key-value pairs in response */
+	int data_capacity;                     /* Allocated capacity for data arrays */
 	char **data_keys;                      /* Array of response data keys */
 	char **data_values;                    /* Array of corresponding data values */
 } protocol_t;

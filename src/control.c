@@ -14,6 +14,33 @@
 #include "monitor.h"
 #include "protocol.h"
 
+/* Ensure client write buffer has enough capacity for additional data */
+static bool client_buffer_capacity(client_t *client, size_t additional_needed) {
+	if (!client) return false;
+	
+	/* Check if we have enough space */
+	if (client->write_size + additional_needed <= client->write_capacity) {
+		return true;
+	}
+	
+	/* Calculate new capacity using doubling strategy */
+	size_t new_capacity = client->write_capacity;
+	while (client->write_size + additional_needed > new_capacity) {
+		new_capacity = (new_capacity == 0) ? 128 : new_capacity * 2;
+	}
+	
+	/* Reallocate buffer */
+	char *new_buffer = realloc(client->write_buffer, new_capacity);
+	if (!new_buffer) {
+		log_message(ERROR, "Failed to reallocate client write buffer");
+		return false;
+	}
+	
+	client->write_buffer = new_buffer;
+	client->write_capacity = new_capacity;
+	return true;
+}
+
 /* Create a new control server */
 server_t *server_create(const char *socket_path) {
 	if (!socket_path) {
@@ -194,6 +221,7 @@ void control_accept(server_t *server, int kqueue_fd) {
 	client->write_buffer = NULL;
 	client->write_size = 0;
 	client->write_pos = 0;
+	client->write_capacity = 0;
 
 	/* Add client to array */
 	server->clients[server->num_clients++] = client;
@@ -388,8 +416,7 @@ bool control_send(monitor_t *monitor, client_t *client, const char *response) {
 
 		/* Partial write occurred, buffer the remaining data */
 		size_t remaining = response_len - data_sent;
-		client->write_buffer = malloc(remaining);
-		if (!client->write_buffer) return false;
+		if (!client_buffer_capacity(client, remaining)) return false;
 
 		memcpy(client->write_buffer, response + data_sent, remaining);
 		client->write_size = remaining;
@@ -408,13 +435,10 @@ bool control_send(monitor_t *monitor, client_t *client, const char *response) {
 		return true;
 	} else {
 		/* Already have pending data, append to buffer */
-		size_t new_size = client->write_size + response_len;
-		char *new_buffer = realloc(client->write_buffer, new_size);
-		if (!new_buffer) return false;
+		if (!client_buffer_capacity(client, response_len)) return false;
 
-		memcpy(new_buffer + client->write_size, response, response_len);
-		client->write_buffer = new_buffer;
-		client->write_size = new_size;
+		memcpy(client->write_buffer + client->write_size, response, response_len);
+		client->write_size += response_len;
 
 		return true;
 	}
@@ -445,6 +469,7 @@ bool control_pending(monitor_t *monitor, client_t *client) {
 		client->write_buffer = NULL;
 		client->write_size = 0;
 		client->write_pos = 0;
+		client->write_capacity = 0;
 
 		struct kevent change;
 		EV_SET(&change, client->fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);

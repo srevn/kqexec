@@ -293,14 +293,20 @@ void client_display(const char *response) {
 
 	bool is_success = (strstr(response, "status=success") != NULL);
 
-	/* Check for structured data and display accordingly */
-	if (is_success && strstr(response, "watch_count=")) {
-		/* This is a list command response */
+	/* Use explicit response_type for robust protocol handling */
+	char *response_type = client_value(response, "response_type");
+	
+	if (response_type && strcmp(response_type, "list") == 0) {
+		/* Structured list response */
 		client_list(response);
-	} else if (is_success && strstr(response, "active_count=")) {
-		/* This is a status command response */
+		free(response_type);
+	} else if (response_type && strcmp(response_type, "status") == 0) {
+		/* Structured status response */
 		client_status(response);
+		free(response_type);
 	} else {
+		/* Free response_type if it was allocated */
+		free(response_type);
 		/* Fall back to message-based display for other commands */
 		char *response_copy = strdup(response);
 		if (!response_copy) return;

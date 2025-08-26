@@ -289,20 +289,28 @@ void protocol_cleanup(protocol_t *result) {
 static bool protocol_data(protocol_t *result, const char *key, const char *value) {
 	if (!result || !key || !value) return false;
 
-	/* Expand arrays if needed */
-	char **new_keys = realloc(result->data_keys, (result->data_count + 1) * sizeof(char *));
-	if (!new_keys) {
-		log_message(ERROR, "Failed to expand data keys array");
-		return false;
-	}
-	result->data_keys = new_keys;
+	/* Expand arrays if needed using amortized doubling strategy */
+	if (result->data_count >= result->data_capacity) {
+		int new_capacity = (result->data_capacity == 0) ? 4 : result->data_capacity * 2;
+		
+		/* Reallocate keys array */
+		char **new_keys = realloc(result->data_keys, new_capacity * sizeof(char *));
+		if (!new_keys) {
+			log_message(ERROR, "Failed to expand data keys array");
+			return false;
+		}
+		result->data_keys = new_keys;
 
-	char **new_values = realloc(result->data_values, (result->data_count + 1) * sizeof(char *));
-	if (!new_values) {
-		log_message(ERROR, "Failed to expand data values array");
-		return false;
+		/* Reallocate values array */
+		char **new_values = realloc(result->data_values, new_capacity * sizeof(char *));
+		if (!new_values) {
+			log_message(ERROR, "Failed to expand data values array");
+			return false;
+		}
+		result->data_values = new_values;
+
+		result->data_capacity = new_capacity;
 	}
-	result->data_values = new_values;
 
 	/* Add the key-value pair */
 	result->data_keys[result->data_count] = strdup(key);
@@ -381,7 +389,7 @@ static protocol_t protocol_disable(monitor_t *monitor, const char *command_text)
 
 	array_free(watch_names);
 
-	/* Set success based on whether any watches failed (not found or failed to change) */
+	/* Set success based on whether any watches failed */
 	result.success = !has_failures;
 	builder_t final_message;
 	builder_init(&final_message, 512);
@@ -399,6 +407,10 @@ static protocol_t protocol_disable(monitor_t *monitor, const char *command_text)
 	}
 
 	result.message = builder_string(&final_message);
+	
+	/* Add response type for explicit protocol handling */
+	protocol_data(&result, "response_type", "message");
+	
 	builder_free(&success_names);
 	builder_free(&messages);
 
@@ -464,7 +476,7 @@ static protocol_t protocol_enable(monitor_t *monitor, const char *command_text) 
 	}
 	array_free(watch_names);
 
-	/* Set success based on whether any watches failed (not found or failed to change) */
+	/* Set success based on whether any watches failed */
 	result.success = !has_failures;
 
 	/* Build final response message combining success and error info */
@@ -484,6 +496,10 @@ static protocol_t protocol_enable(monitor_t *monitor, const char *command_text) 
 	}
 
 	result.message = builder_string(&final_message);
+	
+	/* Add response type for explicit protocol handling */
+	protocol_data(&result, "response_type", "message");
+	
 	builder_free(&success_names);
 	builder_free(&messages);
 
@@ -511,7 +527,7 @@ static protocol_t protocol_status(monitor_t *monitor, const char *command_text) 
 	array_t *disabled_names = array_init(8);
 	array_t *pending_paths = array_init(4);
 
-	/* Collect unique pending paths (watches waiting for filesystem availability) */
+	/* Collect unique pending paths */
 	for (int i = 0; i < monitor->num_pending; i++) {
 		pending_t *pending = monitor->pending[i];
 		if (pending && pending->target_path) {
@@ -578,6 +594,9 @@ static protocol_t protocol_status(monitor_t *monitor, const char *command_text) 
 		builder_free(&pending_list);
 	}
 
+	/* Add response type for explicit protocol handling */
+	protocol_data(&result, "response_type", "status");
+
 	result.success = true;
 	result.message = strdup("Status data returned as structured fields");
 
@@ -589,7 +608,7 @@ static protocol_t protocol_status(monitor_t *monitor, const char *command_text) 
 	return result;
 }
 
-/* Process list command - returns structured watch data */
+/* Process list command */
 static protocol_t protocol_list(monitor_t *monitor, const char *command_text) {
 	protocol_t result;
 	protocol_init(&result);
@@ -647,6 +666,9 @@ static protocol_t protocol_list(monitor_t *monitor, const char *command_text) {
 	snprintf(watch_count_str, sizeof(watch_count_str), "%d", watch_index);
 	protocol_data(&result, "watch_count", watch_count_str);
 
+	/* Add response type for explicit protocol handling */
+	protocol_data(&result, "response_type", "list");
+
 	/* Free resources */
 	free(watchrefs);
 	array_free(processed_names);
@@ -671,6 +693,9 @@ static protocol_t protocol_reload(monitor_t *monitor, const char *command_text) 
 
 	result.success = true;
 	result.message = strdup("Configuration reload requested");
+	
+	/* Add response type for explicit protocol handling */
+	protocol_data(&result, "response_type", "message");
 
 	return result;
 }

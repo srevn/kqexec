@@ -27,7 +27,8 @@ typedef struct client {
 	/* Output buffering */
 	char *write_buffer;                    /* Dynamically allocated write buffer */
 	size_t write_pos;                      /* Current position in write buffer */
-	size_t write_size;                     /* Total allocated size of write buffer */
+	size_t write_size;                     /* Current used size of write buffer */
+	size_t write_capacity;                 /* Total allocated capacity of write buffer */
 } client_t;
 
 /* Control server state */
