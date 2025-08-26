@@ -241,8 +241,19 @@ array_t *kv_split(const char *value, const char *delimiter) {
 			*end-- = '\0';
 		}
 
-		if (!array_add(result, strdup(token))) {
+		/* Duplicate token and check for allocation failure */
+		char *duplicated_token = strdup(token);
+		if (!duplicated_token) {
+			log_message(ERROR, "Failed to duplicate token");
+			array_free(result);
+			free(value_copy);
+			return NULL;
+		}
+
+		/* Add to array and handle failure properly */
+		if (!array_add(result, duplicated_token)) {
 			log_message(ERROR, "Failed to add token to array");
+			free(duplicated_token); /* Free the just-allocated token */
 			array_free(result);
 			free(value_copy);
 			return NULL;
@@ -274,6 +285,41 @@ void protocol_cleanup(protocol_t *result) {
 	memset(result, 0, sizeof(protocol_t));
 }
 
+/* Add a key-value pair to the protocol result data */
+static bool protocol_data(protocol_t *result, const char *key, const char *value) {
+	if (!result || !key || !value) return false;
+
+	/* Expand arrays if needed */
+	char **new_keys = realloc(result->data_keys, (result->data_count + 1) * sizeof(char *));
+	if (!new_keys) {
+		log_message(ERROR, "Failed to expand data keys array");
+		return false;
+	}
+	result->data_keys = new_keys;
+
+	char **new_values = realloc(result->data_values, (result->data_count + 1) * sizeof(char *));
+	if (!new_values) {
+		log_message(ERROR, "Failed to expand data values array");
+		return false;
+	}
+	result->data_values = new_values;
+
+	/* Add the key-value pair */
+	result->data_keys[result->data_count] = strdup(key);
+	result->data_values[result->data_count] = strdup(value);
+
+	if (!result->data_keys[result->data_count] || !result->data_values[result->data_count]) {
+		log_message(ERROR, "Failed to duplicate key or value");
+		free(result->data_keys[result->data_count]);
+		free(result->data_values[result->data_count]);
+		return false;
+	}
+
+	result->data_count++;
+	return true;
+}
+
+
 /* Parse comma-separated watch names and attempt to disable each */
 static protocol_t protocol_disable(monitor_t *monitor, const char *command_text) {
 	protocol_t result;
@@ -302,6 +348,7 @@ static protocol_t protocol_disable(monitor_t *monitor, const char *command_text)
 	builder_init(&success_names, 128);
 	builder_init(&messages, 256);
 	int disabled_count = 0;
+	bool has_failures = false;
 
 	/* Process each watch name */
 	for (int i = 0; i < watch_names->count; i++) {
@@ -309,6 +356,7 @@ static protocol_t protocol_disable(monitor_t *monitor, const char *command_text)
 
 		if (!watchref_valid(watchref)) {
 			builder_append(&messages, "Watch '%s' not found\n", watch_names->items[i]);
+			has_failures = true;
 			continue;
 		}
 
@@ -327,12 +375,14 @@ static protocol_t protocol_disable(monitor_t *monitor, const char *command_text)
 			disabled_count++;
 		} else {
 			builder_append(&messages, "Watch '%s' failed to disable\n", watch_names->items[i]);
+			has_failures = true;
 		}
 	}
 
 	array_free(watch_names);
 
-	result.success = true;
+	/* Set success based on whether any watches failed (not found or failed to change) */
+	result.success = !has_failures;
 	builder_t final_message;
 	builder_init(&final_message, 512);
 
@@ -382,6 +432,7 @@ static protocol_t protocol_enable(monitor_t *monitor, const char *command_text) 
 	builder_init(&success_names, 128);
 	builder_init(&messages, 256);
 	int enabled_count = 0;
+	bool has_failures = false;
 
 	for (int i = 0; i < watch_names->count; i++) {
 		/* Find the watch by name regardless of state */
@@ -389,6 +440,7 @@ static protocol_t protocol_enable(monitor_t *monitor, const char *command_text) 
 
 		if (!watchref_valid(watchref)) {
 			builder_append(&messages, "Watch '%s' not found\n", watch_names->items[i]);
+			has_failures = true;
 			continue;
 		}
 
@@ -407,11 +459,13 @@ static protocol_t protocol_enable(monitor_t *monitor, const char *command_text) 
 			enabled_count++;
 		} else {
 			builder_append(&messages, "Watch '%s' failed to enable\n", watch_names->items[i]);
+			has_failures = true;
 		}
 	}
 	array_free(watch_names);
 
-	result.success = true;
+	/* Set success based on whether any watches failed (not found or failed to change) */
+	result.success = !has_failures;
 
 	/* Build final response message combining success and error info */
 	builder_t final_message;
@@ -436,7 +490,7 @@ static protocol_t protocol_enable(monitor_t *monitor, const char *command_text) 
 	return result;
 }
 
-/* Report counts and names of active, disabled, and pending watches */
+/* Report structured status data for active, disabled, and pending watches */
 static protocol_t protocol_status(monitor_t *monitor, const char *command_text) {
 	protocol_t result;
 	protocol_init(&result);
@@ -457,6 +511,7 @@ static protocol_t protocol_status(monitor_t *monitor, const char *command_text) 
 	array_t *disabled_names = array_init(8);
 	array_t *pending_paths = array_init(4);
 
+	/* Collect unique pending paths (watches waiting for filesystem availability) */
 	for (int i = 0; i < monitor->num_pending; i++) {
 		pending_t *pending = monitor->pending[i];
 		if (pending && pending->target_path) {
@@ -466,6 +521,7 @@ static protocol_t protocol_status(monitor_t *monitor, const char *command_text) 
 		}
 	}
 
+	/* Categorize watches by their enabled state */
 	for (uint32_t i = 0; i < num_watches; i++) {
 		watch_t *watch = registry_get(monitor->registry, watchrefs[i]);
 		if (!watch || !watch->name || strncmp(watch->name, "__", 2) == 0) {
@@ -478,30 +534,52 @@ static protocol_t protocol_status(monitor_t *monitor, const char *command_text) 
 		}
 	}
 
-	builder_append(&b, "Watches: %d active, %d disabled, %d pending",
-				   active_names->count, disabled_names->count, pending_paths->count);
+	/* Add structured count data */
+	char active_count_str[16], disabled_count_str[16], pending_count_str[16];
+	snprintf(active_count_str, sizeof(active_count_str), "%d", active_names->count);
+	snprintf(disabled_count_str, sizeof(disabled_count_str), "%d", disabled_names->count);
+	snprintf(pending_count_str, sizeof(pending_count_str), "%d", pending_paths->count);
+	
+	protocol_data(&result, "active_count", active_count_str);
+	protocol_data(&result, "disabled_count", disabled_count_str);
+	protocol_data(&result, "pending_count", pending_count_str);
 
+	/* Build comma-separated lists for names and paths */
 	if (active_names->count > 0) {
-		builder_append(&b, "\nActive: ");
+		builder_t active_list;
+		builder_init(&active_list, 256);
 		for (int i = 0; i < active_names->count; i++) {
-			builder_append(&b, "%s%s", (i > 0) ? ", " : "", active_names->items[i]);
+			if (i > 0) builder_append(&active_list, ",");
+			builder_append(&active_list, "%s", active_names->items[i]);
 		}
+		protocol_data(&result, "active_names", active_list.data);
+		builder_free(&active_list);
 	}
+
 	if (disabled_names->count > 0) {
-		builder_append(&b, "\nDisabled: ");
+		builder_t disabled_list;
+		builder_init(&disabled_list, 256);
 		for (int i = 0; i < disabled_names->count; i++) {
-			builder_append(&b, "%s%s", (i > 0) ? ", " : "", disabled_names->items[i]);
+			if (i > 0) builder_append(&disabled_list, ",");
+			builder_append(&disabled_list, "%s", disabled_names->items[i]);
 		}
+		protocol_data(&result, "disabled_names", disabled_list.data);
+		builder_free(&disabled_list);
 	}
+
 	if (pending_paths->count > 0) {
-		builder_append(&b, "\nPending: ");
+		builder_t pending_list;
+		builder_init(&pending_list, 256);
 		for (int i = 0; i < pending_paths->count; i++) {
-			builder_append(&b, "%s%s", (i > 0) ? ", " : "", pending_paths->items[i]);
+			if (i > 0) builder_append(&pending_list, ",");
+			builder_append(&pending_list, "%s", pending_paths->items[i]);
 		}
+		protocol_data(&result, "pending_paths", pending_list.data);
+		builder_free(&pending_list);
 	}
 
 	result.success = true;
-	result.message = builder_string(&b);
+	result.message = strdup("Status data returned as structured fields");
 
 	free(watchrefs);
 	array_free(active_names);
@@ -511,7 +589,7 @@ static protocol_t protocol_status(monitor_t *monitor, const char *command_text) 
 	return result;
 }
 
-/* Process list command */
+/* Process list command - returns structured watch data */
 static protocol_t protocol_list(monitor_t *monitor, const char *command_text) {
 	protocol_t result;
 	protocol_init(&result);
@@ -525,55 +603,58 @@ static protocol_t protocol_list(monitor_t *monitor, const char *command_text) {
 		return result;
 	}
 
-	builder_t b;
-	if (!builder_init(&b, 4096)) {
-		result.success = false;
-		result.message = strdup("Memory allocation failed");
-		return result;
-	}
-
-	builder_append(&b, "%-20s %-44s %-24s %s\n", "NAME", "PATH", "EVENTS", "STATUS");
-
 	uint32_t num_watches = 0;
 	watchref_t *watchrefs = registry_active(monitor->registry, &num_watches);
 	array_t *processed_names = array_init(16);
+	int watch_index = 0;
 
+	/* Collect unique watches and add structured data for each */
 	for (uint32_t i = 0; i < num_watches; i++) {
 		watch_t *watch = registry_get(monitor->registry, watchrefs[i]);
+		/* Skip internal watches and invalid entries */
 		if (!watch || !watch->name || strncmp(watch->name, "__", 2) == 0) {
 			continue;
 		}
 
+		/* Avoid duplicate entries for same watch name */
 		if (array_has(processed_names, watch->name)) {
 			continue;
 		}
 		array_add(processed_names, strdup(watch->name));
 
+		/* Extract watch information */
 		const char *status = watch->enabled ? "Active" : "Disabled";
 		const char *events_str = filter_to_string(watch->filter);
 		const char *path = watch->path ? watch->path : "N/A";
-		char display_path[45] = {0};
 
-		if (strlen(path) > 44) {
-			const char *filename = strrchr(path, '/');
-			if (filename && (strlen(path) - strlen(filename) < 40)) {
-				snprintf(display_path, sizeof(display_path), "...%s", filename);
-			} else {
-				snprintf(display_path, sizeof(display_path), "%.41s...", path);
-			}
-		} else {
-			strncpy(display_path, path, sizeof(display_path) - 1);
-		}
-
-		builder_append(&b, "%-20s %-44s %-24s %s\n", watch->name, display_path, events_str, status);
+		/* Add structured data for this watch using formatted keys */
+		char key_name[32], key_path[32], key_events[32], key_status[32];
+		snprintf(key_name, sizeof(key_name), "watch_%d_name", watch_index);
+		snprintf(key_path, sizeof(key_path), "watch_%d_path", watch_index);
+		snprintf(key_events, sizeof(key_events), "watch_%d_events", watch_index);
+		snprintf(key_status, sizeof(key_status), "watch_%d_status", watch_index);
+		
+		protocol_data(&result, key_name, watch->name);
+		protocol_data(&result, key_path, path);
+		protocol_data(&result, key_events, events_str);
+		protocol_data(&result, key_status, status);
+		
+		watch_index++;
 	}
+
+	/* Add watch count for easy client parsing */
+	char watch_count_str[16];
+	snprintf(watch_count_str, sizeof(watch_count_str), "%d", watch_index);
+	protocol_data(&result, "watch_count", watch_count_str);
 
 	/* Free resources */
 	free(watchrefs);
 	array_free(processed_names);
 
 	result.success = true;
-	result.message = builder_string(&b);
+	result.message = strdup(watch_index > 0 ? 
+		"Watch list returned as structured data" : 
+		"No watches configured");
 
 	return result;
 }

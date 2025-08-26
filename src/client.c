@@ -148,6 +148,142 @@ char *client_receive(int sock_fd) {
 	return buffer;
 }
 
+/* Parse key-value data from response */
+static char *client_value(const char *response, const char *key) {
+	if (!response || !key) return NULL;
+
+	size_t key_len = strlen(key);
+	char *search_key = malloc(key_len + 2); /* +1 for '=', +1 for null */
+	if (!search_key) return NULL;
+
+	snprintf(search_key, key_len + 2, "%s=", key);
+	char *key_start = strstr(response, search_key);
+	free(search_key);
+
+	if (!key_start) return NULL;
+
+	char *value_start = key_start + key_len + 1; /* Skip "key=" */
+	char *value_end = strchr(value_start, '\n');
+	if (!value_end) {
+		value_end = value_start + strlen(value_start);
+	}
+
+	size_t value_len = value_end - value_start;
+	char *value = malloc(value_len + 1);
+	if (value) {
+		memcpy(value, value_start, value_len);
+		value[value_len] = '\0';
+	}
+
+	return value;
+}
+
+/* Display formatted list output */
+static void client_list(const char *response) {
+	char *watch_count_str = client_value(response, "watch_count");
+	if (!watch_count_str) {
+		printf("No watch count data found\n");
+		return;
+	}
+
+	int watch_count = atoi(watch_count_str);
+	free(watch_count_str);
+
+	if (watch_count == 0) {
+		printf("No watches configured\n");
+		return;
+	}
+
+	/* Print header */
+	printf("%-20s %-44s %-24s %s\n", "NAME", "PATH", "EVENTS", "STATUS");
+
+	/* Print each watch */
+	for (int i = 0; i < watch_count; i++) {
+		char key_name[64], key_path[64], key_events[64], key_status[64];
+		snprintf(key_name, sizeof(key_name), "watch_%d_name", i);
+		snprintf(key_path, sizeof(key_path), "watch_%d_path", i);
+		snprintf(key_events, sizeof(key_events), "watch_%d_events", i);
+		snprintf(key_status, sizeof(key_status), "watch_%d_status", i);
+
+		char *name = client_value(response, key_name);
+		char *path = client_value(response, key_path);
+		char *events = client_value(response, key_events);
+		char *status = client_value(response, key_status);
+
+		if (name && path && events && status) {
+			/* Truncate long paths for display */
+			char display_path[45] = {0};
+			if (strlen(path) > 44) {
+				const char *filename = strrchr(path, '/');
+				if (filename && (strlen(path) - strlen(filename) < 40)) {
+					snprintf(display_path, sizeof(display_path), "...%s", filename);
+				} else {
+					snprintf(display_path, sizeof(display_path), "%.41s...", path);
+				}
+			} else {
+				strncpy(display_path, path, sizeof(display_path) - 1);
+			}
+
+			printf("%-20s %-44s %-24s %s\n", name, display_path, events, status);
+		}
+
+		free(name);
+		free(path);
+		free(events);
+		free(status);
+	}
+}
+
+/* Display formatted status output */
+static void client_status(const char *response) {
+	char *active_count_str = client_value(response, "active_count");
+	char *disabled_count_str = client_value(response, "disabled_count");
+	char *pending_count_str = client_value(response, "pending_count");
+
+	if (!active_count_str || !disabled_count_str || !pending_count_str) {
+		printf("Incomplete status data received\n");
+		goto cleanup;
+	}
+
+	int active_count = atoi(active_count_str);
+	int disabled_count = atoi(disabled_count_str);
+	int pending_count = atoi(pending_count_str);
+
+	printf("Watches: %d active, %d disabled, %d pending",
+		   active_count, disabled_count, pending_count);
+
+	if (active_count > 0) {
+		char *active_names = client_value(response, "active_names");
+		if (active_names) {
+			printf("\nActive: %s", active_names);
+			free(active_names);
+		}
+	}
+
+	if (disabled_count > 0) {
+		char *disabled_names = client_value(response, "disabled_names");
+		if (disabled_names) {
+			printf("\nDisabled: %s", disabled_names);
+			free(disabled_names);
+		}
+	}
+
+	if (pending_count > 0) {
+		char *pending_paths = client_value(response, "pending_paths");
+		if (pending_paths) {
+			printf("\nPending: %s", pending_paths);
+			free(pending_paths);
+		}
+	}
+
+	printf("\n");
+
+cleanup:
+	free(active_count_str);
+	free(disabled_count_str);
+	free(pending_count_str);
+}
+
 /* Display response to user */
 void client_display(const char *response) {
 	if (!response) {
@@ -155,48 +291,57 @@ void client_display(const char *response) {
 		return;
 	}
 
-	char *response_copy = strdup(response);
-	if (!response_copy) return;
+	bool is_success = (strstr(response, "status=success") != NULL);
 
-	/* Find the message= line and handle multi-line values properly */
-	char *message_start = strstr(response_copy, "message=");
-	bool is_success = (strstr(response_copy, "status=success") != NULL);
+	/* Check for structured data and display accordingly */
+	if (is_success && strstr(response, "watch_count=")) {
+		/* This is a list command response */
+		client_list(response);
+	} else if (is_success && strstr(response, "active_count=")) {
+		/* This is a status command response */
+		client_status(response);
+	} else {
+		/* Fall back to message-based display for other commands */
+		char *response_copy = strdup(response);
+		if (!response_copy) return;
 
-	if (message_start) {
-		message_start += 8; /* Skip "message=" */
+		char *message_start = strstr(response_copy, "message=");
+		if (message_start) {
+			message_start += 8; /* Skip "message=" */
 
-		/* Find the end of the message value */
-		char *message_end = strstr(message_start, "\n\n");
-		if (!message_end) {
-			message_end = message_start + strlen(message_start);
-		}
-
-		/* Extract and display the complete message */
-		size_t message_len = message_end - message_start;
-		char *message_text = malloc(message_len + 1);
-		if (message_text) {
-			memcpy(message_text, message_start, message_len);
-			message_text[message_len] = '\0';
-
-			/* Remove any trailing whitespace */
-			while (message_len > 0 && (message_text[message_len - 1] == '\n' ||
-									   message_text[message_len - 1] == '\r')) {
-				message_text[--message_len] = '\0';
+			/* Find the end of the message value */
+			char *message_end = strstr(message_start, "\n\n");
+			if (!message_end) {
+				message_end = message_start + strlen(message_start);
 			}
 
-			if (is_success) {
-				printf("%s\n", message_text);
-			} else {
-				fprintf(stderr, "%s\n", message_text);
+			/* Extract and display the complete message */
+			size_t message_len = message_end - message_start;
+			char *message_text = malloc(message_len + 1);
+			if (message_text) {
+				memcpy(message_text, message_start, message_len);
+				message_text[message_len] = '\0';
+
+				/* Remove trailing whitespace */
+				while (message_len > 0 && (message_text[message_len - 1] == '\n' ||
+										   message_text[message_len - 1] == '\r')) {
+					message_text[--message_len] = '\0';
+				}
+
+				if (is_success) {
+					printf("%s\n", message_text);
+				} else {
+					fprintf(stderr, "%s\n", message_text);
+				}
+				free(message_text);
 			}
-			free(message_text);
+		} else if (!is_success) {
+			/* If there is an error status but no message, print the raw response */
+			fprintf(stderr, "Error from daemon: %s", response);
 		}
-	} else if (!is_success) {
-		/* If there is an error status but no message, print the raw response */
-		fprintf(stderr, "Error from daemon: %s", response);
+
+		free(response_copy);
 	}
-
-	free(response_copy);
 }
 
 /* Build command string from options */
@@ -353,11 +498,21 @@ int client_main(options_t *options) {
 
 	/* Receive and display response */
 	char *response = client_receive(sock_fd);
+	int exit_code = EXIT_SUCCESS;
+	
 	if (response) {
 		client_display(response);
+		
+		/* Check response status for exit code */
+		if (strstr(response, "status=error") != NULL) {
+			exit_code = EXIT_FAILURE;
+		}
+		
 		free(response);
+	} else {
+		exit_code = EXIT_FAILURE;
 	}
 
 	close(sock_fd);
-	return EXIT_SUCCESS;
+	return exit_code;
 }
