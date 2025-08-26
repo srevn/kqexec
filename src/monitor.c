@@ -1300,125 +1300,131 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 
 	if (!path_exists) {
 		/* Path does not exist, clean up only if it was being watched */
-		if (watcher_find(monitor, path)) {
-			log_message(DEBUG, "Path deleted: %s, cleaning up watch resources", path);
+		if (!watcher_find(monitor, path)) {
+			return false;
+		}
 
-			/* Clean up associated file watches from the resource's trackers */
-			resource_t *resource = resource_get(monitor->resources, path, ENTITY_UNKNOWN);
-			if (resource && resource->trackers) {
-				log_message(DEBUG, "Cleaning up file watches for deleted directory: %s", path);
-				resource_lock(resource);
-				directory_cleanup(monitor, resource->trackers, path);
-				resource_unlock(resource);
-			}
+		log_message(DEBUG, "Path deleted: %s, cleaning up watch resources", path);
 
-			/* Handle pending watches that might be affected by this deletion */
-			pending_delete(monitor, path);
+		/* Clean up associated file watches from the resource's trackers */
+		resource_t *resource = resource_get(monitor->resources, path, ENTITY_UNKNOWN);
+		if (resource && resource->trackers) {
+			log_message(DEBUG, "Cleaning up file watches for deleted directory: %s", path);
+			resource_lock(resource);
+			directory_cleanup(monitor, resource->trackers, path);
+			resource_unlock(resource);
+		}
 
-			/* Iterate and clean up any remaining watchers for this specific path */
-			for (int i = monitor->num_watches - 1; i >= 0; i--) {
-				watcher_t *watcher = monitor->watches[i];
-				if (!watcher || !watcher->path || strcmp(watcher->path, path) != 0) continue;
+		/* Handle pending watches that might be affected by this deletion */
+		pending_delete(monitor, path);
 
-				/* Store watch config before watcher becomes invalid */
-				watch_t *target_watch = registry_get(monitor->registry, watcher->watchref);
-				watchref_t target_watchref = watcher->watchref;
+		/* Iterate and clean up any remaining watchers for this specific path */
+		for (int i = monitor->num_watches - 1; i >= 0; i--) {
+			watcher_t *watcher = monitor->watches[i];
+			if (!watcher || !watcher->path || strcmp(watcher->path, path) != 0) continue;
 
-				/* Clear any pending queued checks to prevent use-after-free */
-				queue_remove(monitor->check_queue, path);
+			/* Store watch config before watcher becomes invalid */
+			watch_t *target_watch = registry_get(monitor->registry, watcher->watchref);
+			watchref_t target_watchref = watcher->watchref;
 
-				/* Remove subdirectory watchers if this was a recursive directory */
-				if (target_watch && target_watch->target == WATCH_DIRECTORY && target_watch->recursive) {
-					if (monitor_prune(monitor, path)) {
-						i = monitor->num_watches;
-						list_modified = true;
-						continue;
-					}
-				}
+			/* Clear any pending queued checks to prevent use-after-free */
+			queue_remove(monitor->check_queue, path);
 
-				/* Remove dynamic watch from config to prevent resurrection during reload */
-				if (target_watch && target_watch->is_dynamic) {
-					watch_remove(monitor->config, monitor->registry, watcher->watchref);
+			/* Remove subdirectory watchers if this was a recursive directory */
+			if (target_watch && target_watch->target == WATCH_DIRECTORY && target_watch->recursive) {
+				if (monitor_prune(monitor, path)) {
 					i = monitor->num_watches;
 					list_modified = true;
 					continue;
 				}
+			}
 
-				/* Remove the watcher - destroy it and shift array elements */
+			/* Remove dynamic watch from config to prevent resurrection during reload */
+			if (target_watch && target_watch->is_dynamic) {
+				watch_remove(monitor->config, monitor->registry, watcher->watchref);
+				i = monitor->num_watches;
+				list_modified = true;
+				continue;
+			}
+
+			/* Remove the watcher - destroy it and shift array elements */
+			watcher_destroy(monitor, watcher, false);
+			for (int j = i; j < monitor->num_watches - 1; j++) {
+				monitor->watches[j] = monitor->watches[j + 1];
+			}
+			monitor->num_watches--;
+			list_modified = true;
+
+			/* Re-establish pending watches based on target type */
+			if (!target_watch) continue;
+
+			if (target_watch->target == WATCH_FILE) {
+				log_message(DEBUG, "Re-establishing pending watch for deleted file: %s", path);
+				monitor_add(monitor, target_watchref, false);
+			} else if (target_watch->target == WATCH_DIRECTORY) {
+				if (target_watch->is_dynamic) {
+					log_message(DEBUG, "Dynamic directory watch for '%s' deleted, not be re-establishing", path);
+				} else {
+					log_message(DEBUG, "Re-establishing pending watch for deleted directory: %s", path);
+					monitor_add(monitor, target_watchref, false);
+				}
+			}
+		}
+
+		return list_modified;
+	}
+
+	/* Path exists, check for recreation */
+	for (int i = monitor->num_watches - 1; i >= 0; i--) {
+		watcher_t *watcher = monitor->watches[i];
+		if (!watcher || !watcher->path || strcmp(watcher->path, path) != 0) continue;
+
+		/* Check if path was recreated (inode/device changed) */
+		if (watcher->inode != info.st_ino || watcher->device != info.st_dev) {
+			log_message(DEBUG, "Path recreated: %s, refreshing watch", path);
+
+			/* Close old file descriptor if not shared */
+			if (!watcher->shared_fd && watcher->wd >= 0) {
+				close(watcher->wd);
+			}
+
+			/* Attempt to open the recreated path */
+			int new_fd = open(path, O_RDONLY);
+			if (new_fd == -1) {
+				log_message(ERROR, "Failed to open recreated path %s: %s", path, strerror(errno));
+				/* Treat as deleted - destroy watcher and shift array */
 				watcher_destroy(monitor, watcher, false);
 				for (int j = i; j < monitor->num_watches - 1; j++) {
 					monitor->watches[j] = monitor->watches[j + 1];
 				}
 				monitor->num_watches--;
 				list_modified = true;
-
-				/* If a file watch was deleted, re-establish it as a pending watch */
-				if (target_watch && target_watch->target == WATCH_FILE) {
-					log_message(DEBUG, "Re-establishing pending watch for deleted file: %s", path);
-					monitor_add(monitor, target_watchref, false);
-				} else if (target_watch && target_watch->target == WATCH_DIRECTORY) {
-					if (target_watch->is_dynamic) {
-						log_message(DEBUG, "Dynamic directory watch for '%s' deleted, not be re-establishing", path);
-					} else {
-						log_message(DEBUG, "Re-establishing pending watch for deleted directory: %s", path);
-						monitor_add(monitor, target_watchref, false);
-					}
-				}
+				continue;
 			}
-		}
-	} else {
-		/* Path exists, check for recreation */
-		for (int i = monitor->num_watches - 1; i >= 0; i--) {
-			watcher_t *watcher = monitor->watches[i];
-			if (!watcher || !watcher->path || strcmp(watcher->path, path) != 0) continue;
 
-			if (watcher->inode != info.st_ino || watcher->device != info.st_dev) {
-				/* Path exists but inode/device changed - it was recreated */
-				log_message(DEBUG, "Path recreated: %s, refreshing watch", path);
+			/* Update watcher with new file info */
+			watcher->wd = new_fd;
+			watcher->inode = info.st_ino;
+			watcher->device = info.st_dev;
+			watcher->shared_fd = false;
 
-				/* Close old file descriptor if not shared */
-				if (!watcher->shared_fd && watcher->wd >= 0) {
-					close(watcher->wd);
-				}
+			/* Re-register with kqueue */
+			monitor_kq(monitor, watcher);
 
-				/* Attempt to open the recreated path */
-				int new_fd = open(path, O_RDONLY);
-				if (new_fd == -1) {
-					log_message(ERROR, "Failed to open recreated path %s: %s", path, strerror(errno));
-					/* Treat as deleted - destroy watcher and shift array */
-					watcher_destroy(monitor, watcher, false);
-					for (int j = i; j < monitor->num_watches - 1; j++) {
-						monitor->watches[j] = monitor->watches[j + 1];
-					}
-					monitor->num_watches--;
-					list_modified = true;
-					continue;
-				}
-
-				/* Update watcher with new file info */
-				watcher->wd = new_fd;
-				watcher->inode = info.st_ino;
-				watcher->device = info.st_dev;
-				watcher->shared_fd = false;
-
-				/* Re-register with kqueue */
-				monitor_kq(monitor, watcher);
-
-				/* If it was a recursive directory, rescan subdirectories */
-				watch_t *watch = registry_get(monitor->registry, watcher->watchref);
-				if (watch && watch->target == WATCH_DIRECTORY && watch->recursive) {
-					log_message(DEBUG, "Re-scanning subdirectories for recreated path: %s", path);
-					monitor_prune(monitor, path);
-					monitor_tree(monitor, path, watcher->watchref);
-					i = monitor->num_watches;
-					list_modified = true;
-					continue;
-				}
+			/* If it was a recursive directory, rescan subdirectories */
+			watch_t *watch = registry_get(monitor->registry, watcher->watchref);
+			if (watch && watch->target == WATCH_DIRECTORY && watch->recursive) {
+				log_message(DEBUG, "Re-scanning subdirectories for recreated path: %s", path);
+				monitor_prune(monitor, path);
+				monitor_tree(monitor, path, watcher->watchref);
+				i = monitor->num_watches;
 				list_modified = true;
-			} else {
-				/* Path is valid and unchanged */
-				watcher->validated = time(NULL);
+				continue;
 			}
+			list_modified = true;
+		} else {
+			/* Path is valid and unchanged */
+			watcher->validated = time(NULL);
 		}
 	}
 
