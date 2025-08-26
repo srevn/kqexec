@@ -55,33 +55,13 @@ int client_connect(const char *socket_path) {
 bool client_send(int sock_fd, const char *command_text) {
 	if (sock_fd < 0 || !command_text) return false;
 
-	size_t command_len = strlen(command_text);
-
-	/* Add double newline terminator if not present */
-	char *full_command;
-	if (strstr(command_text, "\n\n") == NULL) {
-		full_command = malloc(command_len + 3);
-		if (!full_command) {
-			fprintf(stderr, "Error: Failed to allocate memory for command\n");
-			return false;
-		}
-		strcpy(full_command, command_text);
-		strcat(full_command, "\n\n");
-	} else {
-		full_command = strdup(command_text);
-		if (!full_command) {
-			fprintf(stderr, "Error: Failed to allocate memory for command\n");
-			return false;
-		}
-	}
-
-	size_t command_length = strlen(full_command);
+	size_t command_length = strlen(command_text);
 	size_t total_sent = 0;
 	ssize_t data_sent;
 
 	/* Handle partial writes and signal interruptions */
 	while (total_sent < command_length) {
-		data_sent = write(sock_fd, full_command + total_sent, command_length - total_sent);
+		data_sent = write(sock_fd, command_text + total_sent, command_length - total_sent);
 
 		if (data_sent == -1) {
 			if (errno == EINTR) {
@@ -89,7 +69,6 @@ bool client_send(int sock_fd, const char *command_text) {
 				continue;
 			} else {
 				fprintf(stderr, "Error: Failed to send command: %s\n", strerror(errno));
-				free(full_command);
 				return false;
 			}
 		}
@@ -97,7 +76,6 @@ bool client_send(int sock_fd, const char *command_text) {
 		total_sent += data_sent;
 	}
 
-	free(full_command);
 	return true;
 }
 
@@ -264,6 +242,8 @@ char *client_build(options_t *options) {
 		buffer_size += 1; /* For newline */
 	}
 
+	buffer_size += 2; /* For final \n\n terminator */
+
 	/* Allocate exact buffer size + null terminator */
 	char *command = malloc(buffer_size + 1);
 	if (!command) {
@@ -286,6 +266,8 @@ char *client_build(options_t *options) {
 		}
 		snprintf(command + written, buffer_size + 1 - written, "\n");
 	}
+
+	strcat(command, "\n");
 
 	return command;
 }

@@ -43,18 +43,6 @@ typedef struct server {
 	client_t **clients;                    /* Array of connected client pointers */
 } server_t;
 
-/* Command result for key-value protocol responses */
-typedef struct result {
-	/* Status information */
-	bool success;                          /* Command success status */
-	char *message;                         /* Result message */
-	
-	/* Data payload */
-	int data_count;                        /* Number of key-value pairs in response */
-	char **data_keys;                      /* Array of response data keys */
-	char **data_values;                    /* Array of corresponding data values */
-} result_t;
-
 /* Server lifecycle */
 server_t *server_create(const char *socket_path);
 void server_destroy(server_t *server);
@@ -71,14 +59,5 @@ void control_remove(server_t *server, int client_fd, int kqueue_fd);
 /* Write buffering */
 bool control_send(monitor_t *monitor, client_t *client, const char *response);
 bool control_pending(monitor_t *monitor, client_t *client);
-
-/* Command processing */
-result_t control_process(monitor_t *monitor, const char *command_text);
-char *control_format(const result_t *result);
-void control_cleanup(result_t *result);
-
-/* KV protocol utilities */
-char *kv_value(const char *text, const char *key);
-char **kv_split(const char *value, const char *delimiter, int *count);
 
 #endif /* CONTROL_H */

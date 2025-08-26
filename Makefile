@@ -60,6 +60,7 @@ SRCS = src/main.c \
 	   src/resource.c \
 	   src/stability.c \
 	   src/utilities.c \
+	   src/protocol.c \
 	   src/snapshot.c \
 	   src/command.c \
 	   src/threads.c \

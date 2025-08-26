@@ -12,6 +12,7 @@
 
 #include "logger.h"
 #include "monitor.h"
+#include "protocol.h"
 
 /* Create a new control server */
 server_t *server_create(const char *socket_path) {
@@ -306,19 +307,26 @@ void control_handle(monitor_t *monitor, struct kevent *event) {
 	client->buffer_pos += data_read;
 	client->buffer[client->buffer_pos] = '\0';
 
-	/* Look for complete command (ends with double newline) */
-	char *end_marker = strstr(client->buffer, "\n\n");
-	if (end_marker) {
+	/* Loop to process all complete commands in the buffer */
+	char *current_pos = client->buffer;
+	while (true) {
+		char *end_marker = strstr(current_pos, "\n\n");
+		if (!end_marker) {
+			/* No complete command found, break and wait for more data */
+			break;
+		}
+
 		*end_marker = '\0'; /* Terminate command string */
 
 		/* Process the command */
-		char *command = kv_value(client->buffer, "command");
+		char *command_str = current_pos;
+		char *command = kv_value(command_str, "command");
 		if (command) {
 			log_message(DEBUG, "Processing '%s' command from session (fd=%d)", command, client_fd);
 			free(command);
 		}
-		result_t result = control_process(monitor, client->buffer);
-		char *response = control_format(&result);
+		protocol_t result = protocol_process(monitor, command_str);
+		char *response = protocol_format(&result);
 
 		if (response) {
 			/* Send response to client using buffered approach */
@@ -326,19 +334,28 @@ void control_handle(monitor_t *monitor, struct kevent *event) {
 				log_message(WARNING, "Failed to send response to client (fd=%d)", client_fd);
 				control_remove(server, client_fd, monitor->kq);
 				free(response);
-				control_cleanup(&result);
-				return;
+				protocol_cleanup(&result);
+				return; /* Stop processing on send error */
 			}
 			free(response);
 		}
 
-		control_cleanup(&result);
+		protocol_cleanup(&result);
 
-		/* Reset buffer for next command */
-		client->buffer_pos = 0;
-		client->buffer[0] = '\0';
-	} else if (client->buffer_pos >= BUFFER_SIZE - 1) {
-		/* Buffer overflow, disconnect client */
+		/* Move to the start of the next potential command */
+		current_pos = end_marker + 2; /* Skip past '\n\n' */
+	}
+
+	/* Shift any remaining partial command to the beginning of the buffer */
+	size_t remaining_len = strlen(current_pos);
+	if (remaining_len > 0) {
+		memmove(client->buffer, current_pos, remaining_len);
+	}
+	client->buffer_pos = remaining_len;
+	client->buffer[client->buffer_pos] = '\0';
+
+	/* Check for buffer overflow after shifting */
+	if (client->buffer_pos >= BUFFER_SIZE - 1) {
 		log_message(WARNING, "Client (fd=%d) buffer overflow: %zu data attempted, max %d data allowed",
 					client_fd, client->buffer_pos, BUFFER_SIZE - 1);
 		control_remove(server, client_fd, monitor->kq);
@@ -467,599 +484,4 @@ void control_write(monitor_t *monitor, struct kevent *event) {
 		log_message(DEBUG, "Client (fd=%d) write failed, disconnecting", client_fd);
 		control_remove(server, client_fd, monitor->kq);
 	}
-}
-
-/* Initialize command result structure */
-static void control_result(result_t *result) {
-	memset(result, 0, sizeof(result_t));
-}
-
-/* Clean up command result structure */
-void control_cleanup(result_t *result) {
-	if (!result) return;
-
-	free(result->message);
-
-	for (int i = 0; i < result->data_count; i++) {
-		free(result->data_keys[i]);
-		free(result->data_values[i]);
-	}
-	free(result->data_keys);
-	free(result->data_values);
-
-	memset(result, 0, sizeof(result_t));
-}
-
-/* Get value for a specific key from KV text */
-char *kv_value(const char *text, const char *key) {
-	if (!text || !key) return NULL;
-
-	const char *line_start = text;
-	size_t key_len = strlen(key);
-
-	while (*line_start) {
-		/* Find end of current line */
-		const char *line_end = strchr(line_start, '\n');
-		if (!line_end) {
-			line_end = line_start + strlen(line_start);
-		}
-
-		/* Skip empty lines */
-		if (line_end > line_start) {
-			/* Find '=' separator in this line */
-			const char *equals = memchr(line_start, '=', line_end - line_start);
-			if (equals) {
-				/* Check if key matches exactly */
-				size_t line_key_len = equals - line_start;
-				if (line_key_len == key_len && memcmp(line_start, key, key_len) == 0) {
-					/* Found matching key - extract value */
-					size_t value_len = line_end - equals - 1;
-					if (value_len > 0) {
-						char *value = malloc(value_len + 1);
-						if (value) {
-							memcpy(value, equals + 1, value_len);
-							value[value_len] = '\0';
-						}
-						return value;
-					} else {
-						/* Empty value */
-						return strdup("");
-					}
-				}
-			}
-		}
-
-		/* Move to next line */
-		if (*line_end == '\n') {
-			line_start = line_end + 1;
-		} else {
-			break; /* End of text */
-		}
-	}
-
-	return NULL;
-}
-
-/* Split comma-separated values */
-char **kv_split(const char *value, const char *delimiter, int *count) {
-	if (!value || !delimiter || !count) return NULL;
-
-	*count = 0;
-	int capacity = 4; /* Start with small capacity */
-	char **result = malloc(capacity * sizeof(char *));
-	if (!result) return NULL;
-
-	/* Single pass with dynamic growth */
-	char *value_copy = strdup(value);
-	if (!value_copy) {
-		free(result);
-		return NULL;
-	}
-
-	char *token = strtok(value_copy, delimiter);
-	while (token) {
-		/* Grow array if needed */
-		if (*count >= capacity) {
-			capacity *= 2;
-			char **new_result = realloc(result, capacity * sizeof(char *));
-			if (!new_result) {
-				/* Cleanup on failure */
-				for (int i = 0; i < *count; i++) {
-					free(result[i]);
-				}
-				free(result);
-				free(value_copy);
-				return NULL;
-			}
-			result = new_result;
-		}
-
-		/* Trim whitespace */
-		while (*token == ' ' || *token == '\t') token++;
-		char *end = token + strlen(token) - 1;
-		while (end > token && (*end == ' ' || *end == '\t')) *end-- = '\0';
-
-		result[(*count)++] = strdup(token);
-		token = strtok(NULL, delimiter);
-	}
-
-	free(value_copy);
-	return result;
-}
-
-/* Process disable command */
-static result_t process_disable(monitor_t *monitor, const char *command_text) {
-	result_t result;
-	control_result(&result);
-
-	char *watches_value = kv_value(command_text, "watches");
-	if (!watches_value) {
-		result.success = false;
-		result.message = strdup("Missing 'watches' parameter for disable command");
-		return result;
-	}
-
-	/* Disable specific watches */
-	int count = 0;
-	char **watch_names = kv_split(watches_value, ",", &count);
-	free(watches_value); /* No longer needed */
-
-	if (!watch_names) {
-		result.success = false;
-		result.message = strdup("Failed to parse 'watches' parameter");
-		return result;
-	}
-
-	int disabled_count = 0;
-	char disabled_names[2048] = "";
-	int message_len = 0;
-
-	/* Get active watches once before the loop */
-	uint32_t num_watches = 0;
-	watchref_t *watchrefs = registry_active(monitor->registry, &num_watches);
-
-	for (int i = 0; i < count; i++) {
-		bool found = false;
-		for (uint32_t j = 0; j < num_watches; j++) {
-			watch_t *watch = registry_get(monitor->registry, watchrefs[j]);
-			if (watch && watch->name && strcmp(watch->name, watch_names[i]) == 0) {
-				if (monitor_disable(monitor, watchrefs[j])) {
-					disabled_count++;
-					/* Add to disabled names list */
-					if (disabled_count > 1) {
-						message_len += snprintf(disabled_names + message_len,
-												sizeof(disabled_names) - message_len, ", ");
-					}
-					message_len += snprintf(disabled_names + message_len,
-											sizeof(disabled_names) - message_len, "%s", watch_names[i]);
-				}
-				found = true;
-				break; /* Found the unique watch, no need to continue inner loop */
-			}
-		}
-
-		if (!found) {
-			log_message(WARNING, "Watch '%s' not found for disable command", watch_names[i]);
-		}
-		free(watch_names[i]);
-	}
-
-	free(watchrefs);
-	free(watch_names);
-
-	result.success = true;
-	result.message = malloc(256);
-	if (result.message) {
-		if (disabled_count > 0) {
-			snprintf(result.message, 256, "Disabled %d watch%s: %s",
-					 disabled_count, (disabled_count == 1) ? "" : "es", disabled_names);
-		} else {
-			snprintf(result.message, 256, "No watches were disabled");
-		}
-	}
-
-	return result;
-}
-
-/* Process enable command */
-static result_t process_enable(monitor_t *monitor, const char *command_text) {
-	result_t result;
-	control_result(&result);
-
-	char *watches_value = kv_value(command_text, "watches");
-	if (!watches_value) {
-		result.success = false;
-		result.message = strdup("Missing 'watches' parameter for enable command");
-		return result;
-	}
-
-	/* Enable specific watches */
-	int count = 0;
-	char **watch_names = kv_split(watches_value, ",", &count);
-	free(watches_value); /* No longer needed */
-
-	if (!watch_names) {
-		result.success = false;
-		result.message = strdup("Failed to parse 'watches' parameter");
-		return result;
-	}
-
-	int enabled_count = 0;
-	char enabled_names[2048] = "";
-	int message_len = 0;
-
-	for (int i = 0; i < count; i++) {
-		/* Find the watch by name regardless of state */
-		watchref_t watchref = registry_find(monitor->registry, watch_names[i]);
-
-		if (monitor_activate(monitor, watchref)) {
-			enabled_count++;
-			/* Add to enabled names list */
-			if (enabled_count > 1) {
-				message_len += snprintf(enabled_names + message_len,
-										sizeof(enabled_names) - message_len, ", ");
-			}
-			message_len += snprintf(enabled_names + message_len,
-									sizeof(enabled_names) - message_len, "%s", watch_names[i]);
-		} else {
-			log_message(WARNING, "Watch '%s' not found or failed to enable", watch_names[i]);
-		}
-
-		free(watch_names[i]);
-	}
-	free(watch_names);
-
-	result.success = true;
-	result.message = malloc(256);
-	if (result.message) {
-		if (enabled_count > 0) {
-			snprintf(result.message, 256, "Enabled %d watch%s: %s",
-					 enabled_count, (enabled_count == 1) ? "" : "es", enabled_names);
-		} else {
-			snprintf(result.message, 256, "No watches were enabled");
-		}
-	}
-
-	return result;
-}
-
-/* Process status command */
-static result_t process_status(monitor_t *monitor, const char *command_text) {
-	result_t result;
-	control_result(&result);
-
-	(void) command_text; /* Unused parameter */
-
-	result.success = true;
-
-	/* Get all watches from registry */
-	uint32_t num_watches = 0;
-	watchref_t *watchrefs = registry_active(monitor->registry, &num_watches);
-
-	/* Collect pending watches and their target paths */
-	char pending_paths[MAX_CLIENTS][256];
-	char pending_watch_names[MAX_CLIENTS][256];
-	int pending_count = 0;
-
-	for (int i = 0; i < monitor->num_pending && pending_count < MAX_CLIENTS; i++) {
-		pending_t *pending = monitor->pending[i];
-		if (pending && pending->target_path) {
-			/* Get the original watch name for exclusion purposes */
-			watch_t *watch = registry_get(monitor->registry, pending->watchref);
-			if (watch && watch->name) {
-				/* Store target path for display */
-				strncpy(pending_paths[pending_count], pending->target_path, 255);
-				pending_paths[pending_count][255] = '\0';
-
-				/* Store watch name for exclusion */
-				strncpy(pending_watch_names[pending_count], watch->name, 255);
-				pending_watch_names[pending_count][255] = '\0';
-
-				pending_count++;
-			}
-		}
-	}
-
-	/* Collect active/disabled watches, excluding those that are pending */
-	char active_names[MAX_CLIENTS][256];
-	char disabled_names[MAX_CLIENTS][256];
-	int active_count = 0, disabled_count = 0;
-
-	for (uint32_t i = 0; i < num_watches; i++) {
-		watch_t *watch = registry_get(monitor->registry, watchrefs[i]);
-		if (!watch || !watch->name) continue;
-
-		/* Skip internal watches */
-		if (strncmp(watch->name, "__proxy_", 8) == 0) continue;
-		if (strcmp(watch->name, "__config_file__") == 0) continue;
-
-		/* Check if this watch is pending */
-		bool is_pending = false;
-		for (int j = 0; j < pending_count; j++) {
-			if (strcmp(pending_watch_names[j], watch->name) == 0) {
-				is_pending = true;
-				break;
-			}
-		}
-
-		/* Skip pending watches */
-		if (is_pending) continue;
-
-		/* Add to active or disabled list (with deduplication) */
-		if (watch->enabled) {
-			/* Check for duplicates */
-			bool duplicate = false;
-			for (int j = 0; j < active_count; j++) {
-				if (strcmp(active_names[j], watch->name) == 0) {
-					duplicate = true;
-					break;
-				}
-			}
-			if (!duplicate && active_count < MAX_CLIENTS) {
-				strncpy(active_names[active_count], watch->name, 255);
-				active_names[active_count][255] = '\0';
-				active_count++;
-			}
-		} else {
-			/* Check for duplicates */
-			bool duplicate = false;
-			for (int j = 0; j < disabled_count; j++) {
-				if (strcmp(disabled_names[j], watch->name) == 0) {
-					duplicate = true;
-					break;
-				}
-			}
-			if (!duplicate && disabled_count < MAX_CLIENTS) {
-				strncpy(disabled_names[disabled_count], watch->name, 255);
-				disabled_names[disabled_count][255] = '\0';
-				disabled_count++;
-			}
-		}
-	}
-
-	/* Build enhanced status message */
-	size_t message_size = 1024;
-	char *message = malloc(message_size);
-	if (!message) {
-		free(watchrefs);
-		result.success = false;
-		result.message = strdup("Memory allocation failed");
-		return result;
-	}
-
-	/* Summary line */
-	int written = snprintf(message, message_size, "Watches: %d active, %d disabled, %d pending",
-						   active_count, disabled_count, pending_count);
-
-	/* Add active watches list */
-	if (active_count > 0 && written < (int) message_size - 20) {
-		written += snprintf(message + written, message_size - written, "\nActive: ");
-		for (int i = 0; i < active_count && written < (int) message_size - 100; i++) {
-			if (i > 0) {
-				written += snprintf(message + written, message_size - written, ", ");
-			}
-			written += snprintf(message + written, message_size - written, "%s", active_names[i]);
-		}
-	}
-
-	/* Add disabled watches list */
-	if (disabled_count > 0 && written < (int) message_size - 20) {
-		written += snprintf(message + written, message_size - written, "\nDisabled: ");
-		for (int i = 0; i < disabled_count && written < (int) message_size - 100; i++) {
-			if (i > 0) {
-				written += snprintf(message + written, message_size - written, ", ");
-			}
-			written += snprintf(message + written, message_size - written, "%s", disabled_names[i]);
-		}
-	}
-
-	/* Add pending watches list - show target paths */
-	if (pending_count > 0 && written < (int) message_size - 20) {
-		written += snprintf(message + written, message_size - written, "\nPending: ");
-		for (int i = 0; i < pending_count && written < (int) message_size - 100; i++) {
-			if (i > 0) {
-				written += snprintf(message + written, message_size - written, ", ");
-			}
-			written += snprintf(message + written, message_size - written, "%s", pending_paths[i]);
-		}
-	}
-
-	result.message = message;
-
-	free(watchrefs);
-	return result;
-}
-
-/* Process list command */
-static result_t process_list(monitor_t *monitor, const char *command_text) {
-	result_t result;
-	control_result(&result);
-
-	(void) command_text; /* Unused parameter */
-
-	registry_t *registry = monitor->registry;
-	if (!registry) {
-		result.success = false;
-		result.message = strdup("Invalid registry");
-		return result;
-	}
-
-	/* Build table format with header */
-	size_t message_size = 4096;
-	char *message = malloc(message_size);
-	if (!message) {
-		result.success = false;
-		result.message = strdup("Memory allocation failed");
-		return result;
-	}
-
-	/* Header line */
-	int written = snprintf(message, message_size,
-						   "%-20s %-44s %-24s %s\n",
-						   "NAME", "PATH", "EVENTS", "STATUS");
-
-	/* Get active watches from registry */
-	uint32_t num_watches = 0;
-	watchref_t *watchrefs = registry_active(monitor->registry, &num_watches);
-
-	/* Build table with deduplication */
-	char processed_names[MAX_CLIENTS][256]; /* Track processed names for deduplication */
-	int processed_count = 0;
-
-	/* Iterate through all active watches */
-	for (uint32_t i = 0; i < num_watches; i++) {
-		watch_t *watch = registry_get(monitor->registry, watchrefs[i]);
-		if (!watch || !watch->name) continue;
-
-		/* Skip internal watches */
-		if (strncmp(watch->name, "__proxy_", 8) == 0) continue;
-		if (strcmp(watch->name, "__config_file__") == 0) continue;
-
-		/* Prevent duplicates */
-		bool duplicate = false;
-		for (int j = 0; j < processed_count; j++) {
-			if (strcmp(processed_names[j], watch->name) == 0) {
-				duplicate = true;
-				break;
-			}
-		}
-		if (duplicate) continue;
-
-		/* Add to processed names list */
-		if (processed_count < MAX_CLIENTS) {
-			strncpy(processed_names[processed_count], watch->name, 255);
-			processed_names[processed_count][255] = '\0';
-			processed_count++;
-		}
-
-		/* Get status */
-		const char *status = watch->enabled ? "Active" : "Disabled";
-
-		/* Get event type string */
-		const char *events_str = filter_to_string(watch->filter);
-
-		/* Add watch to table */
-		if (written < (int) message_size - 256) {
-			/* Smart path truncation for display */
-			char display_path[41];
-			const char *path = watch->path ? watch->path : "N/A";
-
-			if (strlen(path) > 40) {
-				/* Truncate from the beginning, keep filename visible */
-				const char *filename = strrchr(path, '/');
-				if (filename && strlen(filename) < 35) {
-					snprintf(display_path, sizeof(display_path), "...%s", filename);
-				} else {
-					/* Just truncate and add ... */
-					strncpy(display_path, path, 37);
-					display_path[37] = '\0';
-					strcat(display_path, "...");
-				}
-			} else {
-				strncpy(display_path, path, 40);
-				display_path[40] = '\0';
-			}
-
-			written += snprintf(message + written, message_size - written,
-								"%-20s %-44s %-24s %s\n",
-								watch->name,
-								display_path,
-								events_str,
-								status);
-		}
-	}
-
-	/* Free watchrefs */
-	free(watchrefs);
-
-	result.success = true;
-	result.message = message;
-
-	return result;
-}
-
-/* Process reload command */
-static result_t process_reload(monitor_t *monitor, const char *command_text) {
-	result_t result;
-	control_result(&result);
-
-	(void) command_text; /* Unused parameter */
-
-	/* Trigger reload by setting flag */
-	monitor->reload = true;
-
-	result.success = true;
-	result.message = strdup("Configuration reload requested");
-
-	return result;
-}
-
-/* Main command processing function */
-result_t control_process(monitor_t *monitor, const char *command_text) {
-	result_t result;
-	control_result(&result);
-
-	if (!monitor || !command_text) {
-		result.success = false;
-		result.message = strdup("Invalid monitor or command");
-		return result;
-	}
-
-	char *command = kv_value(command_text, "command");
-	if (!command) {
-		result.success = false;
-		result.message = strdup("Missing 'command' parameter");
-		return result;
-	}
-
-	if (strcmp(command, "disable") == 0) {
-		result = process_disable(monitor, command_text);
-	} else if (strcmp(command, "enable") == 0) {
-		result = process_enable(monitor, command_text);
-	} else if (strcmp(command, "status") == 0) {
-		result = process_status(monitor, command_text);
-	} else if (strcmp(command, "list") == 0) {
-		result = process_list(monitor, command_text);
-	} else if (strcmp(command, "reload") == 0) {
-		result = process_reload(monitor, command_text);
-	} else {
-		result.success = false;
-		result.message = malloc(128);
-		if (result.message) {
-			snprintf(result.message, 128, "Unknown command: %s", command);
-		}
-	}
-
-	free(command);
-	return result;
-}
-
-/* Format command result as KV response */
-char *control_format(const result_t *result) {
-	if (!result) return NULL;
-
-	size_t buffer_size = 1024;
-	char *response = malloc(buffer_size);
-	if (!response) return NULL;
-
-	int written = snprintf(response, buffer_size, "status=%s\n",
-						   result->success ? "success" : "error");
-
-	if (result->message) {
-		written += snprintf(response + written, buffer_size - written,
-							"message=%s\n", result->message);
-	}
-
-	/* Add data key-value pairs if present */
-	for (int i = 0; i < result->data_count && written < (int) buffer_size - 10; i++) {
-		written += snprintf(response + written, buffer_size - written, "%s=%s\n",
-							result->data_keys[i], result->data_values[i]);
-	}
-
-	/* Add terminating newline */
-	if (written < (int) buffer_size - 2) {
-		strcat(response, "\n");
-	}
-
-	return response;
 }

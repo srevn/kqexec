@@ -18,4 +18,7 @@ double complexity_stability(double complexity);
 double complexity_sensitivity(double complexity, int change_level);
 double complexity_temporary(double complexity);
 
+/* Watch filtering functions */
+bool watch_internal(const char *name);
+
 #endif /* UTILITIES_H */
