@@ -872,31 +872,25 @@ bool monitor_poll(monitor_t *monitor) {
 		int num_events = 0;
 
 		for (int i = 0; i < new_event; i++) {
-			bool is_control_event = false;
-
 			/* Check if event is from control server socket */
 			if (monitor->server && events[i].filter == EVFILT_READ &&
 				events[i].ident == (uintptr_t) monitor->server->socket_fd) {
-				/* Handle new client connection */
 				control_accept(monitor->server, monitor->kq);
-				is_control_event = true;
-			}
-			/* Check if event is from a control client */
-			else if (monitor->server && control_event(monitor->server, &events[i])) {
-				if (events[i].filter == EVFILT_READ) {
-					/* Handle client command */
-					control_handle(monitor, &events[i]);
-				} else if (events[i].filter == EVFILT_WRITE) {
-					/* Handle client write ready */
-					control_write(monitor, &events[i]);
-				}
-				is_control_event = true;
+				continue;
 			}
 
-			/* If not a control event, add to file system events for normal processing */
-			if (!is_control_event) {
-				filesystem_event[num_events++] = events[i];
+			/* Check if event is from a control client */
+			if (monitor->server && control_event(monitor->server, &events[i])) {
+				if (events[i].filter == EVFILT_READ) {
+					control_handle(monitor, &events[i]);
+				} else if (events[i].filter == EVFILT_WRITE) {
+					control_write(monitor, &events[i]);
+				}
+				continue;
 			}
+
+			/* Add filesystem event for normal processing */
+			filesystem_event[num_events++] = events[i];
 		}
 
 		/* Process filesystem events with existing handler */
@@ -937,18 +931,20 @@ bool monitor_poll(monitor_t *monitor) {
 	monitor_graveyard(monitor);
 
 	/* Periodically clean up idle file watches to prevent resource leaks */
-	if (monitor->resources && monitor->resources->buckets) {
-		for (size_t i = 0; i < monitor->resources->bucket_count; i++) {
-			resource_t *resource = monitor->resources->buckets[i];
-			while (resource) {
-				if (resource->trackers) {
-					/* tracker_cleanup has its own internal timer to avoid running too often */
-					resource_lock(resource);
-					tracker_cleanup(monitor, resource->trackers);
-					resource_unlock(resource);
-				}
-				resource = resource->next;
+	if (!monitor->resources || !monitor->resources->buckets) {
+		return true;
+	}
+
+	for (size_t i = 0; i < monitor->resources->bucket_count; i++) {
+		resource_t *resource = monitor->resources->buckets[i];
+		while (resource) {
+			if (resource->trackers) {
+				/* tracker_cleanup has its own internal timer to avoid running too often */
+				resource_lock(resource);
+				tracker_cleanup(monitor, resource->trackers);
+				resource_unlock(resource);
 			}
+			resource = resource->next;
 		}
 	}
 
