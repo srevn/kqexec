@@ -946,7 +946,7 @@ void pending_check(monitor_t *monitor, const char *changed_path) {
 				break;
 			}
 		}
-		
+
 		if (found) continue;
 
 		/* This is a new deleted path, add it to our list */
@@ -964,7 +964,7 @@ void pending_check(monitor_t *monitor, const char *changed_path) {
 			}
 			deleted_parents = new_parents;
 		}
-		
+
 		deleted_parents[deleted_count] = strdup(pending->current_parent);
 		if (deleted_parents[deleted_count]) deleted_count++;
 	}
@@ -976,7 +976,7 @@ void pending_check(monitor_t *monitor, const char *changed_path) {
 			pending_delete(monitor, deleted_parents[i]);
 			free(deleted_parents[i]);
 		}
-		
+
 		free(deleted_parents);
 	}
 }

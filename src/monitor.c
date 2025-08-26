@@ -469,7 +469,7 @@ bool monitor_path(monitor_t *monitor, const char *path, watchref_t watchref) {
 			return false;
 		}
 
-		/* For shared watchers, we still need to create a resource subscription. */
+		/* For shared watchers, we still need to create a resource subscription */
 		struct stat info;
 		watch_t *watch = registry_get(monitor->registry, watchref);
 		if (stat(path, &info) == 0 && watch) {

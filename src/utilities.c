@@ -185,10 +185,3 @@ double complexity_temporary(double complexity) {
 
 	return threshold;
 }
-
-/* Helper function to check if watch is internal */
-bool watch_internal(const char *name) {
-	if (!name) return false;
-	return (strncmp(name, "__proxy_", 8) == 0) ||
-		   (strcmp(name, "__config_file__") == 0);
-}

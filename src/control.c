@@ -15,27 +15,27 @@
 #include "protocol.h"
 
 /* Ensure client write buffer has enough capacity for additional data */
-static bool client_buffer_capacity(client_t *client, size_t additional_needed) {
+static bool client_buffer(client_t *client, size_t additional_needed) {
 	if (!client) return false;
-	
+
 	/* Check if we have enough space */
 	if (client->write_size + additional_needed <= client->write_capacity) {
 		return true;
 	}
-	
+
 	/* Calculate new capacity using doubling strategy */
 	size_t new_capacity = client->write_capacity;
 	while (client->write_size + additional_needed > new_capacity) {
 		new_capacity = (new_capacity == 0) ? 128 : new_capacity * 2;
 	}
-	
+
 	/* Reallocate buffer */
 	char *new_buffer = realloc(client->write_buffer, new_capacity);
 	if (!new_buffer) {
 		log_message(ERROR, "Failed to reallocate client write buffer");
 		return false;
 	}
-	
+
 	client->write_buffer = new_buffer;
 	client->write_capacity = new_capacity;
 	return true;
@@ -131,6 +131,7 @@ void server_destroy(server_t *server) {
 	for (int i = 0; i < server->num_clients; i++) {
 		if (server->clients[i]) {
 			close(server->clients[i]->fd);
+			free(server->clients[i]->buffer);
 			free(server->clients[i]->write_buffer);
 			free(server->clients[i]);
 		}
@@ -216,8 +217,20 @@ void control_accept(server_t *server, int kqueue_fd) {
 	}
 
 	client->fd = client_fd;
-	client->buffer_pos = 0;
 	client->addr = client_addr;
+
+	/* Allocate and initialize read buffer */
+	client->buffer = malloc(BUFFER_SIZE);
+	if (!client->buffer) {
+		log_message(ERROR, "Failed to allocate memory for client read buffer");
+		close(client_fd);
+		free(client);
+		return;
+	}
+	client->buffer_capacity = BUFFER_SIZE;
+	client->buffer_pos = 0;
+
+	/* Initialize write buffer fields */
 	client->write_buffer = NULL;
 	client->write_size = 0;
 	client->write_pos = 0;
@@ -259,6 +272,7 @@ void control_remove(server_t *server, int client_fd, int kqueue_fd) {
 			}
 
 			close(server->clients[i]->fd);
+			free(server->clients[i]->buffer);
 			free(server->clients[i]->write_buffer);
 			free(server->clients[i]);
 
@@ -319,9 +333,31 @@ void control_handle(monitor_t *monitor, struct kevent *event) {
 		return;
 	}
 
+	/* Ensure buffer has space */
+	if (client->buffer_pos >= client->buffer_capacity - 1) {
+		/* Use doubling strategy for buffer growth */
+		size_t new_capacity = client->buffer_capacity * 2;
+
+		/* Impose a sane limit to prevent excessive memory allocation */
+		if (new_capacity > 1024 * 1024) { /* 1MB limit */
+			log_message(WARNING, "Client (fd=%d) command buffer > 1MB. Disconnecting.", client_fd);
+			control_remove(server, client_fd, monitor->kq);
+			return;
+		}
+
+		char *new_buffer = realloc(client->buffer, new_capacity);
+		if (!new_buffer) {
+			log_message(ERROR, "Failed to expand client read buffer. Disconnecting client (fd=%d).", client_fd);
+			control_remove(server, client_fd, monitor->kq);
+			return;
+		}
+		client->buffer = new_buffer;
+		client->buffer_capacity = new_capacity;
+	}
+
 	/* Read data from client */
 	ssize_t data_read = read(client_fd, client->buffer + client->buffer_pos,
-							 BUFFER_SIZE - client->buffer_pos - 1);
+							 client->buffer_capacity - client->buffer_pos - 1);
 
 	if (data_read <= 0) {
 		if (data_read == 0 || (data_read == -1 && errno != EAGAIN && errno != EWOULDBLOCK)) {
@@ -381,13 +417,6 @@ void control_handle(monitor_t *monitor, struct kevent *event) {
 	}
 	client->buffer_pos = remaining_len;
 	client->buffer[client->buffer_pos] = '\0';
-
-	/* Check for buffer overflow after shifting */
-	if (client->buffer_pos >= BUFFER_SIZE - 1) {
-		log_message(WARNING, "Client (fd=%d) buffer overflow: %zu data attempted, max %d data allowed",
-					client_fd, client->buffer_pos, BUFFER_SIZE - 1);
-		control_remove(server, client_fd, monitor->kq);
-	}
 }
 
 /* Send response to client with write buffering */
@@ -416,7 +445,7 @@ bool control_send(monitor_t *monitor, client_t *client, const char *response) {
 
 		/* Partial write occurred, buffer the remaining data */
 		size_t remaining = response_len - data_sent;
-		if (!client_buffer_capacity(client, remaining)) return false;
+		if (!client_buffer(client, remaining)) return false;
 
 		memcpy(client->write_buffer, response + data_sent, remaining);
 		client->write_size = remaining;
@@ -435,7 +464,7 @@ bool control_send(monitor_t *monitor, client_t *client, const char *response) {
 		return true;
 	} else {
 		/* Already have pending data, append to buffer */
-		if (!client_buffer_capacity(client, response_len)) return false;
+		if (!client_buffer(client, response_len)) return false;
 
 		memcpy(client->write_buffer + client->write_size, response, response_len);
 		client->write_size += response_len;

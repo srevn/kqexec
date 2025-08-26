@@ -21,8 +21,9 @@ typedef struct client {
 	struct sockaddr_un addr;               /* Client socket address */
 	
 	/* Input processing */
-	char buffer[BUFFER_SIZE];              /* Input buffer for incoming commands */
+	char *buffer;                          /* Dynamically allocated input buffer */
 	size_t buffer_pos;                     /* Current position in input buffer */
+	size_t buffer_capacity;                /* Allocated capacity of input buffer */
 	
 	/* Output buffering */
 	char *write_buffer;                    /* Dynamically allocated write buffer */

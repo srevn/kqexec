@@ -6,6 +6,7 @@
 #include "client.h"
 #include "command.h"
 #include "config.h"
+#include "control.h"
 #include "daemon.h"
 #include "logger.h"
 #include "monitor.h"
@@ -32,7 +33,7 @@ static void print_usage(void) {
 	fprintf(stderr, "  -d, --daemon             Run as daemon\n");
 	fprintf(stderr, "  -l, --loglevel=LEVEL     Set log level (0-7, default: 5)\n");
 	fprintf(stderr, "  -r, --cooldown=MS        Set command cooldown time in milliseconds (default: 500)\n");
-	fprintf(stderr, "  -s, --socket-path=PATH   Socket path for control interface (default: /tmp/kqexec.sock)\n");
+	fprintf(stderr, "  -s, --socket-path=PATH   Socket path for control interface (default: %s)\n", DEFAULT_SOCKET);
 	fprintf(stderr, "  -h, --help               Print this help message\n");
 	fprintf(stderr, "\nClient mode options:\n");
 	fprintf(stderr, "  --disable=WATCHES        Temporarily disable specified watches (comma-separated)\n");
@@ -40,7 +41,7 @@ static void print_usage(void) {
 	fprintf(stderr, "  --status                 Show status of current watches\n");
 	fprintf(stderr, "  --list                   List all configured watches\n");
 	fprintf(stderr, "  --reload                 Reload configuration from file\n");
-	fprintf(stderr, "  --socket=PATH            Socket path to connect to (default: /tmp/kqexec.sock)\n");
+	fprintf(stderr, "  --socket=PATH            Socket path to connect to (default: %s)\n", DEFAULT_SOCKET);
 }
 
 /* Main function */

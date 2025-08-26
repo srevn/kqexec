@@ -234,20 +234,139 @@ static void client_list(const char *response) {
 	}
 }
 
+/* Display formatted disable output */
+static void client_disable(const char *response) {
+	char *disabled_counter = client_value(response, "disabled_count");
+	char *error_counter = client_value(response, "error_count");
+
+	if (!disabled_counter || !error_counter) {
+		printf("Incomplete disable data received\n");
+		goto cleanup;
+	}
+
+	int disabled_count = atoi(disabled_counter);
+	int error_count = atoi(error_counter);
+
+	if (disabled_count > 0) {
+		char *disabled_names = client_value(response, "disabled_names");
+		if (disabled_names) {
+			printf("Disabled %d watch%s: %s\n", disabled_count,
+				   disabled_count == 1 ? "" : "es", disabled_names);
+			free(disabled_names);
+		} else {
+			printf("Disabled %d watch%s\n", disabled_count,
+				   disabled_count == 1 ? "" : "es");
+		}
+	}
+
+	if (error_count > 0) {
+		printf("Errors (%d):\n", error_count);
+		for (int i = 0; i < error_count; i++) {
+			char error_watch_key[64], error_msg_key[64];
+			snprintf(error_watch_key, sizeof(error_watch_key), "error_%d_watch", i);
+			snprintf(error_msg_key, sizeof(error_msg_key), "error_%d_message", i);
+
+			char *watch_name = client_value(response, error_watch_key);
+			char *error_msg = client_value(response, error_msg_key);
+
+			if (watch_name && error_msg) {
+				printf("  %s: %s\n", watch_name, error_msg);
+			}
+
+			free(watch_name);
+			free(error_msg);
+		}
+	}
+
+	if (disabled_count == 0 && error_count == 0) {
+		printf("No watches were disabled\n");
+	}
+
+cleanup:
+	free(disabled_counter);
+	free(error_counter);
+}
+
+/* Display formatted enable output */
+static void client_enable(const char *response) {
+	char *enabled_counter = client_value(response, "enabled_count");
+	char *error_counter = client_value(response, "error_count");
+
+	if (!enabled_counter || !error_counter) {
+		printf("Incomplete enable data received\n");
+		goto cleanup;
+	}
+
+	int enabled_count = atoi(enabled_counter);
+	int error_count = atoi(error_counter);
+
+	if (enabled_count > 0) {
+		char *enabled_names = client_value(response, "enabled_names");
+		if (enabled_names) {
+			printf("Enabled %d watch%s: %s\n", enabled_count,
+				   enabled_count == 1 ? "" : "es", enabled_names);
+			free(enabled_names);
+		} else {
+			printf("Enabled %d watch%s\n", enabled_count,
+				   enabled_count == 1 ? "" : "es");
+		}
+	}
+
+	if (error_count > 0) {
+		printf("Errors (%d):\n", error_count);
+		for (int i = 0; i < error_count; i++) {
+			char error_watch_key[64], error_msg_key[64];
+			snprintf(error_watch_key, sizeof(error_watch_key), "error_%d_watch", i);
+			snprintf(error_msg_key, sizeof(error_msg_key), "error_%d_message", i);
+
+			char *watch_name = client_value(response, error_watch_key);
+			char *error_msg = client_value(response, error_msg_key);
+
+			if (watch_name && error_msg) {
+				printf("  %s: %s\n", watch_name, error_msg);
+			}
+
+			free(watch_name);
+			free(error_msg);
+		}
+	}
+
+	if (enabled_count == 0 && error_count == 0) {
+		printf("No watches were enabled\n");
+	}
+
+cleanup:
+	free(enabled_counter);
+	free(error_counter);
+}
+
+/* Display formatted reload output */
+static void client_reload(const char *response) {
+	char *reload_requested = client_value(response, "reload_requested");
+
+	if (reload_requested && strcmp(reload_requested, "true") == 0) {
+		printf("Configuration reload requested\n");
+	} else {
+		printf("Reload operation completed\n");
+	}
+
+	free(reload_requested);
+}
+
 /* Display formatted status output */
 static void client_status(const char *response) {
-	char *active_count_str = client_value(response, "active_count");
-	char *disabled_count_str = client_value(response, "disabled_count");
-	char *pending_count_str = client_value(response, "pending_count");
+	char *active_counter = client_value(response, "active_count");
+	char *disabled_counter = client_value(response, "disabled_count");
+	char *pending_counter = client_value(response, "pending_count");
 
-	if (!active_count_str || !disabled_count_str || !pending_count_str) {
+	if (!active_counter || !disabled_counter || !pending_counter) {
 		printf("Incomplete status data received\n");
 		goto cleanup;
 	}
 
-	int active_count = atoi(active_count_str);
-	int disabled_count = atoi(disabled_count_str);
-	int pending_count = atoi(pending_count_str);
+	int active_count = atoi(active_counter);
+	int disabled_count = atoi(disabled_counter);
+	int pending_count = atoi(pending_counter);
 
 	printf("Watches: %d active, %d disabled, %d pending",
 		   active_count, disabled_count, pending_count);
@@ -279,9 +398,9 @@ static void client_status(const char *response) {
 	printf("\n");
 
 cleanup:
-	free(active_count_str);
-	free(disabled_count_str);
-	free(pending_count_str);
+	free(active_counter);
+	free(disabled_counter);
+	free(pending_counter);
 }
 
 /* Display response to user */
@@ -291,63 +410,38 @@ void client_display(const char *response) {
 		return;
 	}
 
-	bool is_success = (strstr(response, "status=success") != NULL);
-
 	/* Use explicit response_type for robust protocol handling */
 	char *response_type = client_value(response, "response_type");
-	
-	if (response_type && strcmp(response_type, "list") == 0) {
-		/* Structured list response */
-		client_list(response);
-		free(response_type);
-	} else if (response_type && strcmp(response_type, "status") == 0) {
-		/* Structured status response */
-		client_status(response);
-		free(response_type);
-	} else {
-		/* Free response_type if it was allocated */
-		free(response_type);
-		/* Fall back to message-based display for other commands */
-		char *response_copy = strdup(response);
-		if (!response_copy) return;
-
-		char *message_start = strstr(response_copy, "message=");
-		if (message_start) {
-			message_start += 8; /* Skip "message=" */
-
-			/* Find the end of the message value */
-			char *message_end = strstr(message_start, "\n\n");
-			if (!message_end) {
-				message_end = message_start + strlen(message_start);
-			}
-
-			/* Extract and display the complete message */
-			size_t message_len = message_end - message_start;
-			char *message_text = malloc(message_len + 1);
-			if (message_text) {
-				memcpy(message_text, message_start, message_len);
-				message_text[message_len] = '\0';
-
-				/* Remove trailing whitespace */
-				while (message_len > 0 && (message_text[message_len - 1] == '\n' ||
-										   message_text[message_len - 1] == '\r')) {
-					message_text[--message_len] = '\0';
-				}
-
-				if (is_success) {
-					printf("%s\n", message_text);
-				} else {
-					fprintf(stderr, "%s\n", message_text);
-				}
-				free(message_text);
-			}
-		} else if (!is_success) {
-			/* If there is an error status but no message, print the raw response */
-			fprintf(stderr, "Error from daemon: %s", response);
-		}
-
-		free(response_copy);
+	if (!response_type) {
+		fprintf(stderr, "Error: Malformed response from daemon\n");
+		/* For debugging, print the raw response */
+		fprintf(stderr, "Raw response: %s\n", response);
+		return;
 	}
+
+	if (strcmp(response_type, "list") == 0) {
+		client_list(response);
+	} else if (strcmp(response_type, "status") == 0) {
+		client_status(response);
+	} else if (strcmp(response_type, "disable") == 0) {
+		client_disable(response);
+	} else if (strcmp(response_type, "enable") == 0) {
+		client_enable(response);
+	} else if (strcmp(response_type, "reload") == 0) {
+		client_reload(response);
+	} else if (strcmp(response_type, "error") == 0) {
+		char *message = client_value(response, "message");
+		if (message) {
+			fprintf(stderr, "Error: %s\n", message);
+			free(message);
+		} else {
+			fprintf(stderr, "Error: Received unspecified error from daemon\n");
+		}
+	} else {
+		fprintf(stderr, "Error: Unknown response type from daemon: %s\n", response_type);
+	}
+
+	free(response_type);
 }
 
 /* Build command string from options */
@@ -505,15 +599,15 @@ int client_main(options_t *options) {
 	/* Receive and display response */
 	char *response = client_receive(sock_fd);
 	int exit_code = EXIT_SUCCESS;
-	
+
 	if (response) {
 		client_display(response);
-		
+
 		/* Check response status for exit code */
 		if (strstr(response, "status=error") != NULL) {
 			exit_code = EXIT_FAILURE;
 		}
-		
+
 		free(response);
 	} else {
 		exit_code = EXIT_FAILURE;
