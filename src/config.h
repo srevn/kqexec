@@ -12,7 +12,7 @@ typedef enum filter {
 	EVENT_NONE = 0,                        /* No events */
 	EVENT_STRUCTURE = 1 << 0,              /* Directory structure changes (WRITE, EXTEND) */
 	EVENT_METADATA = 1 << 1,               /* Metadata changes (ATTRIB, LINK) */
-	EVENT_CONTENT = 1 << 2,                /* File content changes (CREATE, DELETE, RENAME) */
+	EVENT_CONTENT = 1 << 2,                /* File content changes (CREATE, DELETE, RENAME, WRITE) */
 	EVENT_ALL = EVENT_STRUCTURE | EVENT_METADATA | EVENT_CONTENT
 } filter_t;
 

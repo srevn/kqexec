@@ -66,13 +66,13 @@ void trackers_destroy(trackers_t *registry) {
 
 /* Hash function for file paths */
 unsigned int tracker_hash(const char *path, size_t bucket_count) {
+	unsigned int hash = 5381; /* djb2 hash initial value */
 	if (!path || bucket_count == 0) return 0;
 
-	unsigned int hash = 5381;
-	const char *c = path;
-	while (*c) {
-		hash = ((hash << 5) + hash) + *c++;
+	for (const char *p = path; *p; p++) {
+		hash = ((hash << 5) + hash) + (unsigned char) *p;
 	}
+
 	return hash % bucket_count;
 }
 

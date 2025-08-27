@@ -663,12 +663,14 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 									/* Check for processing delay on the associated watch */
 									watch_t *watch = registry_get(monitor->registry, tracker->watchrefs[k]);
 									if (watch) {
+										/* Schedule the event for delayed processing */
 										if (watch->processing_delay > 0) {
 											events_delay(monitor, tracker->watchrefs[k], &event, ENTITY_DIRECTORY);
 										} else {
+											/* Process the event immediately */
 											events_process(monitor, tracker->watchrefs[k], &event, ENTITY_DIRECTORY, false);
 										}
-										log_message(DEBUG, "File change in %s delegated to directory %s for stability (watch: %s)",
+										log_message(DEBUG, "File change in %s delegated to directory %s (watch: %s)",
 													tracker->path, parent_dir, watch->name);
 									}
 								}
@@ -729,9 +731,7 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 
 						/* Proactive validation for directory events */
 						if (watch->target == WATCH_DIRECTORY && (events[i].fflags & NOTE_WRITE)) {
-							if (validate) {
-								validate_add(validate, savedpath);
-							}
+							if (validate) validate_add(validate, savedpath);
 						}
 
 						/* Check if this watch has a processing delay configured */
@@ -913,7 +913,7 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 	}
 
 	/* Check if this is a proxy watch */
-	bool is_proxy = strncmp(watch->name, "__proxy_", 8) == 0 && strcmp(watch->name, "__config_file__") != 0;
+	bool is_proxy = strncmp(watch->name, "__proxy_", 8) == 0;
 
 	/* Additional safety checks for watch structure */
 	if (!watch->name || (!watch->command && !is_proxy)) {

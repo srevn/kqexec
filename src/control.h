@@ -10,9 +10,9 @@
 typedef struct monitor monitor_t;
 
 /* Control server configuration */
-#define DEFAULT_SOCKET "/tmp/kqexec.sock"    /* Default socket path for control interface */
-#define MAX_CLIENTS 32                       /* Maximum concurrent client connections */
-#define BUFFER_SIZE 4096                     /* Size of client input/output buffers */
+#define DEFAULT_SOCKET "/tmp/kqexec.sock"  /* Default socket path for control interface */
+#define MAX_CLIENTS 32                     /* Maximum concurrent client connections */
+#define BUFFER_SIZE 4096                   /* Size of client input/output buffers */
 
 /* Connected client state */
 typedef struct client {

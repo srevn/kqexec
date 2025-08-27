@@ -95,7 +95,7 @@ static bool builder_append(builder_t *b, const char *format, ...) {
 	return true;
 }
 
-/* Finalize the string and transfers ownership to the caller */
+/* Finalize the string and transfer ownership to the caller */
 static char *builder_string(builder_t *b) {
 	if (!b) return NULL;
 	char *result = b->data;
@@ -164,7 +164,7 @@ static bool array_has(array_t *a, const char *item) {
 	return false;
 }
 
-/* Parses key=value pairs line by line, returning allocated value string */
+/* Parse key=value pairs line by line, returning allocated value string */
 char *kv_value(const char *text, const char *key) {
 	if (!text || !key) return NULL;
 
@@ -525,7 +525,8 @@ static protocol_t protocol_enable(monitor_t *monitor, const char *command_text) 
 static protocol_t protocol_status(monitor_t *monitor, const char *command_text) {
 	protocol_t result;
 	protocol_init(&result);
-	(void) command_text;
+
+	(void) command_text; /* Unused parameter */
 
 	/* Get all registered watches and categorize them */
 	uint32_t num_watches = 0;

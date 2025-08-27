@@ -14,7 +14,7 @@
 #include "threads.h"
 
 /* Default configuration file */
-#define DEFAULT_CONFIG_FILE "/usr/local/etc/kqexec.conf"
+#define DEFAULT_CONFIG "/usr/local/etc/kqexec.conf"
 
 /* Program name */
 static const char *program_name;
@@ -29,7 +29,7 @@ typedef enum operation_mode {
 static void print_usage(void) {
 	fprintf(stderr, "Usage: %s [daemon options] | [client options]\n", program_name);
 	fprintf(stderr, "\nDaemon mode options:\n");
-	fprintf(stderr, "  -c, --config=FILE        Configuration file (default: %s)\n", DEFAULT_CONFIG_FILE);
+	fprintf(stderr, "  -c, --config=FILE        Configuration file (default: %s)\n", DEFAULT_CONFIG);
 	fprintf(stderr, "  -d, --daemon             Run as daemon\n");
 	fprintf(stderr, "  -l, --loglevel=LEVEL     Set log level (0-7, default: 5)\n");
 	fprintf(stderr, "  -r, --cooldown=MS        Set command cooldown time in milliseconds (default: 500)\n");
@@ -175,7 +175,7 @@ int main(int argc, char *argv[]) {
 
 	/* Use default config file if not specified */
 	if (config_path == NULL) {
-		config_path = DEFAULT_CONFIG_FILE;
+		config_path = DEFAULT_CONFIG;
 	}
 
 	/* Initialize logging */

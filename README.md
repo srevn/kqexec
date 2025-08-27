@@ -97,7 +97,7 @@ Examples:
 # Disable specific watches
 kqexec --disable "Web Content,Log File"
 
-# Enable all disabled watches  
+# Enable specific disabled watches  
 kqexec --enable "Web Content,Log File"
 
 # Check daemon status

@@ -130,7 +130,7 @@ static void resources_deactivation(watchref_t watchref, void *context) {
 /* Hash function for a path string */
 unsigned int resources_hash(const char *path, size_t bucket_count) {
 	unsigned int hash = 5381; /* djb2 hash initial value */
-	if (!path) return 0;
+	if (!path || bucket_count == 0) return 0;
 
 	for (const char *p = path; *p; p++) {
 		hash = ((hash << 5) + hash) + (unsigned char) *p;

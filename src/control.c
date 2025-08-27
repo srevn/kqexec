@@ -174,6 +174,7 @@ bool server_start(server_t *server, int kqueue_fd) {
 /* Stop the control server */
 void server_stop(server_t *server) {
 	if (!server) return;
+
 	server->running = false;
 	log_message(INFO, "Control server stopped");
 }
