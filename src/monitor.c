@@ -1122,9 +1122,8 @@ bool monitor_reload(monitor_t *monitor) {
 		monitor->server = NULL;
 	}
 
-	/* Switch configuration and registry */
+	/* Switch configuration first */
 	monitor->config = new_config;
-	monitor->registry = new_registry;
 
 	/* Switch resource management */
 	resources_t *old_resources = monitor->resources;
@@ -1161,6 +1160,9 @@ bool monitor_reload(monitor_t *monitor) {
 	/* Reset monitor's watch list to be populated with new watches */
 	monitor->watches = NULL;
 	monitor->num_watches = 0;
+
+	/* Switch to the new registry before adding watches */
+	monitor->registry = new_registry;
 
 	/* Add watches from the new configuration (including the config file watch) */
 	uint32_t new_num_watches = 0;

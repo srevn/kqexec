@@ -1003,8 +1003,6 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 
 	if (optype == OP_NONE) return false; /* No relevant change detected */
 
-	log_message(DEBUG, "Determined operation type %d for %s", optype, subscription->resource->path);
-
 	/* Check if operation is included in watch mask */
 	filter_t filter_for_mask = operation_to_filter(optype);
 	if ((watch->filter & filter_for_mask) == 0) {
