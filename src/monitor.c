@@ -1541,24 +1541,3 @@ bool monitor_disable(monitor_t *monitor, watchref_t watchref) {
 	log_message(INFO, "Watch %s disabled successfully", watch->name ? watch->name : "unknown");
 	return true;
 }
-
-/* Deactivate a watch dynamically */
-bool monitor_deactivate(monitor_t *monitor, watchref_t watchref) {
-	if (!monitor || !watchref_valid(watchref)) return false;
-
-	/* Get the watch from the registry */
-	watch_t *watch = registry_get(monitor->registry, watchref);
-	if (!watch) {
-		log_message(WARNING, "Cannot deactivate watch, reference not found in registry");
-		return false;
-	}
-
-	/* Set the watch as disabled */
-	watch->enabled = false;
-
-	/* Use the registry's deactivation mechanism to trigger observer cleanup */
-	registry_deactivate(monitor->registry, watchref);
-
-	log_message(INFO, "Watch %s deactivated successfully", watch->name ? watch->name : "unknown");
-	return true;
-}

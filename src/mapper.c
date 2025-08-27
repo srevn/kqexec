@@ -5,9 +5,6 @@
 
 #include "logger.h"
 
-#define MAPPER_INITIAL_SIZE 1024
-#define MAPPER_GROWTH_FACTOR 2
-
 /* Resize the mapper's internal array if fd is out of bounds */
 static bool mapper_resize(mapper_t *mapper, int fd) {
 	if (fd < mapper->size) return true;

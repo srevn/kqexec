@@ -8,16 +8,16 @@
 
 /* Dynamic array for managing lists of strings */
 typedef struct array {
-	char **items;                          /*Array of string pointers */
-	int count;                             /*Number of items currently in the array */
-	int capacity;                          /*Allocated capacity of the items array */
+	char **items;                          /* Array of string pointers */
+	int count;                             /* Number of items currently in the array */
+	int capacity;                          /* Allocated capacity of the items array */
 } array_t;
 
-/* Dynamic string builder for efficient string concatenation */
+/* Dynamic string builder for string concatenation */
 typedef struct builder {
-	char *data;                            /*The character buffer */
-	size_t capacity;                       /*The allocated capacity of the buffer */
-	size_t length;                         /*The current length of the string in the buffer*/
+	char *data;                            /* The character buffer */
+	size_t capacity;                       /* The allocated capacity of the buffer */
+	size_t length;                         /* The current length of the string in the buffer*/
 } builder_t;
 
 /* Protocol result for key-value protocol responses */

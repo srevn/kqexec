@@ -3,6 +3,10 @@
 
 #include <stdbool.h>
 
+/* File descriptor mapper configuration */
+#define MAPPER_INITIAL_SIZE 1024           /* Initial size for file descriptor mapping array */
+#define MAPPER_GROWTH_FACTOR 2             /* Factor by which to grow array when needed */
+
 /* A node in a linked list for watchers that share a file descriptor */
 typedef struct watcher_node {
 	struct watcher *watcher;               /* The watcher instance */
