@@ -67,6 +67,7 @@ typedef struct monitor {
 	/* Control flags & config */
 	bool running;                          /* Monitor running flag */
 	bool reload;                           /* Flag to indicate reload requested */
+	bool reloading;                        /* Flag to indicate reload in progress */
 	char *config_path;                     /* Copy of config file path for reloading */
 	
 	/* Unix socket control server */

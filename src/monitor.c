@@ -208,6 +208,7 @@ monitor_t *monitor_create(config_t *config, registry_t *registry) {
 	monitor->num_pending = 0;
 	monitor->running = false;
 	monitor->reload = false;
+	monitor->reloading = false;
 
 	monitor->graveyard.stale_watches = NULL;
 	monitor->graveyard.num_stale = 0;
@@ -990,6 +991,9 @@ bool monitor_reload(monitor_t *monitor) {
 		return false;
 	}
 
+	/* Set reloading flag to prevent synthetic events during reload */
+	monitor->reloading = true;
+
 	log_message(INFO, "Reloading configuration from %s", monitor->config_path);
 	int current_trackers = tracker_counter(monitor);
 	if (current_trackers > 0) {
@@ -1006,6 +1010,7 @@ bool monitor_reload(monitor_t *monitor) {
 	int new_kq = kqueue();
 	if (new_kq == -1) {
 		log_message(ERROR, "Failed to create new kqueue during reload: %s", strerror(errno));
+		monitor->reloading = false;
 		return false;
 	}
 
@@ -1019,6 +1024,7 @@ bool monitor_reload(monitor_t *monitor) {
 	if (!new_config) {
 		log_message(ERROR, "Failed to create new configuration during reload");
 		close(new_kq);
+		monitor->reloading = false;
 		return false;
 	}
 
@@ -1028,6 +1034,7 @@ bool monitor_reload(monitor_t *monitor) {
 		log_message(ERROR, "Failed to create new registry during reload");
 		close(new_kq);
 		config_destroy(new_config);
+		monitor->reloading = false;
 		return false;
 	}
 
@@ -1041,6 +1048,7 @@ bool monitor_reload(monitor_t *monitor) {
 			config_destroy(new_config);
 			registry_destroy(new_registry);
 			close(new_kq);
+			monitor->reloading = false;
 			return false;
 		}
 	}
@@ -1053,6 +1061,7 @@ bool monitor_reload(monitor_t *monitor) {
 		registry_destroy(new_registry);
 		/* Re-validate the watch on the config file to detect subsequent changes */
 		monitor_sync(monitor, monitor->config_path);
+		monitor->reloading = false;
 		return false;
 	}
 
@@ -1072,6 +1081,7 @@ bool monitor_reload(monitor_t *monitor) {
 		close(new_kq);
 		config_destroy(new_config);
 		registry_destroy(new_registry);
+		monitor->reloading = false;
 		return false;
 	}
 
@@ -1083,6 +1093,7 @@ bool monitor_reload(monitor_t *monitor) {
 		close(new_kq);
 		config_destroy(new_config);
 		registry_destroy(new_registry);
+		monitor->reloading = false;
 		return false;
 	}
 
@@ -1095,6 +1106,7 @@ bool monitor_reload(monitor_t *monitor) {
 		close(new_kq);
 		config_destroy(new_config);
 		registry_destroy(new_registry);
+		monitor->reloading = false;
 		return false;
 	}
 
@@ -1234,6 +1246,9 @@ bool monitor_reload(monitor_t *monitor) {
 	} else {
 		log_message(INFO, "Configuration reload complete: %d watches", monitor->num_watches);
 	}
+
+	/* Clear reloading flag now that reload is complete */
+	monitor->reloading = false;
 	return true;
 }
 

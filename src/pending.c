@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include "config.h"
+#include "events.h"
 #include "logger.h"
 #include "monitor.h"
 #include "registry.h"
@@ -521,6 +522,43 @@ bool pending_add(monitor_t *monitor, const char *target_path, watchref_t watchre
 	return true;
 }
 
+/* Generate synthetic creation event for promoted pending path */
+static void pending_event(monitor_t *monitor, watchref_t watchref, const char *promoted_path, const char *promotion_type) {
+	if (!monitor || !promoted_path || !promotion_type) return;
+
+	/* Only generate synthetic events during active monitoring, not during startup or config reload */
+	if (!monitor->running || monitor->reloading) {
+		const char *reason = !monitor->running ? "startup" : "configuration reload";
+		log_message(DEBUG, "Skipping synthetic event for promoted %s path during %s: %s",
+					promotion_type, reason, promoted_path);
+		return;
+	}
+
+	/* Generate synthetic creation event for the newly promoted path */
+	struct timespec current_time;
+	clock_gettime(CLOCK_MONOTONIC, &current_time);
+
+	event_t promotion_event = {
+		.path = (char *) promoted_path,
+		.type = EVENT_STRUCTURE | EVENT_CONTENT, /* Both structure and content for creation */
+		.time = current_time,
+		.wall_time = {0},
+		.user_id = getuid(),
+		.diff = NULL};
+
+	clock_gettime(CLOCK_REALTIME, &promotion_event.wall_time);
+
+	/* Determine entity kind for the promoted watch */
+	watch_t *promoted_watch = registry_get(monitor->registry, watchref);
+	kind_t entity_kind = (promoted_watch && promoted_watch->target == WATCH_FILE) ? ENTITY_FILE : ENTITY_DIRECTORY;
+
+	log_message(DEBUG, "Generating synthetic creation event for promoted %s path: %s",
+				promotion_type, promoted_path);
+
+	/* Process the synthetic creation event immediately */
+	events_process(monitor, watchref, &promotion_event, entity_kind, false);
+}
+
 /* Promote a fully matched glob path to a dynamic watch */
 static void pending_promote(monitor_t *monitor, pending_t *pending, const char *matched_path) {
 	if (!monitor || !pending || !matched_path) return;
@@ -618,6 +656,9 @@ static void pending_promote(monitor_t *monitor, pending_t *pending, const char *
 	if (monitor_add(monitor, resolvedref, true)) {
 		log_message(INFO, "Successfully promoted glob match: %s from pattern %s", matched_path,
 					pending->glob_pattern);
+
+		/* Generate synthetic creation event for the newly promoted path */
+		pending_event(monitor, resolvedref, matched_path, "glob");
 	} else {
 		log_message(WARNING, "Failed to promote glob match: %s from pattern %s", matched_path,
 					pending->glob_pattern);
@@ -786,6 +827,9 @@ static void process_exact(monitor_t *monitor, pending_t *pending, int index) {
 
 				if (monitor_add(monitor, pending->watchref, true)) {
 					log_message(INFO, "Successfully promoted pending watch: %s", pending->target_path);
+
+					/* Generate synthetic creation event for the newly promoted path */
+					pending_event(monitor, pending->watchref, pending->target_path, "exact");
 				} else {
 					log_message(WARNING, "Failed to promote pending watch: %s", pending->target_path);
 				}
