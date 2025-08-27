@@ -370,6 +370,7 @@ static bool monitor_kq(monitor_t *monitor, watcher_t *watcher) {
 	struct kevent changes[1];
 	int flags = 0;
 	int shared_count = 0;
+	target_t target_type = WATCH_UNKNOWN; /* Uninitialized */
 
 	/* Consolidate event filters from enabled watches on this file descriptor */
 	for (int i = 0; i < monitor->num_watches; i++) {
@@ -380,6 +381,8 @@ static bool monitor_kq(monitor_t *monitor, watcher_t *watcher) {
 
 		/* Only process enabled watches */
 		if (!shared_watch->enabled) continue;
+
+		if (target_type == WATCH_UNKNOWN) target_type = shared_watch->target;
 
 		shared_count++;
 
@@ -393,6 +396,10 @@ static bool monitor_kq(monitor_t *monitor, watcher_t *watcher) {
 			flags |= NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE | NOTE_WRITE;
 		}
 	}
+
+	/* Add base flags to ensure the kernel doesn't silently drop fundamental events */
+	if (target_type == WATCH_FILE) flags |= NOTE_WRITE | NOTE_DELETE | NOTE_RENAME;
+	else if (target_type == WATCH_DIRECTORY) flags |= NOTE_WRITE;
 
 	if (shared_count > 1) {
 		log_message(DEBUG, "Configuring kqueue for fd %d with %d shared watches, combined flags: 0x%x",

@@ -18,6 +18,7 @@ typedef enum filter {
 
 /* Type of the watch entry */
 typedef enum target {
+	WATCH_UNKNOWN,                         /* Uninitialized watch type */
 	WATCH_FILE,                            /* Watch a specific file */
 	WATCH_DIRECTORY                        /* Watch a directory */
 } target_t;
