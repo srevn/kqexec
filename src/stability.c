@@ -363,7 +363,7 @@ bool stability_scan(monitor_t *monitor, subscription_t *root, const char *path, 
 	root->profile->stability->prev_stats = temp_stats;
 	scanner_update(root->profile, root->resource->path);
 
-	log_message(DEBUG, "Stability scan for %s: files=%d, dirs=%d, size=%s, recursive_files=%d, recursive_dirs=%d, max_depth=%d",
+	log_message(DEBUG, "Stability scan for %s: files=%d, dirs=%d, size=%s, tree_files=%d, tree_dirs=%d, max_depth=%d",
 				path, stats_out->local_files, stats_out->local_dirs, format_size((ssize_t) stats_out->tree_size, false),
 				stats_out->tree_files, stats_out->tree_dirs, stats_out->max_depth);
 
@@ -685,7 +685,7 @@ bool stability_execute(monitor_t *monitor, check_t *check, subscription_t *root,
 	return executed_count > 0;
 }
 
-/* Main stability processing function */
+/* Main stability processing function with fine-grained locking strategy */
 void stability_process(monitor_t *monitor, struct timespec *current_time) {
 	int commands_attempted = 0;
 	int commands_executed = 0;
@@ -694,231 +694,287 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 	if (!monitor || !monitor->check_queue) return;
 
 	/* Process one overdue check to maintain main loop responsiveness */
-	if (monitor->check_queue->size > 0) {
-		/* Get the earliest scheduled check */
-		check_t *check = &monitor->check_queue->items[0];
+	if (monitor->check_queue->size == 0) return; /* No work to do */
 
-		/* Validate the top check before processing */
-		if (!check || !check->path) {
-			log_message(WARNING, "Corrupted check in queue, removing");
-			queue_remove(monitor->check_queue, NULL);
-			return; /* Try again on next call */
-		}
+	/* Get the earliest scheduled check */
+	check_t *check = &monitor->check_queue->items[0];
 
-		/* Check if it's time to process this check */
-		if (timespec_before(current_time, &check->next_check)) {
-			/* Not yet time for this check. Since it's a min-heap, no other checks are ready */
-			return;
-		}
+	/* Validate the top check before processing */
+	if (!check || !check->path) {
+		log_message(WARNING, "Corrupted check in queue, removing");
+		queue_remove(monitor->check_queue, NULL);
+		return; /* Try again on next call */
+	}
 
-		item_processed = true;
+	/* Check if it's time to process this check */
+	if (timespec_before(current_time, &check->next_check)) return;
 
-		log_message(DEBUG, "Processing queued check for %s with %d watches", check->path, check->num_watches);
+	item_processed = true;
+	log_message(DEBUG, "Processing queued check for %s with %d watches", check->path, check->num_watches);
 
-		/* Get the root subscription state */
-		subscription_t *root = stability_entry(monitor, check);
-		if (!root) {
-			queue_remove(monitor->check_queue, check->path);
-			return;
-		}
+	/* Get the root subscription state */
+	subscription_t *root = stability_entry(monitor, check);
+	if (!root) {
+		queue_remove(monitor->check_queue, check->path);
+		return;
+	}
 
-		/* Lock the resource mutex to protect shared state during stability processing */
-		pthread_mutex_lock(&root->resource->mutex);
+	/* Acquire the resource mutex and perform initial validation*/
+	pthread_mutex_lock(&root->resource->mutex);
 
-		/* If the entity is no longer active, just remove from queue */
-		if (!root->profile->scanner->active) {
-			log_message(DEBUG, "Directory %s no longer active, removing from queue", check->path);
-			pthread_mutex_unlock(&root->resource->mutex);
-			queue_remove(monitor->check_queue, check->path);
-			return;
-		}
+	/* If the entity is no longer active, just remove from queue */
+	if (!root->profile->scanner->active) {
+		log_message(DEBUG, "Directory %s no longer active, removing from queue", check->path);
+		pthread_mutex_unlock(&root->resource->mutex);
+		queue_remove(monitor->check_queue, check->path);
+		return;
+	}
 
-		/* Check if we're in verification mode or need to verify quiet period */
-		bool elapsed_quiet = check->verifying;
-		long required_quiet = check->scheduled_quiet;
+	/* Determine if we're in verification mode and get required quiet period */
+	bool elapsed_quiet = check->verifying;
+	long required_quiet = check->scheduled_quiet;
 
-		if (!elapsed_quiet) {
-			/* Use the stored quiet period from when this check was scheduled */
-			if (required_quiet <= 0) {
-				/* Fallback: calculate if not stored (shouldn't happen) */
-				required_quiet = scanner_delay(monitor, root);
-				check->scheduled_quiet = required_quiet;
-			}
+	/* Calculate required quiet period if not already stored */
+	if (required_quiet <= 0) {
+		required_quiet = scanner_delay(monitor, root);
+		check->scheduled_quiet = required_quiet;
+	}
 
-			elapsed_quiet = stability_quiet(monitor, root, current_time, required_quiet);
+	/* If not in verification mode, check if quiet period has elapsed */
+	if (!elapsed_quiet) {
+		if (!stability_quiet(monitor, root, current_time, required_quiet)) {
+			/* Quiet period not yet elapsed, reschedule */
+			watch_t *primary_watch = registry_get(monitor->registry, check->watchrefs[0]);
+			log_message(DEBUG, "Quiet period not yet elapsed for %s (watch: %s), rescheduling",
+						root->resource->path, primary_watch ? primary_watch->name : "unknown");
 
-			if (!elapsed_quiet) {
-				/* Quiet period not yet elapsed, reschedule */
-				watch_t *primary_watch = registry_get(monitor->registry, check->watchrefs[0]);
-				log_message(DEBUG, "Quiet period not yet elapsed for %s (watch: %s), rescheduling",
-							root->resource->path, primary_watch ? primary_watch->name : "unknown");
-
-				stability_delay(monitor, check, root, current_time, required_quiet);
-				pthread_mutex_unlock(&root->resource->mutex);
-				return;
-			}
-
-			/* Quiet period has elapsed, enter verification mode */
-			check->verifying = true;
-			log_message(DEBUG, "Quiet period elapsed for %s, entering verification mode", check->path);
-		}
-
-		log_message(DEBUG, "Performing stability verification for %s", check->path);
-
-		/* Check for new directories */
-		if (stability_new(monitor, check)) {
-			log_message(DEBUG, "Found new directories during scan, scheduling quick follow-up");
-
-			/* This is activity, but we don't need a full quiet period reset */
-			root->profile->scanner->latest_time = *current_time;
-
-			/* Update directory stats to reflect new directory structure */
-			stats_t new_stats;
-			watch_t *watch = registry_get(monitor->registry, root->watchref);
-			if (watch && scanner_scan(root->resource->path, watch, &new_stats)) {
-				root->profile->stability->prev_stats = root->profile->stability->stats;
-				root->profile->stability->stats = new_stats;
-				scanner_update(root->profile, root->resource->path);
-			}
-
-			/* We stay in verification mode, but reset the check count since the scope has changed */
-			root->profile->stability->checks_count = 0;
-			root->profile->stability->checks_required = 0; /* Recalculate required checks */
-
-			/* Schedule a short follow-up check instead of a full quiet period */
-			struct timespec next_check = *current_time;
-			timespec_add(&next_check, 200); /* 200ms */
-			check->next_check = next_check;
-			heap_down(monitor->check_queue->items, monitor->check_queue->size, 0);
-			pthread_mutex_unlock(&root->resource->mutex);
-			return;
-		}
-
-		/* Perform directory stability scan */
-		stats_t current_stats;
-		bool scan_completed = stability_scan(monitor, root, check->path, &current_stats);
-
-		/* Handle scan failure */
-		if (!scan_completed) {
-			failure_t failure_type = stability_fail(monitor, check, root, current_time);
-
-			if (failure_type == SCAN_FAILURE_MAX_ATTEMPTS_REACHED) {
-				/* Remove from queue */
-				pthread_mutex_unlock(&root->resource->mutex);
-				queue_remove(monitor->check_queue, check->path);
-				return;
-			} else if (failure_type == SCAN_FAILURE_DIRECTORY_DELETED) {
-				/* Reschedule for another check */
-				struct timespec next_check = *current_time;
-				timespec_add(&next_check, 2000); /* 2 seconds */
-
-				/* Update check */
-				check->next_check = next_check;
-				heap_down(monitor->check_queue->items, monitor->check_queue->size, 0);
-				pthread_mutex_unlock(&root->resource->mutex);
-				return;
-			}
-		}
-
-		/* Determine stability */
-		bool is_stable = stability_stable(root, &current_stats, scan_completed);
-
-		if (!is_stable) {
-			/* Directory is unstable - reset counter and reschedule */
-			root->profile->stability->checks_count = 0;
-			root->profile->stability->checks_required = 0; /* Reset required checks */
-			root->profile->stability->unstable_count++;	   /* Increment instability counter */
-
-			/* Update activity timestamp and reset verification flag*/
-			root->profile->scanner->latest_time = *current_time;
-			check->verifying = false;
-
-			log_message(DEBUG, "Directory %s failed stability check (instability count: %d), rescheduling",
-						check->path, root->profile->stability->unstable_count);
-
-			/* Recalculate quiet period based on new instability */
-			required_quiet = scanner_delay(monitor, root);
-			log_message(DEBUG, "Recalculated quiet period for instability: %ld ms", required_quiet);
 			stability_delay(monitor, check, root, current_time, required_quiet);
-
 			pthread_mutex_unlock(&root->resource->mutex);
 			return;
 		}
 
-		/* Directory is stable - determine if enough checks have been completed */
-		root->profile->stability->checks_count++;
+		/* Quiet period has elapsed, enter verification mode */
+		check->verifying = true;
+		log_message(DEBUG, "Quiet period elapsed for %s, entering verification mode", check->path);
+	}
 
-		/* Calculate required checks based on complexity factors (only if not already set) */
-		if (root->profile->stability->checks_required == 0) {
-			root->profile->stability->checks_required = stability_require(monitor, root, &current_stats);
+	/* Release mutex before I/O operations to prevent blocking other threads */
+	pthread_mutex_unlock(&root->resource->mutex);
+
+	/* Perform I/O operations without holding the lock */
+	log_message(DEBUG, "Performing stability verification for %s", check->path);
+
+	/* Check for new directories (I/O intensive operation) */
+	bool found_new_directories = stability_new(monitor, check);
+
+	/* Perform directory stability scan if no new directories were found */
+	stats_t current_stats;
+	bool scan_completed = false;
+
+	if (!found_new_directories) {
+		/* Perform directory stability scan (I/O intensive operation) */
+		watch_t *watch = registry_get(monitor->registry, root->watchref);
+		if (watch) scan_completed = scanner_stable(monitor, watch, check->path, &current_stats);
+	}
+
+	/* Re-acquire lock to process results and make decisions */
+	pthread_mutex_lock(&root->resource->mutex);
+
+	/* Revalidate that the resource is still active after I/O operations */
+	if (!root->profile->scanner->active) {
+		log_message(DEBUG, "Directory %s became inactive during I/O operations, removing from queue", check->path);
+		pthread_mutex_unlock(&root->resource->mutex);
+		queue_remove(monitor->check_queue, check->path);
+		return;
+	}
+
+	/* Handle case where new directories were found */
+	if (found_new_directories) {
+		log_message(DEBUG, "Found new directories during scan, scheduling quick follow-up");
+
+		/* This is activity, but we don't need a full quiet period reset */
+		root->profile->scanner->latest_time = *current_time;
+
+		/* Update directory stats to reflect new directory structure */
+		stats_t new_stats;
+		watch_t *watch = registry_get(monitor->registry, root->watchref);
+		if (watch && scanner_scan(root->resource->path, watch, &new_stats)) {
+			root->profile->stability->prev_stats = root->profile->stability->stats;
+			root->profile->stability->stats = new_stats;
+			scanner_update(root->profile, root->resource->path);
 		}
-		int checks_required = root->profile->stability->checks_required;
 
-		log_message(DEBUG, "Stability check %d/%d for %s: changes (%+d files, %+d dirs, %+d depth) total (%d entries, depth %d)",
-					root->profile->stability->checks_count, checks_required, root->resource->path,
-					root->profile->stability->delta_files, root->profile->stability->delta_dirs,
-					root->profile->stability->delta_depth, current_stats.tree_files + current_stats.tree_dirs,
-					current_stats.max_depth > 0 ? current_stats.max_depth : current_stats.depth);
+		/* We stay in verification mode, but reset the check count since the scope has changed */
+		root->profile->stability->checks_count = 0;
+		root->profile->stability->checks_required = 0; /* Recalculate required checks */
 
-		/* Check if we have enough consecutive stable checks */
-		if (root->profile->stability->checks_count < checks_required) {
-			/* Not enough checks yet, schedule quick follow-up check */
-			struct timespec next_check = *current_time;
-			timespec_add(&next_check, 200); /* 200ms */
+		/* Schedule a short follow-up check instead of a full quiet period */
+		struct timespec next_check = *current_time;
+		timespec_add(&next_check, 200); /* 200ms */
+		check->next_check = next_check;
+		heap_down(monitor->check_queue->items, monitor->check_queue->size, 0);
+		pthread_mutex_unlock(&root->resource->mutex);
+		return;
+	}
 
-			/* Update check and restore heap property */
-			check->next_check = next_check;
-			heap_down(monitor->check_queue->items, monitor->check_queue->size, 0);
+	/* Update shared state with scan results */
+	if (!found_new_directories && scan_completed) {
+		/* Update stability tracking with scan results */
+		root->profile->stability->checks_failed = 0; /* Reset failure counter on successful scan */
 
-			pthread_mutex_unlock(&root->resource->mutex);
-			return;
-		}
+		/* Save previous stats for comparison before overwriting */
+		stats_t temp_stats = root->profile->stability->stats;
+		root->profile->stability->stats = current_stats;
 
-		/* Directory is stable with sufficient consecutive checks - check for exclude-only changes */
-		stats_t *baseline_stats = &root->profile->stability->ref_stats;
-		stats_t *execution_stats = &current_stats;
+		/* Update cumulative changes based on the difference */
+		root->profile->stability->prev_stats = temp_stats;
+		scanner_update(root->profile, root->resource->path);
 
-		/* Check if the included set of files has changed in any way (count, dirs, or total size) */
-		bool included_changed = (execution_stats->tree_files != baseline_stats->tree_files) ||
-								(execution_stats->tree_dirs != baseline_stats->tree_dirs) ||
-								(execution_stats->tree_size != baseline_stats->tree_size);
+		log_message(DEBUG, "Stability scan for %s: files=%d, dirs=%d, size=%s, tree_files=%d, tree_dirs=%d, max_depth=%d",
+					check->path, current_stats.local_files, current_stats.local_dirs,
+					format_size((ssize_t) current_stats.tree_size, false),
+					current_stats.tree_files, current_stats.tree_dirs, current_stats.max_depth);
+	}
 
-		/* Check if the excluded set of files/dirs has changed (count, total size, or latest mtime) */
-		bool excluded_changed = (execution_stats->excluded_files != baseline_stats->excluded_files) ||
-								(execution_stats->excluded_size != baseline_stats->excluded_size) ||
-								(execution_stats->excluded_mtime != baseline_stats->excluded_mtime) ||
-								(execution_stats->excluded_dirs != baseline_stats->excluded_dirs);
+	/* Handle scan failure cases */
+	if (!found_new_directories && !scan_completed) {
+		failure_t failure_type = stability_fail(monitor, check, root, current_time);
 
-		/* If the included is unchanged and the excluded has changed then we ignore this event */
-		if (!included_changed && excluded_changed) {
-			log_message(INFO, "Ignoring event for %s, all recent changes were to excluded files/directories",
-						root->resource->path);
-
-			/* Reset the stability baseline to this new state */
-			stability_reset(monitor, root);
-
-			/* Clean up the queue and do not execute the command */
+		if (failure_type == SCAN_FAILURE_MAX_ATTEMPTS_REACHED) {
+			/* Remove from queue */
 			pthread_mutex_unlock(&root->resource->mutex);
 			queue_remove(monitor->check_queue, check->path);
 			return;
+		} else if (failure_type == SCAN_FAILURE_DIRECTORY_DELETED) {
+			/* Reschedule for another check */
+			struct timespec next_check = *current_time;
+			timespec_add(&next_check, 2000); /* 2 seconds */
+
+			/* Update check */
+			check->next_check = next_check;
+			heap_down(monitor->check_queue->items, monitor->check_queue->size, 0);
+			pthread_mutex_unlock(&root->resource->mutex);
+			return;
 		}
+	}
 
-		/* Legitimate changes - execute commands */
-		commands_attempted++;
-		log_message(INFO, "Directory %s stability confirmed (%d/%d checks), proceeding to command execution",
-					root->resource->path, root->profile->stability->checks_count, checks_required);
+	/* Determine if the directory is stable */
+	bool is_stable = stability_stable(root, &current_stats, scan_completed);
 
-		/* Execute commands */
-		int executed_now = 0;
-		stability_execute(monitor, check, root, current_time, &executed_now);
-		commands_executed += executed_now;
+	if (!is_stable) {
+		/* Directory is unstable - reset counter and reschedule */
+		root->profile->stability->checks_count = 0;
+		root->profile->stability->checks_required = 0; /* Reset required checks */
+		root->profile->stability->unstable_count++;	   /* Increment instability counter */
 
-		/* Unlock the group mutex before queue operations */
+		/* Update activity timestamp and reset verification flag*/
+		root->profile->scanner->latest_time = *current_time;
+		check->verifying = false;
+
+		log_message(DEBUG, "Directory %s failed stability check (instability count: %d), rescheduling",
+					check->path, root->profile->stability->unstable_count);
+
+		/* Recalculate quiet period based on new instability */
+		required_quiet = scanner_delay(monitor, root);
+		log_message(DEBUG, "Recalculated quiet period for instability: %ld ms", required_quiet);
+		stability_delay(monitor, check, root, current_time, required_quiet);
+
+		pthread_mutex_unlock(&root->resource->mutex);
+		return;
+	}
+
+	/* Directory is stable - determine if enough checks have been completed */
+	root->profile->stability->checks_count++;
+
+	/* Calculate required checks based on complexity factors (only if not already set) */
+	if (root->profile->stability->checks_required == 0) {
+		root->profile->stability->checks_required = stability_require(monitor, root, &current_stats);
+	}
+	int checks_required = root->profile->stability->checks_required;
+
+	log_message(DEBUG, "Stability check %d/%d for %s: changes (%+d files, %+d dirs, %+d depth) total (%d entries, depth %d)",
+				root->profile->stability->checks_count, checks_required, root->resource->path,
+				root->profile->stability->delta_files, root->profile->stability->delta_dirs,
+				root->profile->stability->delta_depth, current_stats.tree_files + current_stats.tree_dirs,
+				current_stats.max_depth > 0 ? current_stats.max_depth : current_stats.depth);
+
+	/* Check if we have enough consecutive stable checks */
+	if (root->profile->stability->checks_count < checks_required) {
+		/* Not enough checks yet, schedule quick follow-up check */
+		struct timespec next_check = *current_time;
+		timespec_add(&next_check, 200); /* 200ms */
+
+		/* Update check and restore heap property */
+		check->next_check = next_check;
+		heap_down(monitor->check_queue->items, monitor->check_queue->size, 0);
+
+		pthread_mutex_unlock(&root->resource->mutex);
+		return;
+	}
+
+	/* Directory is stable with sufficient consecutive checks - check for exclude-only changes */
+	stats_t *baseline_stats = &root->profile->stability->ref_stats;
+	stats_t *execution_stats = &current_stats;
+
+	/* Check if the included set of files has changed in any way (count, dirs, or total size) */
+	bool included_changed = (execution_stats->tree_files != baseline_stats->tree_files) ||
+							(execution_stats->tree_dirs != baseline_stats->tree_dirs) ||
+							(execution_stats->tree_size != baseline_stats->tree_size);
+
+	/* Check if the excluded set of files/dirs has changed (count, total size, or latest mtime) */
+	bool excluded_changed = (execution_stats->excluded_files != baseline_stats->excluded_files) ||
+							(execution_stats->excluded_size != baseline_stats->excluded_size) ||
+							(execution_stats->excluded_mtime != baseline_stats->excluded_mtime) ||
+							(execution_stats->excluded_dirs != baseline_stats->excluded_dirs);
+
+	/* If the included is unchanged and the excluded has changed then we ignore this event */
+	if (!included_changed && excluded_changed) {
+		log_message(INFO, "Ignoring event for %s, all recent changes were to excluded files/directories",
+					root->resource->path);
+
+		/* Release mutex before calling stability_reset, as it performs I/O */
 		pthread_mutex_unlock(&root->resource->mutex);
 
-		/* Remove check from queue after processing all watches */
+		/* Reset the stability baseline to this new state */
+		stability_reset(monitor, root);
+
+		/* Clean up the queue and do not execute the command */
 		queue_remove(monitor->check_queue, check->path);
+		return;
 	}
+
+	/* Legitimate changes detected - prepare for command execution */
+	commands_attempted++;
+	log_message(INFO, "Directory %s stability confirmed (%d/%d checks), proceeding to command execution",
+				root->resource->path, root->profile->stability->checks_count, checks_required);
+
+	/* Set the executing flag to prevent concurrent modifications during command execution */
+	root->resource->executing = true;
+
+	/* Release mutex before command execution to prevent blocking other threads */
+	pthread_mutex_unlock(&root->resource->mutex);
+
+	/* Execute commands without holding the lock */
+	int executed_now = 0;
+	bool execution_success = stability_execute(monitor, check, root, current_time, &executed_now);
+	commands_executed += executed_now;
+
+	/* Re-acquire mutex to clear executing flag and perform final cleanup */
+	pthread_mutex_lock(&root->resource->mutex);
+
+	/* Clear the executing flag */
+	root->resource->executing = false;
+
+	pthread_mutex_unlock(&root->resource->mutex);
+
+	/* If commands were executed successfully, reset the stability baseline */
+	if (execution_success && executed_now > 0) {
+		/* Reset the stability baseline after successful command execution */
+		stability_reset(monitor, root);
+	}
+
+	/* Remove check from queue after processing all watches */
+	queue_remove(monitor->check_queue, check->path);
 
 	if (item_processed) {
 		log_message(DEBUG, "Processed queued check. Commands attempted: %d, executed: %d. Remaining queue size: %d",
