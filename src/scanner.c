@@ -310,9 +310,10 @@ bool scanner_stable(monitor_t *monitor, const watch_t *watch, const char *dir_pa
 	}
 
 	time_t current_time;
-	time(&current_time);
 
 	while ((dirent = readdir(dir))) {
+		/* Get a fresh timestamp for each entry */
+		time(&current_time);
 		/* Skip . and .. */
 		if (strcmp(dirent->d_name, ".") == 0 || strcmp(dirent->d_name, "..") == 0) {
 			continue;
