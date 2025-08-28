@@ -364,7 +364,17 @@ bool tracker_add(monitor_t *monitor, resource_t *resource, const char *file_path
 	/* Add to the central mapper */
 	if (!map_tracker(monitor->mapper, fd, new_tracker)) {
 		log_message(WARNING, "Failed to add tracker for %s (fd=%d) to mapper", file_path, fd);
-		/* Cleanup logic might be needed here if this fails */
+
+		/* Remove from registry hash table to maintain consistency */
+		registry->buckets[bucket] = new_tracker->next;
+
+		/* Clean up resources */
+		free(new_tracker->path);
+		free(new_tracker->watchrefs);
+		free(new_tracker);
+		close(fd);
+
+		return false;
 	}
 
 	registry->total_count++;
