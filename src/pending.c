@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <fnmatch.h>
 #include <glob.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -384,9 +385,17 @@ void pending_remove(monitor_t *monitor, int index) {
 /* Generate unique name for a proxy watch */
 static char *proxy_name(watchref_t watchref, const char *type) {
 	static uint32_t counter = 0;
+	static pthread_mutex_t counter_mutex = PTHREAD_MUTEX_INITIALIZER;
+	
 	char *name = malloc(PROXY_NAME_MAX_LEN);
 	if (!name) return NULL;
-	snprintf(name, PROXY_NAME_MAX_LEN, "__%s_%u_%u_%u__", type, watchref.watch_id, watchref.generation, ++counter);
+	
+	/* Thread-safe counter increment */
+	pthread_mutex_lock(&counter_mutex);
+	uint32_t current_counter = ++counter;
+	pthread_mutex_unlock(&counter_mutex);
+	
+	snprintf(name, PROXY_NAME_MAX_LEN, "__%s_%u_%u_%u__", type, watchref.watch_id, watchref.generation, current_counter);
 	return name;
 }
 
