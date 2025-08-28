@@ -643,14 +643,14 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 				tracker_t *tracker = entry->ptr.tracker;
 				if (tracker_valid(tracker)) {
 					if (tracker_handle(monitor, tracker, &events[i], time)) {
-						/* File event - delegate to parent directory stability system for all watches */
-						for (int k = 0; k < tracker->num_watchrefs; k++) {
-							char *parent_dir = strdup(tracker->path);
-							if (parent_dir) {
-								char *last_slash = strrchr(parent_dir, '/');
-								if (last_slash && last_slash != parent_dir) {
-									*last_slash = '\0'; /* Truncate to get parent directory */
+						/* File event, delegate to parent directory stability system for all watches */
+						char *parent_dir = strdup(tracker->path);
+						if (parent_dir) {
+							char *last_slash = strrchr(parent_dir, '/');
+							if (last_slash && last_slash != parent_dir) {
+								*last_slash = '\0'; /* Truncate to get parent directory */
 
+								for (int k = 0; k < tracker->num_watchrefs; k++) {
 									/* Create a directory change event from the file event */
 									event_t event;
 									memset(&event, 0, sizeof(event));
@@ -674,8 +674,8 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 													tracker->path, parent_dir, watch->name);
 									}
 								}
-								free(parent_dir);
 							}
+							free(parent_dir);
 						}
 					}
 				}
@@ -693,16 +693,23 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 					node = node->next;
 				}
 
+				/* Hoist path duplication out of loop for efficiency */
+				char *savedpath = NULL;
+				if (count > 0 && watchers_copy[0] && watchers_copy[0]->path) {
+					savedpath = strdup(watchers_copy[0]->path);
+					if (!savedpath) {
+						log_message(ERROR, "Failed to allocate memory for saved path");
+						break; /* Skip all watchers for this entry */
+					}
+				} else {
+					break; /* No valid watchers to process */
+				}
+
 				for (int j = 0; j < count; j++) {
 					watcher_t *watcher = watchers_copy[j];
 					if (watcher) {
 						/* Keep watchref before pending_process, as watcher may be freed during deactivation */
 						watchref_t savedref = watcher->watchref;
-						char *savedpath = strdup(watcher->path);
-						if (!savedpath) {
-							log_message(ERROR, "Failed to allocate memory for saved path");
-							continue;
-						}
 
 						/* Process pending watches for any event that might create new paths */
 						if (monitor->num_pending > 0) {
@@ -711,10 +718,7 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 
 						/* Re-fetch the watch to ensure it's still valid after pending_process */
 						watch_t *watch = registry_get(monitor->registry, savedref);
-						if (!watch) {
-							free(savedpath);
-							continue; /* Watch was deallocated */
-						}
+						if (!watch) continue; /* Watch was deallocated */
 
 						kind_t kind = (watch->target == WATCH_FILE) ? ENTITY_FILE : ENTITY_DIRECTORY;
 
@@ -747,10 +751,11 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 						if (kind == ENTITY_FILE && (events[i].fflags & (NOTE_RENAME | NOTE_DELETE))) {
 							monitor_sync(monitor, savedpath);
 						}
-
-						free(savedpath);
 					}
 				}
+
+				/* Free the hoisted path allocation after loop completes */
+				free(savedpath);
 				break;
 			}
 
