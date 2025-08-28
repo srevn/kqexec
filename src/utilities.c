@@ -82,17 +82,17 @@ double complexity_responsiveness(double complexity) {
 
 /* Calculate backoff intensity multiplier based on complexity (1.0-2.5 range)
  * Higher complexity = more aggressive backoff
- * Baseline: complexity 1.0 = factor 1.5 */
+ * Baseline: complexity 1.0 = factor 1.25 */
 double complexity_backoff(double complexity) {
 	if (complexity <= 0.0) complexity = 1.0;
 
 	double factor;
 	if (complexity <= 1.0) {
-		/* For complexity <= 1.0, scale linearly from 1.0 to 1.5 (baseline) */
-		factor = 1.0 + 0.5 * complexity;
+		/* For complexity <= 1.0, scale linearly from 1.0 to 1.25 (baseline) */
+		factor = 1.0 + 0.25 * complexity;
 	} else {
-		/* For complexity > 1.0, use logarithmic growth from 1.5 to 2.5 (max at 5.0) */
-		factor = 1.5 + 1.0 * (log(complexity) / log(5.0));
+		/* For complexity > 1.0, use logarithmic growth from 1.25 to 2.5 (max at 5.0) */
+		factor = 1.25 + 1.25 * (log(complexity) / log(5.0));
 	}
 
 	/* Clamp to valid range */
