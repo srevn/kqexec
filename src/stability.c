@@ -778,6 +778,12 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 	}
 
 	/* Re-acquire lock to process results and make decisions */
+	root = stability_entry(monitor, check);
+	if (!root) {
+		log_message(WARNING, "Resource for %s was removed during stability scan", check->path);
+		queue_remove(monitor->check_queue, check->path);
+		return;
+	}
 	pthread_mutex_lock(&root->resource->mutex);
 
 	/* Revalidate that the resource is still active after I/O operations */

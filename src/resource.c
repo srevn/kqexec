@@ -632,6 +632,11 @@ subscription_t *resources_subscription(resources_t *resources, registry_t *regis
 		scan_success = scanner_scan(path, watch, &initial_stats);
 
 		/* Re-acquire lock and check if another thread created the profile */
+		resource = resource_get(resources, path, kind);
+		if (!resource) {
+			log_message(WARNING, "Resource for path %s disappeared during scan", path);
+			return NULL;
+		}
 		resource_lock(resource);
 
 		/* Check again if profile was created while we were scanning */
