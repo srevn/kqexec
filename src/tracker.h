@@ -38,6 +38,7 @@ typedef struct tracker {
 	
 	/* System resources */
 	int fd;                                /* File descriptor */
+	resource_t *parent;                    /* Direct pointer to parent directory resource */
 	
 	/* Watch associations */
 	watchref_t *watchrefs;                 /* Parent directory watch references */

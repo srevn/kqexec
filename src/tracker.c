@@ -329,6 +329,7 @@ bool tracker_add(monitor_t *monitor, resource_t *resource, const char *file_path
 
 	new_tracker->magic = TRACKER_MAGIC;
 	new_tracker->fd = fd;
+	new_tracker->parent = resource;
 	new_tracker->tracker_state = TRACKER_ACTIVE;
 	new_tracker->last_event = time(NULL);
 	new_tracker->created = time(NULL);
@@ -381,24 +382,7 @@ bool tracker_handle(monitor_t *monitor, tracker_t *tracker, struct kevent *event
 		return false;
 	}
 
-	char *parent_path = strdup(tracker->path);
-	if (!parent_path) {
-		log_message(ERROR, "Failed to duplicate path for locking in tracker_handle");
-		return false;
-	}
-	char *last_slash = strrchr(parent_path, '/');
-	if (last_slash && last_slash != parent_path) {
-		*last_slash = '\0';
-	} else if (last_slash) {
-		*(last_slash + 1) = '\0';
-	} else {
-		free(parent_path);
-		log_message(ERROR, "Could not determine parent path for tracker %s", tracker->path);
-		return false;
-	}
-
-	resource_t *resource = resource_get(monitor->resources, parent_path, ENTITY_DIRECTORY);
-	free(parent_path);
+	resource_t *resource = tracker->parent;
 
 	if (!resource) {
 		log_message(WARNING, "Could not find parent resource for tracker %s, marking for cleanup", tracker->path);
