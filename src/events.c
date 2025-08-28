@@ -643,39 +643,34 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 				tracker_t *tracker = entry->ptr.tracker;
 				if (tracker_valid(tracker)) {
 					if (tracker_handle(monitor, tracker, &events[i], time)) {
-						/* File event, delegate to parent directory stability system for all watches */
-						char *parent_dir = strdup(tracker->path);
-						if (parent_dir) {
-							char *last_slash = strrchr(parent_dir, '/');
-							if (last_slash && last_slash != parent_dir) {
-								*last_slash = '\0'; /* Truncate to get parent directory */
+						/* File event - delegate to parent directory stability system for all watches */
+						if (tracker->parent && tracker->parent->path) {
+							char *parent_dir = tracker->parent->path;
 
-								for (int k = 0; k < tracker->num_watchrefs; k++) {
-									/* Create a directory change event from the file event */
-									event_t event;
-									memset(&event, 0, sizeof(event));
-									event.path = parent_dir;
-									event.type = flags_to_filter(events[i].fflags, ENTITY_FILE);
-									event.time = *time;
-									clock_gettime(CLOCK_REALTIME, &event.wall_time);
-									event.user_id = getuid();
+							for (int k = 0; k < tracker->num_watchrefs; k++) {
+								/* Create a directory change event from the file event */
+								event_t event;
+								memset(&event, 0, sizeof(event));
+								event.path = parent_dir;
+								event.type = flags_to_filter(events[i].fflags, ENTITY_FILE);
+								event.time = *time;
+								clock_gettime(CLOCK_REALTIME, &event.wall_time);
+								event.user_id = getuid();
 
-									/* Check for processing delay on the associated watch */
-									watch_t *watch = registry_get(monitor->registry, tracker->watchrefs[k]);
-									if (watch) {
-										/* Schedule the event for delayed processing */
-										if (watch->processing_delay > 0) {
-											events_delay(monitor, tracker->watchrefs[k], &event, ENTITY_DIRECTORY);
-										} else {
-											/* Process the event immediately */
-											events_process(monitor, tracker->watchrefs[k], &event, ENTITY_DIRECTORY, false);
-										}
-										log_message(DEBUG, "File change in %s delegated to directory %s (watch: %s)",
-													tracker->path, parent_dir, watch->name);
+								/* Check for processing delay on the associated watch */
+								watch_t *watch = registry_get(monitor->registry, tracker->watchrefs[k]);
+								if (watch) {
+									/* Schedule the event for delayed processing */
+									if (watch->processing_delay > 0) {
+										events_delay(monitor, tracker->watchrefs[k], &event, ENTITY_DIRECTORY);
+									} else {
+										/* Process the event immediately */
+										events_process(monitor, tracker->watchrefs[k], &event, ENTITY_DIRECTORY, false);
 									}
+									log_message(DEBUG, "File change in %s delegated to directory %s (watch: %s)",
+												tracker->path, parent_dir, watch->name);
 								}
 							}
-							free(parent_dir);
 						}
 					}
 				}
