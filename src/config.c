@@ -173,23 +173,6 @@ bool watch_add(config_t *config, registry_t *registry, watch_t *watch) {
 		return false;
 	}
 
-	/* For non-dynamic watches, check for duplicate names against all active watches */
-	if (!watch->is_dynamic) {
-		uint32_t num_active = 0;
-		watchref_t *watchrefs = registry_active(registry, &num_active);
-		if (watchrefs) {
-			for (uint32_t i = 0; i < num_active; i++) {
-				watch_t *existing = registry_get(registry, watchrefs[i]);
-				if (existing && existing->name && watch->name && strcmp(existing->name, watch->name) == 0) {
-					log_message(ERROR, "Duplicate watch name '%s' found in configuration", watch->name);
-					free(watchrefs);
-					return false;
-				}
-			}
-			free(watchrefs);
-		}
-	}
-
 	/* Determine if snapshots are needed for this watch */
 	watch->requires_snapshot = config_snapshot(watch);
 

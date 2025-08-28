@@ -114,11 +114,51 @@ static bool registry_expand(registry_t *registry) {
 	return true;
 }
 
+/* Check for duplicate watches in registry (must be called under write lock) */
+static bool registry_duplicate(registry_t *registry, const watch_t *watch) {
+	if (!watch->name) return false;
+
+	for (uint32_t i = 1; i < registry->next_id && i < registry->capacity; i++) {
+		/* Skip inactive or NULL watches */
+		if (registry->states[i] != WATCH_STATE_ACTIVE || !registry->watches[i]) continue;
+
+		watch_t *existing = registry->watches[i];
+
+		/* Skip watches with no name or different names */
+		if (!existing->name || strcmp(existing->name, watch->name) != 0) continue;
+
+		/* Found matching name - check for true duplicate based on type */
+		if (watch->is_dynamic) {
+			/* Dynamic watches - duplicate only if same name AND path */
+			if (existing->path && watch->path &&
+				strcmp(existing->path, watch->path) == 0) {
+				log_message(INFO, "Duplicate dynamic watch '%s' for path '%s' already exists",
+							watch->name, watch->path);
+				return true;
+			}
+			/* Same name but different path - not a duplicate */
+			continue;
+		}
+
+		/* Non-dynamic watches - duplicate if same name */
+		log_message(ERROR, "Duplicate watch name '%s' found in registry", watch->name);
+		return true;
+	}
+
+	return false;
+}
+
 /* Add a watch to the registry */
 watchref_t registry_add(registry_t *registry, struct watch *watch) {
 	if (!registry || !watch) return WATCHREF_INVALID;
 
 	pthread_rwlock_wrlock(&registry->lock);
+
+	/* Atomic duplicate check using helper function */
+	if (registry_duplicate(registry, watch)) {
+		pthread_rwlock_unlock(&registry->lock);
+		return WATCHREF_INVALID;
+	}
 
 	/* Check if we need to expand capacity */
 	if (registry->next_id >= registry->capacity) {

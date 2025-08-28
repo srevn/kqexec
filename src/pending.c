@@ -386,15 +386,15 @@ void pending_remove(monitor_t *monitor, int index) {
 static char *proxy_name(watchref_t watchref, const char *type) {
 	static uint32_t counter = 0;
 	static pthread_mutex_t counter_mutex = PTHREAD_MUTEX_INITIALIZER;
-	
+
 	char *name = malloc(PROXY_NAME_MAX_LEN);
 	if (!name) return NULL;
-	
+
 	/* Thread-safe counter increment */
 	pthread_mutex_lock(&counter_mutex);
 	uint32_t current_counter = ++counter;
 	pthread_mutex_unlock(&counter_mutex);
-	
+
 	snprintf(name, PROXY_NAME_MAX_LEN, "__%s_%u_%u_%u__", type, watchref.watch_id, watchref.generation, current_counter);
 	return name;
 }
@@ -612,35 +612,7 @@ static void pending_promote(monitor_t *monitor, pending_t *pending, const char *
 		return;
 	}
 
-	/* Use registry lock for atomic duplicate check to prevent race conditions */
-	pthread_rwlock_rdlock(&monitor->registry->lock);
-
-	bool duplicate_found = false;
-	if (monitor->config && matched_path) {
-		/* Scan active watches under the lock to prevent race conditions */
-		for (uint32_t i = 1; i < monitor->registry->next_id && i < monitor->registry->capacity; i++) {
-			if (monitor->registry->states[i] == WATCH_STATE_ACTIVE && monitor->registry->watches[i]) {
-				watch_t *existing_watch = monitor->registry->watches[i];
-				if (existing_watch && existing_watch->path && existing_watch->name &&
-					strcmp(existing_watch->path, matched_path) == 0 &&
-					strcmp(existing_watch->name, pending_watch->name) == 0) {
-					log_message(INFO, "Watch for %s with name '%s' from pattern %s already exists, skipping promotion",
-								matched_path, existing_watch->name, pending->glob_pattern);
-					duplicate_found = true;
-					break;
-				}
-			}
-		}
-	}
-
-	pthread_rwlock_unlock(&monitor->registry->lock);
-
-	if (duplicate_found) {
-		watch_destroy(resolved_watch);
-		return;
-	}
-
-	/* Add dynamic watch to config, the registry lock in watch_add() provides additional protection */
+	/* Add dynamic watch to config, atomic duplicate checking handled in registry_add() */
 	if (!watch_add(monitor->config, monitor->registry, resolved_watch)) {
 		log_message(ERROR, "Failed to add dynamic watch to config: %s", matched_path);
 		/* Clean up avoid memory leaks */
