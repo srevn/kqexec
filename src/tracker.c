@@ -251,7 +251,7 @@ bool tracker_add(monitor_t *monitor, resource_t *resource, const char *file_path
 			/* File is still the same, check if already associated with this watch */
 			for (int watchref_index = 0; watchref_index < tracker->num_watchrefs; watchref_index++) {
 				if (watchref_equal(tracker->watchrefs[watchref_index], watchref)) {
-					return true; /* Already associated with this watch */
+					return false; /* Already associated with this watch, not a new addition */
 				}
 			}
 
