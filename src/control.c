@@ -150,7 +150,7 @@ void server_destroy(server_t *server) {
 
 	free(server->clients);
 	free(server);
-	log_message(INFO, "Control server destroyed");
+	log_message(DEBUG, "Control server destroyed");
 }
 
 /* Start the control server and register with kqueue */
@@ -167,7 +167,7 @@ bool server_start(server_t *server, int kqueue_fd) {
 	}
 
 	server->running = true;
-	log_message(INFO, "Control server started and registered with kqueue");
+	log_message(DEBUG, "Control server started and registered with kqueue");
 	return true;
 }
 
@@ -176,7 +176,7 @@ void server_stop(server_t *server) {
 	if (!server) return;
 
 	server->running = false;
-	log_message(INFO, "Control server stopped");
+	log_message(DEBUG, "Control server stopped");
 }
 
 /* Accept a new client connection */

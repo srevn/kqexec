@@ -173,7 +173,7 @@ bool tracker_register(monitor_t *monitor, tracker_t *tracker) {
 		if (!watch->enabled) continue;
 
 		if (watch->filter & EVENT_CONTENT) {
-			fflags |= NOTE_DELETE | NOTE_WRITE | NOTE_RENAME | NOTE_REVOKE;
+			fflags |= NOTE_WRITE | NOTE_EXTEND | NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE;
 		}
 		if (watch->filter & EVENT_METADATA) {
 			fflags |= NOTE_ATTRIB | NOTE_LINK;

@@ -933,7 +933,7 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 	}
 
 	/* Log command completion */
-	log_message(INFO, "[%s] Finished execution (pid %d, duration: %lds, exit: %d)",
+	log_message(INFO, "[%s] Finished execution (pid: %d, duration: %lds, exit: %d)",
 				watch->name, pid, end_time - start, WEXITSTATUS(status));
 
 	/* Clear command executing flag and reset baseline */
