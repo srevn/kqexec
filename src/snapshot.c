@@ -14,28 +14,111 @@
 /* Initial capacity for snapshot entries */
 #define INITIAL_CAPACITY 64
 
+/* Hash function for inode + type combination */
+static size_t hash_inode(ino_t inode, kind_t type, size_t bucket_count) {
+	/* Simple hash combining inode and type */
+	size_t hash = (size_t) inode ^ ((size_t) type << 16);
+	return hash % bucket_count;
+}
+
+/* Create a hash map with specified number of buckets */
+static hash_map_t *hash_map_create(size_t bucket_count) {
+	hash_map_t *map = calloc(1, sizeof(hash_map_t));
+	if (!map) return NULL;
+
+	map->buckets = calloc(bucket_count, sizeof(hash_entry_t *));
+	if (!map->buckets) {
+		free(map);
+		return NULL;
+	}
+
+	map->size = bucket_count;
+	map->count = 0;
+	return map;
+}
+
+/* Destroy a hash map and all its entries */
+static void hash_map_destroy(hash_map_t *map) {
+	if (!map) return;
+
+	for (size_t i = 0; i < map->size; i++) {
+		hash_entry_t *entry = map->buckets[i];
+		while (entry) {
+			hash_entry_t *next = entry->next;
+			free(entry);
+			entry = next;
+		}
+	}
+
+	free(map->buckets);
+	free(map);
+}
+
+/* Insert an entry into the hash map */
+static bool hash_map_insert(hash_map_t *map, entry_t *entry) {
+	if (!map || !entry) return false;
+
+	size_t index = hash_inode(entry->inode, entry->type, map->size);
+
+	hash_entry_t *hash_entry = malloc(sizeof(hash_entry_t));
+	if (!hash_entry) return false;
+
+	hash_entry->inode = entry->inode;
+	hash_entry->type = entry->type;
+	hash_entry->entry = entry;
+	hash_entry->next = map->buckets[index];
+
+	map->buckets[index] = hash_entry;
+	map->count++;
+	return true;
+}
+
+/* Lookup an entry by inode and type, optionally excluding a path */
+static entry_t *hash_map_lookup(hash_map_t *map, ino_t inode, kind_t type, const char *exclude_path) {
+	if (!map) return NULL;
+
+	size_t index = hash_inode(inode, type, map->size);
+	hash_entry_t *hash_entry = map->buckets[index];
+
+	while (hash_entry) {
+		if (hash_entry->inode == inode && hash_entry->type == type) {
+			/* Skip the excluded path (to avoid self-matching) */
+			if (exclude_path && strcmp(hash_entry->entry->path, exclude_path) == 0) {
+				hash_entry = hash_entry->next;
+				continue;
+			}
+			return hash_entry->entry;
+		}
+		hash_entry = hash_entry->next;
+	}
+
+	return NULL;
+}
+
+/* Calculate next prime number >= n for better hash distribution */
+static size_t next_prime(size_t n) {
+	if (n < 2) return 2;
+	if (n == 2) return 2;
+	if (n % 2 == 0) n++;
+
+	while (1) {
+		bool is_prime = true;
+		for (size_t i = 3; i * i <= n; i += 2) {
+			if (n % i == 0) {
+				is_prime = false;
+				break;
+			}
+		}
+		if (is_prime) return n;
+		n += 2;
+	}
+}
+
 /* Comparison function for sorting entries by path */
 static int entry_compare(const void *a, const void *b) {
 	const entry_t *entry_a = (const entry_t *) a;
 	const entry_t *entry_b = (const entry_t *) b;
 	return strcmp(entry_a->path, entry_b->path);
-}
-
-/* Find an entry by inode in a snapshot (for rename detection) */
-static entry_t *entry_inode(snapshot_t *snapshot, ino_t inode, kind_t type, const char *exclude_path) {
-	if (!snapshot) return NULL;
-
-	for (int i = 0; i < snapshot->count; i++) {
-		entry_t *entry = &snapshot->entries[i];
-		if (entry->inode == inode && entry->type == type) {
-			/* Skip the excluded path (to avoid self-matching) */
-			if (exclude_path && strcmp(entry->path, exclude_path) == 0) {
-				continue;
-			}
-			return entry;
-		}
-	}
-	return NULL;
 }
 
 /* Helper function to add a path to a string array */
@@ -357,6 +440,42 @@ diff_t *snapshot_diff(const snapshot_t *baseline, const snapshot_t *current) {
 		return NULL;
 	}
 
+	/* Create hash maps for O(1) inode lookups */
+	size_t baseline_buckets = next_prime(baseline->count + 1);
+	size_t current_buckets = next_prime(current->count + 1);
+
+	hash_map_t *baseline_map = hash_map_create(baseline_buckets);
+	hash_map_t *current_map = hash_map_create(current_buckets);
+
+	if (!baseline_map || !current_map) {
+		log_message(ERROR, "Failed to create hash maps for snapshot diff");
+		hash_map_destroy(baseline_map);
+		hash_map_destroy(current_map);
+		diff_destroy(diff);
+		return NULL;
+	}
+
+	/* Populate hash maps */
+	for (int i = 0; i < baseline->count; i++) {
+		if (!hash_map_insert(baseline_map, &baseline->entries[i])) {
+			log_message(ERROR, "Failed to populate baseline hash map");
+			hash_map_destroy(baseline_map);
+			hash_map_destroy(current_map);
+			diff_destroy(diff);
+			return NULL;
+		}
+	}
+
+	for (int i = 0; i < current->count; i++) {
+		if (!hash_map_insert(current_map, &current->entries[i])) {
+			log_message(ERROR, "Failed to populate current hash map");
+			hash_map_destroy(baseline_map);
+			hash_map_destroy(current_map);
+			diff_destroy(diff);
+			return NULL;
+		}
+	}
+
 	/* Initialize capacities */
 	int created_capacity = 0, deleted_capacity = 0;
 	int modified_capacity = 0, renamed_capacity = 0;
@@ -395,8 +514,8 @@ diff_t *snapshot_diff(const snapshot_t *baseline, const snapshot_t *current) {
 		} else if (comparison < 0) {
 			/* Entry exists in baseline but not in current - it was deleted */
 			/* But first check if it was renamed (moved to different path with same inode) */
-			entry_t *renamed_entry = entry_inode((snapshot_t *) current, baseline_entry->inode,
-												 baseline_entry->type, baseline_entry->path);
+			entry_t *renamed_entry = hash_map_lookup(current_map, baseline_entry->inode,
+													 baseline_entry->type, baseline_entry->path);
 
 			if (renamed_entry) {
 				/* This entry was renamed/moved */
@@ -427,8 +546,8 @@ diff_t *snapshot_diff(const snapshot_t *baseline, const snapshot_t *current) {
 		} else {
 			/* Entry exists in current but not in baseline - it was created */
 			/* But first check if it was renamed from a different path */
-			entry_t *renamed_entry = entry_inode((snapshot_t *) baseline, current_entry->inode,
-												 current_entry->type, current_entry->path);
+			entry_t *renamed_entry = hash_map_lookup(baseline_map, current_entry->inode,
+													 current_entry->type, current_entry->path);
 
 			if (!renamed_entry) {
 				/* Entry was actually created (not renamed) */
@@ -447,6 +566,10 @@ diff_t *snapshot_diff(const snapshot_t *baseline, const snapshot_t *current) {
 			current_idx++;
 		}
 	}
+
+	/* Clean up hash maps */
+	hash_map_destroy(baseline_map);
+	hash_map_destroy(current_map);
 
 	/* Calculate total changes */
 	diff->total_changes = diff->created_count + diff->deleted_count +

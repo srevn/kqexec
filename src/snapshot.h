@@ -24,6 +24,26 @@ typedef struct snapshot {
 	char *root_path;                       /* Root directory path this snapshot represents */
 } snapshot_t;
 
+/* 
+ * Hash map structures for O(1) inode lookups during snapshot diff operations
+ * These structures optimize rename detection by eliminating linear searches
+ */
+
+/* Hash table entry linking inode+type to snapshot entry */
+typedef struct hash_entry {
+	ino_t inode;                           /* File/directory inode number */
+	kind_t type;                           /* ENTITY_FILE or ENTITY_DIRECTORY */
+	entry_t *entry;                        /* Pointer to corresponding snapshot entry */
+	struct hash_entry *next;               /* Next entry in collision chain */
+} hash_entry_t;
+
+/* Hash map for fast inode-based lookups */
+typedef struct hash_map {
+	hash_entry_t **buckets;                /* Array of bucket heads for chaining */
+	size_t size;                           /* Number of buckets (should be prime) */
+	size_t count;                          /* Number of entries stored */
+} hash_map_t;
+
 /* Difference between two snapshots */
 typedef struct diff {
 	/* Arrays of relative paths for each change type */
