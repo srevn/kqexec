@@ -262,12 +262,6 @@ bool scanner_compare(stats_t *prev_stats, stats_t *current_stats) {
 	/* Check for instability due to various factors */
 	bool is_stable = true;
 
-	/* Always consider unstable if tree depth changes significantly */
-	if (abs(depth_change) > 1) {
-		log_message(DEBUG, "Directory unstable: significant tree depth change (%+d levels)", depth_change);
-		is_stable = false;
-	}
-
 	/* Check if changes are within allowances */
 	if (!((total_change <= max_allowed_change || change_percentage <= max_allowed_percent) &&
 		  (depth_change == 0 || (abs(depth_change) == 1 && prev_stats->max_depth > 2)))) {
