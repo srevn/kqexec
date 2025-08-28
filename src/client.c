@@ -153,12 +153,9 @@ static char *client_value(const char *response, const char *key) {
 	if (!response || !key) return NULL;
 
 	size_t key_len = strlen(key);
-	char *search_key = malloc(key_len + 2); /* +1 for '=', +1 for null */
-	if (!search_key) return NULL;
-
-	snprintf(search_key, key_len + 2, "%s=", key);
+	char search_key[256]; /* Stack allocated buffer for "key=" */
+	snprintf(search_key, sizeof(search_key), "%s=", key);
 	char *key_start = strstr(response, search_key);
-	free(search_key);
 
 	if (!key_start) return NULL;
 
@@ -537,15 +534,15 @@ char **client_parse(const char *watch_list) {
 	}
 
 	int i = 0;
-	char *token = strtok(list_copy, ",");
-	while (token && i < count) {
+	char *token;
+	char *rest = list_copy;
+	while ((token = strtok_r(rest, ",", &rest)) && i < count) {
 		/* Trim whitespace */
 		while (*token == ' ' || *token == '\t') token++;
 		char *end = token + strlen(token) - 1;
 		while (end > token && (*end == ' ' || *end == '\t')) *end-- = '\0';
 
 		watches[i++] = strdup(token);
-		token = strtok(NULL, ",");
 	}
 
 	free(list_copy);

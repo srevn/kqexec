@@ -463,7 +463,7 @@ bool tracker_scan(monitor_t *monitor, resource_t *resource, watchref_t watchref,
 			continue;
 		}
 
-		char file_path[1024];
+		char file_path[MAX_PATH_LEN];
 		int path_len = snprintf(file_path, sizeof(file_path), "%s/%s", dir_path, dirent->d_name);
 
 		if (path_len >= (int) sizeof(file_path)) {
