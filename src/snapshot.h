@@ -7,6 +7,8 @@
 
 #include "config.h"
 
+#define INITIAL_CAPACITY 64                /* Initial capacity for snapshot entries */
+
 /* Single file/directory entry in a snapshot */
 typedef struct entry {
 	char *path;                            /* Relative path from snapshot root */
@@ -15,19 +17,6 @@ typedef struct entry {
 	time_t mtime;                          /* Modification time */
 	ino_t inode;                           /* Inode number for move detection */
 } entry_t;
-
-/* Complete snapshot of a directory tree at a point in time */
-typedef struct snapshot {
-	entry_t *entries;                      /* Array of entries, sorted by path */
-	int count;                             /* Number of entries in snapshot */
-	int capacity;                          /* Allocated capacity of entries array */
-	char *root_path;                       /* Root directory path this snapshot represents */
-} snapshot_t;
-
-/* 
- * Hash map structures for O(1) inode lookups during snapshot diff operations
- * These structures optimize rename detection by eliminating linear searches
- */
 
 /* Hash table entry linking inode+type to snapshot entry */
 typedef struct hash_entry {
@@ -43,6 +32,14 @@ typedef struct hash_map {
 	size_t size;                           /* Number of buckets (should be prime) */
 	size_t count;                          /* Number of entries stored */
 } hash_map_t;
+
+/* Complete snapshot of a directory tree at a point in time */
+typedef struct snapshot {
+	entry_t *entries;                      /* Array of entries, sorted by path */
+	int count;                             /* Number of entries in snapshot */
+	int capacity;                          /* Allocated capacity of entries array */
+	char *root_path;                       /* Root directory path this snapshot represents */
+} snapshot_t;
 
 /* Difference between two snapshots */
 typedef struct diff {

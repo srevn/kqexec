@@ -59,7 +59,7 @@ typedef struct monitor {
 	watcher_t **watches;                   /* Array of watch information */
 	
 	/* Path lookup hash table for lookups */
-	watcher_t **path_buckets;              /* Hash table buckets for path -> watcher lookup */
+	watcher_t **buckets;                   /* Hash table buckets for path -> watcher lookup */
 	size_t bucket_count;                   /* Number of hash table buckets */
 	
 	/* Pending watches for non-existent paths */

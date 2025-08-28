@@ -21,8 +21,8 @@ static const char *program_name;
 
 /* Application operation modes */
 typedef enum operation_mode {
-	MODE_DAEMON,                           /* Run as background daemon monitoring files */
-	MODE_CLIENT                            /* Run as client sending commands to daemon */
+	MODE_DAEMON,                               /* Run as background daemon monitoring files */
+	MODE_CLIENT                                /* Run as client sending commands to daemon */
 } operation_t;
 
 /* Print usage */

@@ -961,7 +961,7 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 
 	/* Handle directory content changes, check for deleted child directories */
 	if (optype == OP_DIR_CONTENT_CHANGED && monitor->num_pending > 0) {
-		pending_check(monitor, subscription->resource->path);
+		pending_reassess(monitor, subscription->resource->path);
 	}
 
 	/* If this is a proxy watch, its only purpose is to trigger the check above */

@@ -39,8 +39,8 @@ static bool path_hidden(const char *path) {
 static bool hash_init(monitor_t *monitor, size_t bucket_count) {
 	if (!monitor || bucket_count == 0) return false;
 
-	monitor->path_buckets = calloc(bucket_count, sizeof(watcher_t *));
-	if (!monitor->path_buckets) {
+	monitor->buckets = calloc(bucket_count, sizeof(watcher_t *));
+	if (!monitor->buckets) {
 		log_message(ERROR, "Failed to allocate path hash table buckets");
 		return false;
 	}
@@ -54,8 +54,8 @@ static void hash_add(monitor_t *monitor, watcher_t *watcher) {
 	if (!monitor || !watcher || !watcher->path || monitor->bucket_count == 0) return;
 
 	unsigned int bucket = watcher_hash(watcher->path, monitor->bucket_count);
-	watcher->next = monitor->path_buckets[bucket];
-	monitor->path_buckets[bucket] = watcher;
+	watcher->next = monitor->buckets[bucket];
+	monitor->buckets[bucket] = watcher;
 }
 
 /* Remove watcher from path hash table */
@@ -63,7 +63,7 @@ static void hash_remove(monitor_t *monitor, watcher_t *watcher) {
 	if (!monitor || !watcher || !watcher->path || monitor->bucket_count == 0) return;
 
 	unsigned int bucket = watcher_hash(watcher->path, monitor->bucket_count);
-	watcher_t *current = monitor->path_buckets[bucket];
+	watcher_t *current = monitor->buckets[bucket];
 	watcher_t *previous = NULL;
 
 	while (current) {
@@ -71,7 +71,7 @@ static void hash_remove(monitor_t *monitor, watcher_t *watcher) {
 			if (previous) {
 				previous->next = current->next;
 			} else {
-				monitor->path_buckets[bucket] = current->next;
+				monitor->buckets[bucket] = current->next;
 			}
 			current->next = NULL;
 			return;
@@ -185,7 +185,7 @@ static watcher_t *watcher_find(monitor_t *monitor, const char *path) {
 	if (!monitor || !path || monitor->bucket_count == 0) return NULL;
 
 	unsigned int bucket = watcher_hash(path, monitor->bucket_count);
-	watcher_t *watcher = monitor->path_buckets[bucket];
+	watcher_t *watcher = monitor->buckets[bucket];
 
 	while (watcher) {
 		if (watcher->path && strcmp(watcher->path, path) == 0) {
@@ -289,7 +289,7 @@ monitor_t *monitor_create(config_t *config, registry_t *registry) {
 	monitor->watches = NULL;
 	monitor->num_watches = 0;
 	monitor->watches_capacity = 0;
-	monitor->path_buckets = NULL;
+	monitor->buckets = NULL;
 	monitor->bucket_count = 0;
 	monitor->pending = NULL;
 	monitor->num_pending = 0;
@@ -413,7 +413,7 @@ void monitor_destroy(monitor_t *monitor) {
 	}
 
 	free(monitor->watches);
-	free(monitor->path_buckets);
+	free(monitor->buckets);
 
 	/* Unregister observers from registry */
 	if (monitor->registry) {
@@ -531,7 +531,7 @@ bool monitor_path(monitor_t *monitor, const char *path, watchref_t watchref) {
 
 	if (monitor->bucket_count > 0) {
 		unsigned int bucket = watcher_hash(path, monitor->bucket_count);
-		watcher_t *watcher = monitor->path_buckets[bucket];
+		watcher_t *watcher = monitor->buckets[bucket];
 
 		/* Check hash bucket for both duplicate detection and fd sharing */
 		while (watcher) {

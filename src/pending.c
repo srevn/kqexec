@@ -54,7 +54,7 @@ static watcher_t *pending_watcher(monitor_t *monitor, const char *target_path, w
 
 	/* Use hash table for O(1) path lookup */
 	unsigned int bucket = watcher_hash(target_path, monitor->bucket_count);
-	watcher_t *watcher = monitor->path_buckets[bucket];
+	watcher_t *watcher = monitor->buckets[bucket];
 
 	/* Check hash bucket for matching path and watchref */
 	while (watcher) {
@@ -974,7 +974,7 @@ void pending_delete(monitor_t *monitor, const char *deleted_path) {
 }
 
 /* Check for deleted child directories that may affect pending watches */
-void pending_check(monitor_t *monitor, const char *changed_path) {
+void pending_reassess(monitor_t *monitor, const char *changed_path) {
 	if (!monitor || !changed_path || monitor->num_pending == 0) return;
 
 	log_message(DEBUG, "Directory content changed, checking for deleted child directories: %s",

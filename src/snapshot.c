@@ -11,9 +11,6 @@
 #include "config.h"
 #include "logger.h"
 
-/* Initial capacity for snapshot entries */
-#define INITIAL_CAPACITY 64
-
 /* Hash function for inode + type combination */
 static size_t hash_inode(ino_t inode, kind_t type, size_t bucket_count) {
 	/* Simple hash combining inode and type */
