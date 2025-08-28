@@ -35,6 +35,64 @@ static bool path_hidden(const char *path) {
 	return basename[0] == '.';
 }
 
+/* Initialize path hash table with given bucket count */
+static bool hash_init(monitor_t *monitor, size_t bucket_count) {
+	if (!monitor || bucket_count == 0) return false;
+
+	monitor->path_buckets = calloc(bucket_count, sizeof(watcher_t *));
+	if (!monitor->path_buckets) {
+		log_message(ERROR, "Failed to allocate path hash table buckets");
+		return false;
+	}
+
+	monitor->bucket_count = bucket_count;
+	return true;
+}
+
+/* Add watcher to path hash table */
+static void hash_add(monitor_t *monitor, watcher_t *watcher) {
+	if (!monitor || !watcher || !watcher->path || monitor->bucket_count == 0) return;
+
+	unsigned int bucket = watcher_hash(watcher->path, monitor->bucket_count);
+	watcher->next = monitor->path_buckets[bucket];
+	monitor->path_buckets[bucket] = watcher;
+}
+
+/* Remove watcher from path hash table */
+static void hash_remove(monitor_t *monitor, watcher_t *watcher) {
+	if (!monitor || !watcher || !watcher->path || monitor->bucket_count == 0) return;
+
+	unsigned int bucket = watcher_hash(watcher->path, monitor->bucket_count);
+	watcher_t *current = monitor->path_buckets[bucket];
+	watcher_t *previous = NULL;
+
+	while (current) {
+		if (current == watcher) {
+			if (previous) {
+				previous->next = current->next;
+			} else {
+				monitor->path_buckets[bucket] = current->next;
+			}
+			current->next = NULL;
+			return;
+		}
+		previous = current;
+		current = current->next;
+	}
+}
+
+/* Hash function for path-based watcher lookups (djb2 algorithm) */
+unsigned int watcher_hash(const char *path, size_t bucket_count) {
+	unsigned int hash = 5381; /* djb2 hash initial value */
+	if (!path || bucket_count == 0) return 0;
+
+	for (const char *p = path; *p; p++) {
+		hash = ((hash << 5) + hash) + (unsigned char) *p;
+	}
+
+	return hash % bucket_count;
+}
+
 /* Clean up internal resources of a watcher */
 static void watcher_cleanup(monitor_t *monitor, watcher_t *watcher, bool is_stale) {
 	if (watcher == NULL) return;
@@ -91,19 +149,28 @@ static bool watcher_stat(watcher_t *watcher) {
 	return true;
 }
 
-/* Add a watcher to the monitor's array */
+/* Add a watcher to the monitor's array using exponential growth */
 static bool watcher_add(monitor_t *monitor, watcher_t *watcher) {
-	watcher_t **new_watches;
+	/* Check if we need to grow the array */
+	if (monitor->num_watches >= monitor->watches_capacity) {
+		int new_capacity = (monitor->watches_capacity == 0) ? 8 : monitor->watches_capacity * 2;
+		watcher_t **new_watches = realloc(monitor->watches, new_capacity * sizeof(watcher_t *));
+		if (new_watches == NULL) {
+			log_message(ERROR, "Failed to allocate memory for watcher array (capacity: %d)", new_capacity);
+			return false;
+		}
+		monitor->watches = new_watches;
+		monitor->watches_capacity = new_capacity;
 
-	new_watches = realloc(monitor->watches, (monitor->num_watches + 1) * sizeof(watcher_t *));
-	if (new_watches == NULL) {
-		log_message(ERROR, "Failed to allocate memory for watcher");
-		return false;
+		log_message(DEBUG, "Expanded watcher array capacity to %d", new_capacity);
 	}
 
-	monitor->watches = new_watches;
+	/* Add to array */
 	monitor->watches[monitor->num_watches] = watcher;
 	monitor->num_watches++;
+
+	/* Add to path hash table for fast lookups */
+	hash_add(monitor, watcher);
 
 	/* Add the watcher to the mapper for fast event lookup */
 	if (monitor->mapper) {
@@ -113,20 +180,40 @@ static bool watcher_add(monitor_t *monitor, watcher_t *watcher) {
 	return true;
 }
 
-/* Find a watcher entry by path */
+/* Find a watcher entry by path using O(1) hash table lookup */
 static watcher_t *watcher_find(monitor_t *monitor, const char *path) {
-	if (!monitor || !path) return NULL;
+	if (!monitor || !path || monitor->bucket_count == 0) return NULL;
 
-	for (int i = 0; i < monitor->num_watches; i++) {
-		if (monitor->watches[i] && monitor->watches[i]->path) {
-			if (strcmp(monitor->watches[i]->path, path) == 0) {
-				log_message(DEBUG, "Found existing watcher for path %s (fd=%d)",
-							path, monitor->watches[i]->wd);
-				return monitor->watches[i];
-			}
+	unsigned int bucket = watcher_hash(path, monitor->bucket_count);
+	watcher_t *watcher = monitor->path_buckets[bucket];
+
+	while (watcher) {
+		if (watcher->path && strcmp(watcher->path, path) == 0) {
+			log_message(DEBUG, "Found existing watcher for path %s (fd=%d)", path, watcher->wd);
+			return watcher;
 		}
+		watcher = watcher->next;
 	}
+
 	return NULL;
+}
+
+/* Remove a watcher from the monitor using O(1) swap-with-last strategy */
+static void watcher_remove(monitor_t *monitor, int index) {
+	if (!monitor || index < 0 || index >= monitor->num_watches) return;
+
+	watcher_t *watcher = monitor->watches[index];
+	if (!watcher) return;
+
+	/* Remove from path hash table */
+	hash_remove(monitor, watcher);
+
+	/* Remove from array using swap-with-last strategy (O(1)) */
+	monitor->num_watches--;
+	if (index < monitor->num_watches) {
+		monitor->watches[index] = monitor->watches[monitor->num_watches];
+	}
+	monitor->watches[monitor->num_watches] = NULL; /* Clear the now-unused slot */
 }
 
 /* Observer callback for direct watcher cleanup when watches are deactivated */
@@ -170,11 +257,8 @@ static void monitor_deactivation(watchref_t watchref, void *context) {
 				log_message(ERROR, "Failed to allocate memory for graveyard, leaking watcher");
 			}
 
-			/* Remove the watcher from the active list by shifting */
-			for (int j = i; j < monitor->num_watches - 1; j++) {
-				monitor->watches[j] = monitor->watches[j + 1];
-			}
-			monitor->num_watches--;
+			/* Remove the watcher from the active list using O(1) removal */
+			watcher_remove(monitor, i);
 		}
 	}
 
@@ -204,8 +288,12 @@ monitor_t *monitor_create(config_t *config, registry_t *registry) {
 	monitor->kq = -1;
 	monitor->watches = NULL;
 	monitor->num_watches = 0;
+	monitor->watches_capacity = 0;
+	monitor->path_buckets = NULL;
+	monitor->bucket_count = 0;
 	monitor->pending = NULL;
 	monitor->num_pending = 0;
+	monitor->pending_capacity = 0;
 	monitor->running = false;
 	monitor->reload = false;
 	monitor->reloading = false;
@@ -235,6 +323,16 @@ monitor_t *monitor_create(config_t *config, registry_t *registry) {
 	monitor->resources = resources_create(PATH_HASH_SIZE, monitor->registry);
 	if (!monitor->resources) {
 		log_message(ERROR, "Failed to create resource table for monitor");
+		queue_destroy(monitor->check_queue);
+		free(monitor->config_path);
+		free(monitor);
+		return NULL;
+	}
+
+	/* Initialize path hash table for fast watcher lookups */
+	if (!hash_init(monitor, 64)) { /* Start with 64 buckets */
+		log_message(ERROR, "Failed to create path hash table for monitor");
+		resources_destroy(monitor->resources);
 		queue_destroy(monitor->check_queue);
 		free(monitor->config_path);
 		free(monitor);
@@ -315,6 +413,7 @@ void monitor_destroy(monitor_t *monitor) {
 	}
 
 	free(monitor->watches);
+	free(monitor->path_buckets);
 
 	/* Unregister observers from registry */
 	if (monitor->registry) {
@@ -426,16 +525,31 @@ bool monitor_path(monitor_t *monitor, const char *path, watchref_t watchref) {
 	/* Clean up any stale watchers for this path first */
 	monitor_sync(monitor, path);
 
-	/* Check if this exact combination already exists to avoid true duplicates */
-	for (int i = 0; i < monitor->num_watches; i++) {
-		if (strcmp(monitor->watches[i]->path, path) == 0 &&
-			watchref_equal(monitor->watches[i]->watchref, watchref)) {
-			return true;
+	/* Check for existing watchers and duplicates efficiently using hash table */
+	watcher_t *shared_watcher = NULL;
+	bool duplicate_found = false;
+
+	if (monitor->bucket_count > 0) {
+		unsigned int bucket = watcher_hash(path, monitor->bucket_count);
+		watcher_t *watcher = monitor->path_buckets[bucket];
+
+		/* Check hash bucket for both duplicate detection and fd sharing */
+		while (watcher) {
+			if (watcher->path && strcmp(watcher->path, path) == 0) {
+				if (watchref_equal(watcher->watchref, watchref)) {
+					duplicate_found = true;
+					break;
+				}
+				if (!shared_watcher) {
+					shared_watcher = watcher; /* First watcher found for this path */
+				}
+			}
+			watcher = watcher->next;
 		}
 	}
 
-	/* Always check for existing watchers by path to prioritize fd sharing */
-	watcher_t *shared_watcher = watcher_find(monitor, path);
+	/* Return early if exact duplicate found */
+	if (duplicate_found) return true;
 	if (shared_watcher) {
 		/* Path is already being watched, share the fd */
 		log_message(INFO, "Sharing file descriptor for path %s (watchref %u:%u with existing fd %d)",
@@ -1271,11 +1385,8 @@ bool monitor_prune(monitor_t *monitor, const char *parent) {
 			/* Destroy the watcher (closes FD if not shared) */
 			watcher_destroy(monitor, watcher, false);
 
-			/* Remove from array by shifting */
-			for (int j = i; j < monitor->num_watches - 1; j++) {
-				monitor->watches[j] = monitor->watches[j + 1];
-			}
-			monitor->num_watches--;
+			/* Remove from array using O(1) removal */
+			watcher_remove(monitor, i);
 			changed = true;
 		}
 	}
@@ -1367,12 +1478,9 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 				continue;
 			}
 
-			/* Remove the watcher - destroy it and shift array elements */
+			/* Remove the watcher - destroy it and remove from array */
 			watcher_destroy(monitor, watcher, false);
-			for (int j = i; j < monitor->num_watches - 1; j++) {
-				monitor->watches[j] = monitor->watches[j + 1];
-			}
-			monitor->num_watches--;
+			watcher_remove(monitor, i);
 			list_modified = true;
 
 			/* Re-establish pending watches based on target type */
@@ -1412,12 +1520,9 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 			int new_fd = open(path, O_RDONLY);
 			if (new_fd == -1) {
 				log_message(ERROR, "Failed to open recreated path %s: %s", path, strerror(errno));
-				/* Treat as deleted - destroy watcher and shift array */
+				/* Treat as deleted - destroy watcher and remove from array */
 				watcher_destroy(monitor, watcher, false);
-				for (int j = i; j < monitor->num_watches - 1; j++) {
-					monitor->watches[j] = monitor->watches[j + 1];
-				}
-				monitor->num_watches--;
+				watcher_remove(monitor, i);
 				list_modified = true;
 				continue;
 			}
@@ -1553,12 +1658,7 @@ bool monitor_disable(monitor_t *monitor, watchref_t watchref) {
 
 			/* Remove the watcher from the array and destroy it */
 			watcher_destroy(monitor, watcher, false);
-
-			/* Shift remaining watchers down */
-			for (int j = i; j < monitor->num_watches - 1; j++) {
-				monitor->watches[j] = monitor->watches[j + 1];
-			}
-			monitor->num_watches--;
+			watcher_remove(monitor, i);
 		}
 	}
 

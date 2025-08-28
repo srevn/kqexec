@@ -47,16 +47,24 @@ static char *pending_join(const char *parent_path, const char *component) {
 	return result;
 }
 
-/* Find watcher by path and watch reference */
+/* Find watcher by path and watch reference using hash table lookup */
 static watcher_t *pending_watcher(monitor_t *monitor, const char *target_path, watchref_t watchref) {
 	if (!monitor || !target_path || !watchref_valid(watchref)) return NULL;
+	if (monitor->bucket_count == 0) return NULL;
 
-	for (int i = 0; i < monitor->num_watches; i++) {
-		if (strcmp(monitor->watches[i]->path, target_path) == 0 &&
-			watchref_equal(monitor->watches[i]->watchref, watchref)) {
-			return monitor->watches[i];
+	/* Use hash table for O(1) path lookup */
+	unsigned int bucket = watcher_hash(target_path, monitor->bucket_count);
+	watcher_t *watcher = monitor->path_buckets[bucket];
+
+	/* Check hash bucket for matching path and watchref */
+	while (watcher) {
+		if (watcher->path && strcmp(watcher->path, target_path) == 0 &&
+			watchref_equal(watcher->watchref, watchref)) {
+			return watcher;
 		}
+		watcher = watcher->next;
 	}
+
 	return NULL;
 }
 
@@ -365,11 +373,12 @@ void pending_remove(monitor_t *monitor, int index) {
 
 	pending_destroy(pending);
 
-	/* Shift remaining entries */
-	for (int j = index; j < monitor->num_pending - 1; j++) {
-		monitor->pending[j] = monitor->pending[j + 1];
-	}
+	/* Use swap-with-last for O(1) removal */
 	monitor->num_pending--;
+	if (index < monitor->num_pending) {
+		monitor->pending[index] = monitor->pending[monitor->num_pending];
+	}
+	monitor->pending[monitor->num_pending] = NULL; /* Clear the now-unused slot */
 }
 
 /* Generate unique name for a proxy watch */
@@ -505,15 +514,20 @@ bool pending_add(monitor_t *monitor, const char *target_path, watchref_t watchre
 	/* Find the watcher we just created for the parent */
 	pending->proxy_watcher = pending_watcher(monitor, parent_path, proxyref);
 
-	/* Add to pending watches array */
-	pending_t **new_pending = realloc(monitor->pending, (monitor->num_pending + 1) * sizeof(pending_t *));
-	if (!new_pending) {
-		log_message(ERROR, "Failed to allocate memory for pending watches array");
-		pending_destroy(pending);
-		return false;
+	/* Add to pending watches array using exponential growth */
+	if (monitor->num_pending >= monitor->pending_capacity) {
+		int new_capacity = (monitor->pending_capacity == 0) ? 4 : monitor->pending_capacity * 2;
+		pending_t **new_pending = realloc(monitor->pending, new_capacity * sizeof(pending_t *));
+		if (!new_pending) {
+			log_message(ERROR, "Failed to allocate memory for pending watches array (capacity: %d)", new_capacity);
+			pending_destroy(pending);
+			return false;
+		}
+		monitor->pending = new_pending;
+		monitor->pending_capacity = new_capacity;
+		log_message(DEBUG, "Expanded pending array capacity to %d", new_capacity);
 	}
 
-	monitor->pending = new_pending;
 	monitor->pending[monitor->num_pending] = pending;
 	monitor->num_pending++;
 
@@ -733,24 +747,28 @@ static void pending_proxy(monitor_t *monitor, pending_t *pending, const char *pr
 		/* Find the watcher for this parent */
 		new_pending->proxy_watcher = pending_watcher(monitor, proxy_path, proxyref);
 
-		/* Add to pending array */
-		pending_t **new_pending_array = realloc(monitor->pending, (monitor->num_pending + 1) * sizeof(pending_t *));
-		if (new_pending_array) {
+		/* Add to pending array using exponential growth */
+		if (monitor->num_pending >= monitor->pending_capacity) {
+			int new_capacity = (monitor->pending_capacity == 0) ? 4 : monitor->pending_capacity * 2;
+			pending_t **new_pending_array = realloc(monitor->pending, new_capacity * sizeof(pending_t *));
+			if (!new_pending_array) {
+				log_message(ERROR, "Failed to expand pending array capacity to %d", new_capacity);
+				pending_destroy(new_pending);
+				return;
+			}
 			monitor->pending = new_pending_array;
-			monitor->pending[monitor->num_pending] = new_pending;
-			monitor->num_pending++;
-
-			log_message(DEBUG, "Added new glob pending watch: target=%s, parent=%s, next=%s",
-						new_pending->target_path, new_pending->current_parent, new_pending->next_component);
-
-			/* Recursively process the new parent to handle pre-existing subdirectories */
-			pending_process(monitor, new_pending->current_parent);
-		} else {
-			log_message(ERROR, "Failed to allocate memory for new pending array");
-			/* Clean up proxy watch */
-			registry_deactivate(monitor->registry, proxyref);
-			pending_destroy(new_pending);
+			monitor->pending_capacity = new_capacity;
+			log_message(DEBUG, "Expanded pending array capacity to %d", new_capacity);
 		}
+
+		monitor->pending[monitor->num_pending] = new_pending;
+		monitor->num_pending++;
+
+		log_message(DEBUG, "Added new glob pending watch: target=%s, parent=%s, next=%s",
+					new_pending->target_path, new_pending->current_parent, new_pending->next_component);
+
+		/* Recursively process the new parent to handle pre-existing subdirectories */
+		pending_process(monitor, new_pending->current_parent);
 	} else {
 		log_message(WARNING, "Failed to add monitor or get next component for '%s'", proxy_path);
 		/* Clean up proxy watch */

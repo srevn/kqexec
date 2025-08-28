@@ -31,6 +31,9 @@ typedef struct watcher {
 	dev_t device;                          /* Device ID for validation */
 	bool shared_fd;                        /* Whether this FD is shared with other watches */
 	time_t validated;                      /* Last time this path was validated */
+	
+	/* Hash table linkage */
+	struct watcher *next;                  /* Next watcher in hash bucket */
 } watcher_t;
 
 /* Graveyard for stale watchers and old configurations */
@@ -52,10 +55,16 @@ typedef struct monitor {
 	
 	/* Watch tracking */
 	int num_watches;                       /* Number of watches */
+	int watches_capacity;                  /* Allocated capacity for watches array */
 	watcher_t **watches;                   /* Array of watch information */
+	
+	/* Path lookup hash table for lookups */
+	watcher_t **path_buckets;              /* Hash table buckets for path -> watcher lookup */
+	size_t bucket_count;                   /* Number of hash table buckets */
 	
 	/* Pending watches for non-existent paths */
 	int num_pending;                       /* Number of pending watches */
+	int pending_capacity;                  /* Allocated capacity for pending array */
 	pending_t **pending;                   /* Array of pending watch information */
 	
 	/* Queue for delayed events */
@@ -102,5 +111,8 @@ bool monitor_disable(monitor_t *monitor, watchref_t watchref);
 /* Path synchronization */
 bool monitor_sync(monitor_t *monitor, const char *path);
 bool monitor_prune(monitor_t *monitor, const char *parent);
+
+/* Utility functions */
+unsigned int watcher_hash(const char *path, size_t bucket_count);
 
 #endif /* MONITOR_H */
