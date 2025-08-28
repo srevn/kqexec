@@ -894,31 +894,10 @@ bool monitor_setup(monitor_t *monitor) {
 	if (!config_watch) return true;
 
 	/* Try to add to config structure */
-	if (!watch_add(monitor->config, monitor->registry, config_watch)) {
+	watchref_t config_watchref = watch_add(monitor->config, monitor->registry, config_watch);
+	if (!watchref_valid(config_watchref)) {
 		log_message(WARNING, "Failed to add config watch to config structure");
 		watch_destroy(config_watch);
-		return true;
-	}
-
-	/* Find the watchref that was just added */
-	uint32_t num_active = 0;
-	watchref_t *active_watchrefs = registry_active(monitor->registry, &num_active);
-	if (!active_watchrefs || num_active == 0) {
-		return true;
-	}
-
-	watchref_t config_watchref = WATCHREF_INVALID;
-	for (uint32_t i = 0; i < num_active; i++) {
-		watch_t *watch = registry_get(monitor->registry, active_watchrefs[i]);
-		if (!watch || !watch->command || strcmp(watch->command, "__config_reload__") != 0) {
-			continue;
-		}
-		config_watchref = active_watchrefs[i];
-		break;
-	}
-	free(active_watchrefs);
-
-	if (!watchref_valid(config_watchref)) {
 		return true;
 	}
 
@@ -1182,7 +1161,7 @@ bool monitor_reload(monitor_t *monitor) {
 	/* Add config file watch to the new config */
 	watch_t *config_watch = monitor_config(monitor->config_path);
 	if (config_watch) {
-		if (!watch_add(new_config, new_registry, config_watch)) {
+		if (!watchref_valid(watch_add(new_config, new_registry, config_watch))) {
 			log_message(WARNING, "Failed to add config watch to new config structure");
 			watch_destroy(config_watch);
 		}

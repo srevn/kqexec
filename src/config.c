@@ -167,10 +167,10 @@ const char *filter_to_string(filter_t event) {
 }
 
 /* Add a watch entry to the configuration */
-bool watch_add(config_t *config, registry_t *registry, watch_t *watch) {
+watchref_t watch_add(config_t *config, registry_t *registry, watch_t *watch) {
 	if (!config || !watch || !registry) {
 		log_message(ERROR, "Invalid parameters to watch_add");
-		return false;
+		return WATCHREF_INVALID;
 	}
 
 	/* Determine if snapshots are needed for this watch */
@@ -180,14 +180,14 @@ bool watch_add(config_t *config, registry_t *registry, watch_t *watch) {
 	watchref_t watchref = registry_add(registry, watch);
 	if (!watchref_valid(watchref)) {
 		log_message(ERROR, "Failed to add watch to registry");
-		return false;
+		return WATCHREF_INVALID;
 	}
 
 	if (watch->is_dynamic) {
 		log_message(DEBUG, "Added dynamic watch: %s", watch->path);
 	}
 
-	return true;
+	return watchref;
 }
 
 /* Remove a watch entry from the configuration */
@@ -447,7 +447,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 				}
 
 				/* Add the watch entry to the configuration */
-				if (!watch_add(config, registry, current_watch)) {
+				if (!watchref_valid(watch_add(config, registry, current_watch))) {
 					watch_destroy(current_watch);
 					fclose(fp);
 					return false;
@@ -696,7 +696,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 		}
 
 		/* Add the watch entry to the configuration */
-		if (!watch_add(config, registry, current_watch)) {
+		if (!watchref_valid(watch_add(config, registry, current_watch))) {
 			watch_destroy(current_watch);
 			fclose(fp);
 			return false;

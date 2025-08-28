@@ -86,7 +86,7 @@ bool config_events(const char *events_str, filter_t *events);
 const char *filter_to_string(filter_t filter);
 
 /* Watch management functions */
-bool watch_add(config_t *config, registry_t *registry, watch_t *watch);
+watchref_t watch_add(config_t *config, registry_t *registry, watch_t *watch);
 void watch_destroy(watch_t *watch);
 watch_t *watch_clone(const watch_t *source);
 bool watch_remove(config_t *config, registry_t *registry, watchref_t watchref);

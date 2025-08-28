@@ -613,35 +613,11 @@ static void pending_promote(monitor_t *monitor, pending_t *pending, const char *
 	}
 
 	/* Add dynamic watch to config, atomic duplicate checking handled in registry_add() */
-	if (!watch_add(monitor->config, monitor->registry, resolved_watch)) {
+	watchref_t resolvedref = watch_add(monitor->config, monitor->registry, resolved_watch);
+	if (!watchref_valid(resolvedref)) {
 		log_message(ERROR, "Failed to add dynamic watch to config: %s", matched_path);
 		/* Clean up avoid memory leaks */
 		watch_destroy(resolved_watch);
-		return;
-	}
-
-	/* Find the watch that was just added to the registry */
-	watchref_t resolvedref = WATCHREF_INVALID;
-	uint32_t num_active = 0;
-	watchref_t *active_refs = registry_active(monitor->registry, &num_active);
-	if (!active_refs || num_active == 0) {
-		/* No active watchrefs found */
-	} else {
-		/* Find the watch with matching path and name */
-		for (uint32_t i = 0; i < num_active; i++) {
-			watch_t *watch = registry_get(monitor->registry, active_refs[i]);
-			if (!watch || !watch->path || !watch->name || strcmp(watch->path, matched_path) != 0 ||
-				strcmp(watch->name, resolved_watch->name) != 0) {
-				continue;
-			}
-			resolvedref = active_refs[i];
-			break;
-		}
-		free(active_refs);
-	}
-
-	if (!watchref_valid(resolvedref)) {
-		log_message(ERROR, "Could not find watchref for newly added watch: %s", matched_path);
 		return;
 	}
 
