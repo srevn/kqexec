@@ -272,9 +272,14 @@ void queue_upsert(queue_t *queue, const char *path, watchref_t watchref, struct 
 		/* Update check time - always update to the new time */
 		check->next_check = next_check;
 
-		/* Restore heap property by trying both up and down heapify */
-		heap_up(queue->items, queue_index);
-		heap_down(queue->items, queue->size, queue_index);
+		/* Restore heap property for the updated element */
+		int parent_index = (queue_index - 1) / 2;
+		if (queue_index > 0 &&
+			timespec_before(&queue->items[queue_index].next_check, &queue->items[parent_index].next_check)) {
+			heap_up(queue->items, queue_index);
+		} else {
+			heap_down(queue->items, queue->size, queue_index);
+		}
 
 		log_message(DEBUG, "Updated check time for %s (new time: %ld.%09ld)",
 					path, (long) next_check.tv_sec, next_check.tv_nsec);
