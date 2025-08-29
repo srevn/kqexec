@@ -408,7 +408,8 @@ void queue_remove_by_index(queue_t *queue, int queue_index) {
 
 		/* Restore heap property for the moved element */
 		int parent_index = (queue_index - 1) / 2;
-		if (queue_index > 0 && timespec_before(&queue->items[queue_index].next_check, &queue->items[parent_index].next_check)) {
+		if (queue_index > 0 &&
+			timespec_before(&queue->items[queue_index].next_check, &queue->items[parent_index].next_check)) {
 			heap_up(queue->items, queue_index);
 		} else {
 			heap_down(queue->items, queue->size, queue_index);

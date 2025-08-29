@@ -261,6 +261,9 @@ void events_batch(monitor_t *monitor) {
 
 	/* Iterate through all resources to check active batch timeouts */
 	for (size_t i = 0; i < monitor->resources->bucket_count; i++) {
+		/* Lock the bucket before iterating to prevent race conditions */
+		pthread_mutex_lock(&monitor->resources->bucket_mutexes[i]);
+
 		resource_t *resource = monitor->resources->buckets[i];
 		while (resource) {
 			if (!resource->batch_active) {
@@ -324,6 +327,9 @@ void events_batch(monitor_t *monitor) {
 
 			resource = resource->next;
 		}
+
+		/* Unlock the bucket after iterating */
+		pthread_mutex_unlock(&monitor->resources->bucket_mutexes[i]);
 	}
 }
 
@@ -535,6 +541,9 @@ int events_timeout(monitor_t *monitor, struct timespec *current_time) {
 
 		/* Iterate through resources with active batch timeouts */
 		for (size_t i = 0; i < monitor->resources->bucket_count; i++) {
+			/* Lock the bucket before iterating to prevent race conditions */
+			pthread_mutex_lock(&monitor->resources->bucket_mutexes[i]);
+
 			resource_t *resource = monitor->resources->buckets[i];
 			while (resource) {
 				if (resource->batch_active) {
@@ -549,6 +558,9 @@ int events_timeout(monitor_t *monitor, struct timespec *current_time) {
 				}
 				resource = resource->next;
 			}
+
+			/* Unlock the bucket after iterating */
+			pthread_mutex_unlock(&monitor->resources->bucket_mutexes[i]);
 		}
 
 		if (has_batches) {

@@ -921,7 +921,7 @@ bool monitor_setup(monitor_t *monitor) {
 /* Process events from kqueue and handle commands */
 bool monitor_poll(monitor_t *monitor) {
 	struct kevent events[MAX_EVENTS];
-	int new_event;
+	int new_events;
 	struct timespec timeout, *p_timeout;
 
 	/* Check for reload request */
@@ -944,14 +944,14 @@ bool monitor_poll(monitor_t *monitor) {
 	p_timeout = timeout_calculate(monitor, &timeout, &now_monotonic);
 
 	/* Wait for events */
-	new_event = kevent(monitor->kq, NULL, 0, events, MAX_EVENTS, p_timeout);
+	new_events = kevent(monitor->kq, NULL, 0, events, MAX_EVENTS, p_timeout);
 
 	/* Get time after kevent returns */
 	struct timespec kevent_time;
 	clock_gettime(CLOCK_MONOTONIC, &kevent_time);
 
 	/* Handle kevent result */
-	if (new_event == -1) {
+	if (new_events == -1) {
 		if (errno == EINTR) {
 			log_message(DEBUG, "kevent interrupted by signal, returning to main loop");
 			return true; /* Return to main loop where running flag will be checked */
@@ -961,8 +961,14 @@ bool monitor_poll(monitor_t *monitor) {
 	}
 
 	/* Process new events */
-	if (new_event > 0) {
-		log_message(DEBUG, "Processing %d new kqueue events", new_event);
+	if (new_events > 0) {
+		/* Discard events during configuration reload to prevent accessing freed memory */
+		if (monitor->reloading) {
+			log_message(DEBUG, "Discarding %d events, configuration reload in progress", new_events);
+			return true; /* Continue monitoring */
+		}
+
+		log_message(DEBUG, "Processing %d new kqueue events", new_events);
 
 		/* Initialize validate request for collecting paths that need validation */
 		validate_t validate;
@@ -972,7 +978,7 @@ bool monitor_poll(monitor_t *monitor) {
 		struct kevent filesystem_event[MAX_EVENTS];
 		int num_events = 0;
 
-		for (int i = 0; i < new_event; i++) {
+		for (int i = 0; i < new_events; i++) {
 			/* Check if event is from control server socket */
 			if (monitor->server && events[i].filter == EVFILT_READ &&
 				events[i].ident == (uintptr_t) monitor->server->socket_fd) {
@@ -1010,7 +1016,7 @@ bool monitor_poll(monitor_t *monitor) {
 		/* Clean up validate request */
 		validate_cleanup(&validate);
 	} else {
-		/* new_event == 0 means timeout occurred */
+		/* new_events == 0 means timeout occurred */
 		if (p_timeout) {
 			log_message(DEBUG, "Timeout occurred after %ld.%09ld seconds, checking queued scans",
 						p_timeout->tv_sec, p_timeout->tv_nsec);
@@ -1037,6 +1043,9 @@ bool monitor_poll(monitor_t *monitor) {
 	}
 
 	for (size_t i = 0; i < monitor->resources->bucket_count; i++) {
+		/* Lock the bucket before iterating to prevent race conditions */
+		pthread_mutex_lock(&monitor->resources->bucket_mutexes[i]);
+
 		resource_t *resource = monitor->resources->buckets[i];
 		while (resource) {
 			if (resource->trackers) {
@@ -1047,6 +1056,9 @@ bool monitor_poll(monitor_t *monitor) {
 			}
 			resource = resource->next;
 		}
+
+		/* Unlock the bucket after iterating */
+		pthread_mutex_unlock(&monitor->resources->bucket_mutexes[i]);
 	}
 
 	return true; /* Continue monitoring */
