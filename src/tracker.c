@@ -652,7 +652,7 @@ void tracker_purge(monitor_t *monitor, trackers_t *registry, watchref_t watchref
 			/* Remove the watchref from this tracker's watchrefs array */
 			for (int i = 0; i < tracker->num_watchrefs; i++) {
 				if (watchref_equal(tracker->watchrefs[i], watchref)) {
-					/* Use swap-with-last for O(1) removal */
+					/* Use swap-with-last for removal */
 					tracker->num_watchrefs--;
 					if (i < tracker->num_watchrefs) {
 						tracker->watchrefs[i] = tracker->watchrefs[tracker->num_watchrefs];

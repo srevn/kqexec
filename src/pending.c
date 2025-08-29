@@ -53,7 +53,7 @@ static watcher_t *pending_watcher(monitor_t *monitor, const char *target_path, w
 	if (!monitor || !target_path || !watchref_valid(watchref)) return NULL;
 	if (monitor->bucket_count == 0) return NULL;
 
-	/* Use hash table for O(1) path lookup */
+	/* Use hash table for path lookup */
 	unsigned int bucket = watcher_hash(target_path, monitor->bucket_count);
 	watcher_t *watcher = monitor->buckets[bucket];
 
@@ -374,7 +374,7 @@ void pending_remove(monitor_t *monitor, int index) {
 
 	pending_destroy(pending);
 
-	/* Use swap-with-last for O(1) removal */
+	/* Use swap-with-last for removal */
 	monitor->num_pending--;
 	if (index < monitor->num_pending) {
 		monitor->pending[index] = monitor->pending[monitor->num_pending];

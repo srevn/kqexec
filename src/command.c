@@ -261,7 +261,7 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 		return NULL;
 	}
 
-	/* Substitute new snapshot-based placeholders FIRST to avoid substring conflicts */
+	/* Substitute new snapshot-based placeholders first to avoid substring conflicts */
 	if (watch->target == WATCH_DIRECTORY && event->diff) {
 		/* %created: List of created items */
 		if (strstr(result, "%created")) {

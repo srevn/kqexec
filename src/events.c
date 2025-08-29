@@ -630,7 +630,7 @@ bool events_handle(monitor_t *monitor, struct kevent *events, int event_count, s
 	for (int i = 0; i < event_count; i++) {
 		int fd = (int) events[i].ident;
 
-		/* Look up the fd in our mapper for O(1) dispatch */
+		/* Look up the fd in our mapper */
 		map_entry_t *entry = mapper_get(monitor->mapper, fd);
 		if (!entry) {
 			log_message(DEBUG, "Event for an unknown or out-of-bounds (fd=%d)", fd);

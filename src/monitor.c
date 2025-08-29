@@ -81,7 +81,7 @@ static void hash_remove(monitor_t *monitor, watcher_t *watcher) {
 	}
 }
 
-/* Hash function for path-based watcher lookups (djb2 algorithm) */
+/* Hash function for path-based watcher lookups */
 unsigned int watcher_hash(const char *path, size_t bucket_count) {
 	unsigned int hash = 5381; /* djb2 hash initial value */
 	if (!path || bucket_count == 0) return 0;
@@ -180,7 +180,7 @@ static bool watcher_add(monitor_t *monitor, watcher_t *watcher) {
 	return true;
 }
 
-/* Find a watcher entry by path using O(1) hash table lookup */
+/* Find a watcher entry by path using hash table lookup */
 static watcher_t *watcher_find(monitor_t *monitor, const char *path) {
 	if (!monitor || !path || monitor->bucket_count == 0) return NULL;
 
@@ -198,7 +198,7 @@ static watcher_t *watcher_find(monitor_t *monitor, const char *path) {
 	return NULL;
 }
 
-/* Remove a watcher from the monitor using O(1) swap-with-last strategy */
+/* Remove a watcher from the monitor using swap-with-last strategy */
 static void watcher_remove(monitor_t *monitor, int index) {
 	if (!monitor || index < 0 || index >= monitor->num_watches) return;
 
@@ -208,7 +208,7 @@ static void watcher_remove(monitor_t *monitor, int index) {
 	/* Remove from path hash table */
 	hash_remove(monitor, watcher);
 
-	/* Remove from array using swap-with-last strategy (O(1)) */
+	/* Remove from array using swap-with-last strategy */
 	monitor->num_watches--;
 	if (index < monitor->num_watches) {
 		monitor->watches[index] = monitor->watches[monitor->num_watches];
@@ -257,7 +257,7 @@ static void monitor_deactivation(watchref_t watchref, void *context) {
 				log_message(ERROR, "Failed to allocate memory for graveyard, leaking watcher");
 			}
 
-			/* Remove the watcher from the active list using O(1) removal */
+			/* Remove the watcher from the active list */
 			watcher_remove(monitor, i);
 		}
 	}
@@ -1364,7 +1364,7 @@ bool monitor_prune(monitor_t *monitor, const char *parent) {
 			/* Destroy the watcher (closes FD if not shared) */
 			watcher_destroy(monitor, watcher, false);
 
-			/* Remove from array using O(1) removal */
+			/* Remove from array */
 			watcher_remove(monitor, i);
 			changed = true;
 		}
