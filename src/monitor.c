@@ -22,7 +22,7 @@
 #include "stability.h"
 #include "tracker.h"
 
-/* Check if a path is a hidden file or directory (starts with dot) */
+/* Check if a path is a hidden file or directory */
 static bool path_hidden(const char *path) {
 	const char *basename = strrchr(path, '/');
 	if (basename) {
@@ -259,6 +259,8 @@ static void monitor_deactivation(watchref_t watchref, void *context) {
 
 			/* Remove the watcher from the active list */
 			watcher_remove(monitor, i);
+			/* Reset loop to handle swap-with-last properly */
+			i = monitor->num_watches;
 		}
 	}
 
@@ -1284,6 +1286,14 @@ bool monitor_reload(monitor_t *monitor) {
 	/* Reset monitor's watch list to be populated with new watches */
 	monitor->watches = NULL;
 	monitor->num_watches = 0;
+	monitor->watches_capacity = 0;
+
+	/* Clear the hash table to remove stale watcher pointers */
+	if (monitor->buckets) {
+		for (size_t i = 0; i < monitor->bucket_count; i++) {
+			monitor->buckets[i] = NULL;
+		}
+	}
 
 	/* Switch to the new registry before adding watches */
 	monitor->registry = new_registry;
@@ -1662,6 +1672,8 @@ bool monitor_disable(monitor_t *monitor, watchref_t watchref) {
 			/* Remove the watcher from the array and destroy it */
 			watcher_destroy(monitor, watcher, false);
 			watcher_remove(monitor, i);
+			/* Reset loop to handle swap-with-last properly */
+			i = monitor->num_watches;
 		}
 	}
 
