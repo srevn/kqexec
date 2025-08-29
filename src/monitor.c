@@ -1389,6 +1389,8 @@ bool monitor_prune(monitor_t *monitor, const char *parent) {
 			/* Remove from array */
 			watcher_remove(monitor, i);
 			changed = true;
+			/* Reset loop to handle swap-with-last properly */
+			i = monitor->num_watches;
 		}
 	}
 
@@ -1483,6 +1485,8 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 			watcher_destroy(monitor, watcher, false);
 			watcher_remove(monitor, i);
 			list_modified = true;
+			/* Reset loop to handle swap-with-last */
+			i = monitor->num_watches;
 
 			/* Re-establish pending watches based on target type */
 			if (!target_watch) continue;
@@ -1553,6 +1557,8 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 		watcher_destroy(monitor, watcher, false);
 		watcher_remove(monitor, i);
 		list_modified = true;
+		/* Reset loop to handle swap-with-last properly */
+		i = monitor->num_watches;
 	}
 
 	/* Recreate all watchers and ensure proper FD sharing and reference counting */

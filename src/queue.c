@@ -39,6 +39,8 @@ static void queue_deactivation(watchref_t watchref, void *context) {
 			log_message(DEBUG, "Removing empty queue item after watch cleanup: %s",
 						check->path ? check->path : "<null>");
 			queue_remove_by_index(queue, i);
+			/* Reset loop to handle heap reorganization */
+			i = queue->size;
 		}
 	}
 }

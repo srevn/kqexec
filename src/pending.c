@@ -865,6 +865,8 @@ void pending_process(monitor_t *monitor, const char *parent_path) {
 				process_glob(monitor, pending);
 			} else {
 				process_exact(monitor, pending, i);
+				/* Reset loop to handle swap-with-last */
+				i = monitor->num_pending;
 			}
 		}
 	}
@@ -921,6 +923,8 @@ void pending_delete(monitor_t *monitor, const char *deleted_path) {
 			watchref_t watchref = pending->watchref;
 
 			pending_remove(monitor, i);
+			/* Reset loop to handle swap-with-last */
+			i = monitor->num_pending;
 
 			if (target_path) {
 				pending_add(monitor, target_path, watchref);
@@ -1020,6 +1024,8 @@ void pending_deactivation(watchref_t watchref, void *context) {
 			/* Remove using the public pending_remove function for proper cleanup */
 			pending_remove(monitor, i);
 			entries_removed++;
+			/* Reset loop to handle swap-with-last */
+			i = monitor->num_pending;
 		}
 	}
 
