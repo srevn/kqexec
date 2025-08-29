@@ -1507,11 +1507,12 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 		return list_modified;
 	}
 
-	/* Path exists, collect watchers that need recreation due to inode/device changes */
+	/* Path exists, check if any watcher needs recreation */
 	watchref_t *recreate_watchrefs = NULL;
 	int recreate_count = 0;
 	bool any_recreated = false;
 
+	/* Check if any watcher is stale */
 	for (int i = 0; i < monitor->num_watches; i++) {
 		watcher_t *watcher = monitor->watches[i];
 		if (!watcher || !watcher->path || strcmp(watcher->path, path) != 0) continue;
@@ -1519,25 +1520,35 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 		/* Check if path was recreated (inode/device changed) */
 		if (watcher->inode != info.st_ino || watcher->device != info.st_dev) {
 			any_recreated = true;
-
-			/* Collect this watchref for recreation */
-			watchref_t *new_array = realloc(recreate_watchrefs, (recreate_count + 1) * sizeof(watchref_t));
-			if (!new_array) {
-				log_message(ERROR, "Failed to allocate memory for watchref collection during path recreation");
-				free(recreate_watchrefs);
-				return list_modified;
-			}
-			recreate_watchrefs = new_array;
-			recreate_watchrefs[recreate_count] = watcher->watchref;
-			recreate_count++;
-		} else {
-			/* Path is valid and unchanged */
-			watcher->validated = time(NULL);
+			break; /* Found at least one stale watcher */
 		}
 	}
 
-	/* If no recreation needed, we're done */
-	if (!any_recreated) return list_modified;
+	/* If no recreation needed, just update validation time and return */
+	if (!any_recreated) {
+		for (int i = 0; i < monitor->num_watches; i++) {
+			watcher_t *watcher = monitor->watches[i];
+			if (watcher && watcher->path && strcmp(watcher->path, path) == 0) {
+				watcher->validated = time(NULL);
+			}
+		}
+		return list_modified;
+	}
+
+	/* Collect all watchrefs for recreation since we detected staleness */
+	for (int i = 0; i < monitor->num_watches; i++) {
+		watcher_t *watcher = monitor->watches[i];
+		if (!watcher || !watcher->path || strcmp(watcher->path, path) != 0) continue;
+		watchref_t *new_array = realloc(recreate_watchrefs, (recreate_count + 1) * sizeof(watchref_t));
+		if (!new_array) {
+			log_message(ERROR, "Failed to allocate memory for watchref collection during path recreation");
+			free(recreate_watchrefs);
+			return list_modified;
+		}
+		recreate_watchrefs = new_array;
+		recreate_watchrefs[recreate_count] = watcher->watchref;
+		recreate_count++;
+	}
 
 	log_message(DEBUG, "Path recreated: %s, recreating %d watchers", path, recreate_count);
 
