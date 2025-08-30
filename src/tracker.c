@@ -201,8 +201,8 @@ bool tracker_reregister(monitor_t *monitor, tracker_t *tracker) {
 
 	/* Validate the file still exists and hasn't changed */
 	struct stat info;
-	if (fstat(tracker->fd, &info) == -1) {
-		log_message(DEBUG, "File descriptor invalid for %s, removing watch", tracker->path);
+	if (stat(tracker->path, &info) == -1) {
+		log_message(DEBUG, "File path invalid for %s, removing watch", tracker->path);
 		return false;
 	}
 
