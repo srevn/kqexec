@@ -77,6 +77,7 @@ typedef struct monitor {
 	bool running;                          /* Monitor running flag */
 	bool reload;                           /* Flag to indicate reload requested */
 	bool reloading;                        /* Flag to indicate reload in progress */
+	pthread_mutex_t reload_mutex;          /* Mutex to serialize reload operations */
 	char *config_path;                     /* Copy of config file path for reloading */
 	
 	/* Unix socket control server */

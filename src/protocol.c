@@ -734,6 +734,17 @@ static protocol_t protocol_reload(monitor_t *monitor, const char *command_text) 
 
 	(void) command_text; /* Unused parameter */
 
+	/* Try to acquire reload mutex (non-blocking) to check if reload is already in progress */
+	if (pthread_mutex_trylock(&monitor->reload_mutex) != 0) {
+		result.success = false;
+		protocol_data(&result, "error", "Reload already in progress");
+		protocol_data(&result, "response_type", "reload");
+		return result;
+	}
+
+	/* Release the mutex immediately since monitor_reload will acquire it */
+	pthread_mutex_unlock(&monitor->reload_mutex);
+
 	/* Trigger reload by setting flag */
 	monitor->reload = true;
 

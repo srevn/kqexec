@@ -300,6 +300,15 @@ monitor_t *monitor_create(config_t *config, registry_t *registry) {
 	monitor->reload = false;
 	monitor->reloading = false;
 
+	/* Initialize reload mutex */
+	if (pthread_mutex_init(&monitor->reload_mutex, NULL) != 0) {
+		log_message(ERROR, "Failed to initialize reload mutex");
+		mapper_destroy(monitor->mapper);
+		free(monitor->config_path);
+		free(monitor);
+		return NULL;
+	}
+
 	monitor->graveyard.stale_watches = NULL;
 	monitor->graveyard.num_stale = 0;
 	monitor->graveyard.old_config = NULL;
@@ -463,6 +472,9 @@ void monitor_destroy(monitor_t *monitor) {
 	if (monitor->registry) {
 		registry_destroy(monitor->registry);
 	}
+
+	/* Destroy reload mutex */
+	pthread_mutex_destroy(&monitor->reload_mutex);
 
 	free(monitor);
 }
@@ -1098,6 +1110,12 @@ bool monitor_reload(monitor_t *monitor) {
 		return false;
 	}
 
+	/* Acquire reload mutex to serialize reload operations */
+	if (pthread_mutex_lock(&monitor->reload_mutex) != 0) {
+		log_message(ERROR, "Failed to acquire reload mutex");
+		return false;
+	}
+
 	/* Set reloading flag to prevent synthetic events during reload */
 	monitor->reloading = true;
 
@@ -1118,6 +1136,7 @@ bool monitor_reload(monitor_t *monitor) {
 	if (new_kq == -1) {
 		log_message(ERROR, "Failed to create new kqueue during reload: %s", strerror(errno));
 		monitor->reloading = false;
+		pthread_mutex_unlock(&monitor->reload_mutex);
 		return false;
 	}
 
@@ -1132,6 +1151,7 @@ bool monitor_reload(monitor_t *monitor) {
 		log_message(ERROR, "Failed to create new configuration during reload");
 		close(new_kq);
 		monitor->reloading = false;
+		pthread_mutex_unlock(&monitor->reload_mutex);
 		return false;
 	}
 
@@ -1142,6 +1162,7 @@ bool monitor_reload(monitor_t *monitor) {
 		close(new_kq);
 		config_destroy(new_config);
 		monitor->reloading = false;
+		pthread_mutex_unlock(&monitor->reload_mutex);
 		return false;
 	}
 
@@ -1156,6 +1177,7 @@ bool monitor_reload(monitor_t *monitor) {
 			registry_destroy(new_registry);
 			close(new_kq);
 			monitor->reloading = false;
+			pthread_mutex_unlock(&monitor->reload_mutex);
 			return false;
 		}
 	}
@@ -1169,6 +1191,7 @@ bool monitor_reload(monitor_t *monitor) {
 		/* Re-validate the watch on the config file to detect subsequent changes */
 		monitor_sync(monitor, monitor->config_path);
 		monitor->reloading = false;
+		pthread_mutex_unlock(&monitor->reload_mutex);
 		return false;
 	}
 
@@ -1189,6 +1212,7 @@ bool monitor_reload(monitor_t *monitor) {
 		config_destroy(new_config);
 		registry_destroy(new_registry);
 		monitor->reloading = false;
+		pthread_mutex_unlock(&monitor->reload_mutex);
 		return false;
 	}
 
@@ -1201,6 +1225,7 @@ bool monitor_reload(monitor_t *monitor) {
 		config_destroy(new_config);
 		registry_destroy(new_registry);
 		monitor->reloading = false;
+		pthread_mutex_unlock(&monitor->reload_mutex);
 		return false;
 	}
 
@@ -1214,6 +1239,7 @@ bool monitor_reload(monitor_t *monitor) {
 		config_destroy(new_config);
 		registry_destroy(new_registry);
 		monitor->reloading = false;
+		pthread_mutex_unlock(&monitor->reload_mutex);
 		return false;
 	}
 
@@ -1364,6 +1390,9 @@ bool monitor_reload(monitor_t *monitor) {
 
 	/* Clear reloading flag now that reload is complete */
 	monitor->reloading = false;
+
+	/* Release reload mutex */
+	pthread_mutex_unlock(&monitor->reload_mutex);
 	return true;
 }
 
@@ -1597,11 +1626,18 @@ void monitor_stop(monitor_t *monitor) {
 bool monitor_activate(monitor_t *monitor, watchref_t watchref) {
 	if (!monitor || !watchref_valid(watchref)) return false;
 
+	/* Try to acquire reload mutex to avoid interference with reload operations */
+	if (pthread_mutex_trylock(&monitor->reload_mutex) != 0) {
+		log_message(WARNING, "Cannot activate watch, reload in progress");
+		return false;
+	}
+
 	watch_t *watch = registry_get(monitor->registry, watchref);
 
 	/* If watch is already active and enabled, nothing to do */
 	if (watch && watch->enabled) {
 		log_message(DEBUG, "Watch '%s' is already active and enabled", watch->name);
+		pthread_mutex_unlock(&monitor->reload_mutex);
 		return true;
 	}
 
@@ -1628,6 +1664,7 @@ bool monitor_activate(monitor_t *monitor, watchref_t watchref) {
 		if (!was_inactive) {
 			log_message(WARNING, "Cannot activate watch, invalid reference (watch_id=%u, gen=%u)",
 						watchref.watch_id, watchref.generation);
+			pthread_mutex_unlock(&monitor->reload_mutex);
 			return false;
 		}
 
@@ -1635,6 +1672,7 @@ bool monitor_activate(monitor_t *monitor, watchref_t watchref) {
 		watch = registry_get(monitor->registry, watchref);
 		if (!watch) {
 			log_message(ERROR, "Watch reference became invalid after state transition");
+			pthread_mutex_unlock(&monitor->reload_mutex);
 			return false;
 		}
 	}
@@ -1647,10 +1685,12 @@ bool monitor_activate(monitor_t *monitor, watchref_t watchref) {
 		log_message(ERROR, "Failed to set up monitoring for watch %s", watch->name ? watch->name : "unknown");
 		/* Rollback enabled flag on failure */
 		watch->enabled = false;
+		pthread_mutex_unlock(&monitor->reload_mutex);
 		return false;
 	}
 
 	log_message(INFO, "Watch %s activated successfully", watch->name ? watch->name : "unknown");
+	pthread_mutex_unlock(&monitor->reload_mutex);
 	return true;
 }
 
@@ -1658,10 +1698,17 @@ bool monitor_activate(monitor_t *monitor, watchref_t watchref) {
 bool monitor_disable(monitor_t *monitor, watchref_t watchref) {
 	if (!monitor || !watchref_valid(watchref)) return false;
 
+	/* Try to acquire reload mutex to avoid interference with reload operations */
+	if (pthread_mutex_trylock(&monitor->reload_mutex) != 0) {
+		log_message(WARNING, "Cannot disable watch, reload in progress");
+		return false;
+	}
+
 	/* Get the watch from the registry */
 	watch_t *watch = registry_get(monitor->registry, watchref);
 	if (!watch) {
 		log_message(WARNING, "Cannot disable watch, reference not found in registry");
+		pthread_mutex_unlock(&monitor->reload_mutex);
 		return false;
 	}
 
@@ -1687,13 +1734,14 @@ bool monitor_disable(monitor_t *monitor, watchref_t watchref) {
 						watcher->path, watcher->wd);
 
 			/* Remove the watcher from the array and destroy it */
-			watcher_destroy(monitor, watcher, false);
 			watcher_remove(monitor, i);
+			watcher_destroy(monitor, watcher, false);
 			/* Reset loop to handle swap-with-last properly */
 			i = monitor->num_watches;
 		}
 	}
 
 	log_message(INFO, "Watch %s disabled successfully", watch->name ? watch->name : "unknown");
+	pthread_mutex_unlock(&monitor->reload_mutex);
 	return true;
 }
