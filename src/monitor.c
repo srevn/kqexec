@@ -1412,11 +1412,9 @@ bool monitor_prune(monitor_t *monitor, const char *parent) {
 			watcher->path[parent_len] == '/') {
 			log_message(DEBUG, "Pruning stale subdirectory watch: %s", watcher->path);
 
-			/* Destroy the watcher (closes FD if not shared) */
-			watcher_destroy(monitor, watcher, false);
-
-			/* Remove from array */
+			/* Remove from array first, then destroy */
 			watcher_remove(monitor, i);
+			watcher_destroy(monitor, watcher, false);
 			changed = true;
 			/* Reset loop to handle swap-with-last properly */
 			i = monitor->num_watches;
@@ -1510,9 +1508,9 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 				continue;
 			}
 
-			/* Remove the watcher - destroy it and remove from array */
-			watcher_destroy(monitor, watcher, false);
+			/* Remove from array first, then destroy */
 			watcher_remove(monitor, i);
+			watcher_destroy(monitor, watcher, false);
 			list_modified = true;
 			/* Reset loop to handle swap-with-last */
 			i = monitor->num_watches;
@@ -1593,9 +1591,9 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 			i = monitor->num_watches; /* Reset loop since prune modified the array */
 		}
 
-		/* Destroy this watcher (handles shared FD cleanup properly) */
-		watcher_destroy(monitor, watcher, false);
+		/* Remove from array first, then destroy */
 		watcher_remove(monitor, i);
+		watcher_destroy(monitor, watcher, false);
 		list_modified = true;
 		/* Reset loop to handle swap-with-last properly */
 		i = monitor->num_watches;
