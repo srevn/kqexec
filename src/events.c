@@ -1020,6 +1020,12 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 	if ((watch->filter & filter_for_mask) == 0) {
 		log_message(DEBUG, "Operation maps to event type %s, which is not in watch mask for %s",
 					filter_to_string(filter_for_mask), watch->name);
+
+		/* If a directory changes, but the event type is not in the mask, we should still reset the baseline */
+		if (root && root->resource->kind == ENTITY_DIRECTORY) {
+			log_message(DEBUG, "Resetting stability baseline for %s due to filtered event", root->resource->path);
+			stability_reset(monitor, root);
+		}
 		return false;
 	}
 
