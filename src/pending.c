@@ -897,6 +897,7 @@ void pending_cleanup(monitor_t *monitor, registry_t *registry) {
 	free(monitor->pending);
 	monitor->pending = NULL;
 	monitor->num_pending = 0;
+	monitor->pending_capacity = 0;
 }
 
 /* Handle deletion of parent directories that affect pending watches */
