@@ -789,7 +789,7 @@ static void process_glob(monitor_t *monitor, pending_t *pending) {
 }
 
 /* Process a pending watch for an exact path */
-static void process_exact(monitor_t *monitor, pending_t *pending, int index) {
+static bool process_exact(monitor_t *monitor, pending_t *pending, int index) {
 	/* Loop to process multiple path components created in a single event */
 	while (true) {
 		if (pending_directory(pending->next_component) || access(pending->next_component, F_OK) == 0) {
@@ -811,7 +811,7 @@ static void process_exact(monitor_t *monitor, pending_t *pending, int index) {
 
 				/* Remove from pending list and exit */
 				pending_remove(monitor, index);
-				return;
+				return true;
 			} else {
 				/* Proxy directory created, update pending watch and continue loop */
 				log_message(DEBUG, "Proxy component created, updating pending watch: %s",
@@ -826,14 +826,14 @@ static void process_exact(monitor_t *monitor, pending_t *pending, int index) {
 				if (!pending->next_component) {
 					log_message(ERROR, "Failed to determine next component, removing pending watch");
 					pending_remove(monitor, index);
-					return;
+					return true;
 				}
 
 				/* Add watch on the new parent directory */
 				if (!monitor_path(monitor, pending->current_parent, pending->proxyref)) {
 					log_message(WARNING, "Failed to add watch on new parent: %s", pending->current_parent);
 					pending_remove(monitor, index);
-					return;
+					return true;
 				}
 
 				/* Update parent watcher reference */
@@ -847,6 +847,7 @@ static void process_exact(monitor_t *monitor, pending_t *pending, int index) {
 			break;
 		}
 	}
+	return false;
 }
 
 /* Process pending watches for a given parent path */
@@ -864,9 +865,10 @@ void pending_process(monitor_t *monitor, const char *parent_path) {
 			if (pending->is_glob) {
 				process_glob(monitor, pending);
 			} else {
-				process_exact(monitor, pending, i);
-				/* Reset loop to handle swap-with-last */
-				i = monitor->num_pending;
+				if (process_exact(monitor, pending, i)) {
+					/* Reset loop to handle swap-with-last */
+					i = monitor->num_pending;
+				}
 			}
 		}
 	}
