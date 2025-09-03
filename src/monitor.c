@@ -1587,8 +1587,10 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 		/* Remove subdirectory watchers if this was a recursive directory */
 		watch_t *watch = registry_get(monitor->registry, watcher->watchref);
 		if (watch && watch->target == WATCH_DIRECTORY && watch->recursive) {
-			monitor_prune(monitor, path);
-			i = monitor->num_watches; /* Reset loop since prune modified the array */
+			if (monitor_prune(monitor, path)) {
+				i = monitor->num_watches; /* Reset loop since prune modified the array */
+				continue;
+			}
 		}
 
 		/* Remove from array first, then destroy */
