@@ -253,7 +253,7 @@ int queue_find(queue_t *queue, const char *path) {
 }
 
 /* Add or update an entry in the queue */
-void queue_upsert(queue_t *queue, const char *path, watchref_t watchref, struct timespec next_check) {
+void queue_upsert(queue_t *queue, const char *path, watchref_t watchref, struct timespec next_check, filter_t event_type) {
 	if (!queue || !queue->items || !path || !watchref_valid(watchref)) {
 		log_message(WARNING, "Invalid parameters for queue_upsert");
 		return;
@@ -270,6 +270,9 @@ void queue_upsert(queue_t *queue, const char *path, watchref_t watchref, struct 
 		if (!queue_add(check, watchref)) {
 			log_message(WARNING, "Failed to add watch to existing queue entry for %s", path);
 		}
+
+		/* Aggregate event types */
+		check->aggregated_events |= event_type;
 
 		/* Update check time - always update to the new time */
 		check->next_check = next_check;
@@ -323,6 +326,7 @@ void queue_upsert(queue_t *queue, const char *path, watchref_t watchref, struct 
 
 	queue->items[new_index].path = path_copy;
 	queue->items[new_index].next_check = next_check;
+	queue->items[new_index].aggregated_events = event_type;
 	queue->items[new_index].watchrefs = NULL;
 	queue->items[new_index].num_watches = 0;
 	queue->items[new_index].watches_capacity = 0;

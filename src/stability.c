@@ -66,7 +66,7 @@ subscription_t *stability_root(monitor_t *monitor, subscription_t *subscription)
 }
 
 /* Determine if a command should be executed based on operation type and cooldown */
-bool stability_ready(monitor_t *monitor, subscription_t *subscription, optype_t optype, int cooldown_ms) {
+bool stability_ready(monitor_t *monitor, subscription_t *subscription, optype_t optype, int cooldown_ms, filter_t event_type) {
 	if (!subscription) return false;
 
 	struct timespec current_time;
@@ -96,7 +96,7 @@ bool stability_ready(monitor_t *monitor, subscription_t *subscription, optype_t 
 		log_message(DEBUG, "Directory content change for %s, marked root %s as active",
 					subscription->resource->path, root->resource->path);
 
-		stability_queue(monitor, root);
+		stability_queue(monitor, root, event_type);
 		log_message(DEBUG, "Added directory %s to queued check queue", root->resource->path);
 		return false; /* Decision happens later */
 	}
@@ -122,7 +122,7 @@ bool stability_ready(monitor_t *monitor, subscription_t *subscription, optype_t 
 }
 
 /* Queue a stability check for a directory */
-void stability_queue(monitor_t *monitor, subscription_t *subscription) {
+void stability_queue(monitor_t *monitor, subscription_t *subscription, filter_t event_type) {
 	if (!monitor || !subscription) {
 		log_message(WARNING, "Cannot queue stability check. invalid monitor or subscription");
 		return;
@@ -190,6 +190,9 @@ void stability_queue(monitor_t *monitor, subscription_t *subscription) {
 		/* A check is already pending. Use maximum of locked-in period and new calculation */
 		check_t *check = &monitor->check_queue->items[existing_index];
 
+		/* Aggregate event types from the new event */
+		check->aggregated_events |= event_type;
+
 		/* Add the current watch to the existing check to merge them */
 		watch_t *root_watch = registry_get(monitor->registry, root->watchref);
 		if (!queue_add(check, root->watchref)) {
@@ -249,7 +252,7 @@ void stability_queue(monitor_t *monitor, subscription_t *subscription) {
 		resource_unlock(root->resource);
 		return;
 	}
-	queue_upsert(monitor->check_queue, root->resource->path, root->watchref, next_check);
+	queue_upsert(monitor->check_queue, root->resource->path, root->watchref, next_check, event_type);
 
 	/* Store the calculated quiet period for consistent use */
 	int queue_index = queue_find(monitor->check_queue, root->resource->path);
@@ -618,7 +621,7 @@ bool stability_execute(monitor_t *monitor, check_t *check, subscription_t *root,
 	/* Create a synthetic event to pass to the command execution function */
 	event_t synthetic_event = {
 		.path = (char *) active_path,
-		.type = EVENT_STRUCTURE,
+		.type = check->aggregated_events,
 		.time = root->resource->last_time,
 		.wall_time = root->resource->wall_time,
 		.user_id = getuid(),
@@ -634,6 +637,13 @@ bool stability_execute(monitor_t *monitor, check_t *check, subscription_t *root,
 		if (!watch) {
 			log_message(DEBUG, "Skipping command for stale watch reference: (watch_id=%u, gen=%u)",
 						check->watchrefs[i].watch_id, check->watchrefs[i].generation);
+			continue;
+		}
+
+		/* Filter events that are not part of the watch's mask */
+		if ((watch->filter & synthetic_event.type) == 0) {
+			log_message(DEBUG, "Skipping command for watch '%s', aggregated events do not match watch filter %s",
+						watch->name, filter_to_string(watch->filter));
 			continue;
 		}
 
@@ -976,6 +986,11 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 	/* If commands were executed successfully, reset the stability baseline */
 	if (execution_success && executed_now > 0) {
 		/* Reset the stability baseline after successful command execution */
+		stability_reset(monitor, root);
+	} else if (execution_success && executed_now == 0) {
+		/* Stability confirmed, but no commands run due to filtering, still reset baseline */
+		log_message(DEBUG, "No commands executed for %s due to event filtering, resetting baseline",
+					root->resource->path);
 		stability_reset(monitor, root);
 	}
 

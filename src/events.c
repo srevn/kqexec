@@ -317,7 +317,7 @@ void events_batch(monitor_t *monitor) {
 				if (profile) {
 					for (; profile; profile = profile->next) {
 						if (profile->subscriptions) {
-							stability_ready(monitor, profile->subscriptions, OP_DIR_CONTENT_CHANGED, 0);
+							stability_ready(monitor, profile->subscriptions, OP_DIR_CONTENT_CHANGED, 0, EVENT_STRUCTURE);
 						}
 					}
 				} else {
@@ -1013,19 +1013,17 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 	/* Check if operation is included in watch mask */
 	filter_t filter_for_mask = operation_to_filter(optype);
 	if ((watch->filter & filter_for_mask) == 0) {
-		log_message(DEBUG, "Operation maps to event type %s, which is not in watch mask for %s",
-					filter_to_string(filter_for_mask), watch->name);
-
-		/* If a directory changes, but the event type is not in the mask, we should still reset the baseline */
-		if (root && root->resource->kind == ENTITY_DIRECTORY) {
-			log_message(DEBUG, "Resetting stability baseline for %s due to filtered event", root->resource->path);
-			stability_reset(monitor, root);
+		if (subscription->resource->kind != ENTITY_DIRECTORY) {
+			log_message(DEBUG, "Operation on file %s maps to event type %s, which is not in watch mask for %s",
+						subscription->resource->path, filter_to_string(filter_for_mask), watch->name);
+			return false;
 		}
-		return false;
+		log_message(DEBUG, "Directory operation event type %s is not in watch mask for %s, but proceeding to stability check",
+					filter_to_string(filter_for_mask), watch->name);
 	}
 
 	/* Check cooldown/deferral logic */
-	if (stability_ready(monitor, subscription, optype, command_get_cooldown_time())) {
+	if (stability_ready(monitor, subscription, optype, command_get_cooldown_time(), filter_for_mask)) {
 		/* Execute command immediately (only for non-directory-content changes) */
 		event_t synthetic_event = {
 			.path = subscription->resource->path,

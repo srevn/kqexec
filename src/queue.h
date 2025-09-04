@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 
+#include "config.h"
 #include "registry.h"
 
 /* Queued directory check entry */
@@ -19,6 +20,9 @@ typedef struct check {
 	watchref_t *watchrefs;                 /* Array of watch references for this path */
 	int num_watches;                       /* Number of watches for this path */
 	int watches_capacity;                  /* Allocated capacity for watches array */
+
+	/* Event aggregation */
+	filter_t aggregated_events;            /* Bitmask of event types that triggered this check */
 } check_t;
 
 /* Directory check queue structure */
@@ -39,7 +43,7 @@ void queue_destroy(queue_t *queue);
 
 /* Queue operations */
 int queue_find(queue_t *queue, const char *path);
-void queue_upsert(queue_t *queue, const char *path, watchref_t watchref, struct timespec next_check);
+void queue_upsert(queue_t *queue, const char *path, watchref_t watchref, struct timespec next_check, filter_t event_type);
 void queue_remove(queue_t *queue, const char *path);
 void queue_remove_by_index(queue_t *queue, int index);
 
