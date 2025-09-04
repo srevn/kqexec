@@ -977,11 +977,11 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 
 	/* Execute commands without holding the lock */
 	int executed_now = 0;
-	bool execution_success = stability_execute(monitor, check, root, current_time, &executed_now);
+	stability_execute(monitor, check, root, current_time, &executed_now);
 	commands_executed += executed_now;
 
 	/* Stability confirmed, but no commands run due to filtering, reset baseline */
-	if (execution_success && executed_now == 0) {
+	if (executed_now == 0) {
 		log_message(DEBUG, "No commands executed for %s due to event filtering, resetting baseline",
 					root->resource->path);
 		stability_reset(monitor, root);
