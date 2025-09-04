@@ -544,6 +544,11 @@ void stability_reset(monitor_t *monitor, subscription_t *root) {
 	root->profile->stability->stability_lost = false;
 	root->profile->stability->reference_init = true;
 
+	/* Reset resource change flags */
+	root->resource->structure_changed = false;
+	root->resource->metadata_changed = false;
+	root->resource->content_changed = false;
+
 	/* Re-register file watches that fired during the unstable period */
 	if (root->resource->trackers) {
 		directory_reregister(monitor, root->resource);
