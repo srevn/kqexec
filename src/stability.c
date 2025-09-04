@@ -975,23 +975,16 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 	bool execution_success = stability_execute(monitor, check, root, current_time, &executed_now);
 	commands_executed += executed_now;
 
-	/* Re-acquire mutex to clear executing flag and perform final cleanup */
-	pthread_mutex_lock(&root->resource->mutex);
-
-	/* Clear the executing flag */
-	root->resource->executing = false;
-
-	pthread_mutex_unlock(&root->resource->mutex);
-
-	/* If commands were executed successfully, reset the stability baseline */
-	if (execution_success && executed_now > 0) {
-		/* Reset the stability baseline after successful command execution */
-		stability_reset(monitor, root);
-	} else if (execution_success && executed_now == 0) {
-		/* Stability confirmed, but no commands run due to filtering, still reset baseline */
+	/* Stability confirmed, but no commands run due to filtering, reset baseline */
+	if (execution_success && executed_now == 0) {
 		log_message(DEBUG, "No commands executed for %s due to event filtering, resetting baseline",
 					root->resource->path);
 		stability_reset(monitor, root);
+
+		/* Since no command is running, we need to clear the executing flag here */
+		pthread_mutex_lock(&root->resource->mutex);
+		root->resource->executing = false;
+		pthread_mutex_unlock(&root->resource->mutex);
 	}
 
 	/* Remove check from queue after processing all watches */
