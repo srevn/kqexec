@@ -404,7 +404,6 @@ snapshot_t *snapshot_create(const char *root_path, const watch_t *watch) {
 		qsort(snapshot->entries, snapshot->count, sizeof(entry_t), entry_compare);
 	}
 
-	log_message(DEBUG, "Created snapshot of %s with %d entries", root_path, snapshot->count);
 	return snapshot;
 }
 
