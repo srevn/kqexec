@@ -10,6 +10,7 @@
 /* Forward declarations */
 typedef struct diff diff_t;
 typedef struct monitor monitor_t;
+typedef struct snapshot snapshot_t;
 typedef struct resource resource_t;
 typedef struct subscription subscription_t;
 
@@ -42,6 +43,7 @@ typedef struct event {
 	struct timespec wall_time;             /* Wall clock time (REALTIME for display) */
 	uid_t user_id;                         /* User ID associated with event */
 	diff_t *diff;                          /* Directory snapshot differences */
+	snapshot_t *baseline_snapshot;         /* Snapshot for baseline reset */
 } event_t;
 
 /* Delayed event queue entry */

@@ -21,6 +21,7 @@ static event_t *threads_copy_event(const event_t *event) {
 	copy->wall_time = event->wall_time;
 	copy->user_id = event->user_id;
 	copy->diff = diff_copy(event->diff);
+	copy->baseline_snapshot = event->baseline_snapshot;
 
 	return copy;
 }

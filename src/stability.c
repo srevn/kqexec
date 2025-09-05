@@ -479,7 +479,7 @@ bool stability_stable(subscription_t *root, const stats_t *current_stats, bool s
 }
 
 /* Reset stability tracking to establish a new baseline */
-void stability_reset(monitor_t *monitor, subscription_t *root) {
+void stability_reset(monitor_t *monitor, subscription_t *root, snapshot_t *baseline_snapshot) {
 	if (!monitor || !root || !root->profile || !root->resource) return;
 
 	/* Only process directories with stability tracking */
@@ -511,17 +511,36 @@ void stability_reset(monitor_t *monitor, subscription_t *root) {
 
 	/* Reset baseline snapshot for accurate change detection (only if profile needs snapshots) */
 	if (profile_snapshot(root->profile, monitor->registry)) {
-		snapshot_t *new_snapshot = snapshot_create(root->resource->path, watch);
+		snapshot_t *new_snapshot = NULL;
+
+		if (baseline_snapshot) {
+			/* Use provided snapshot (ownership transferred) */
+			new_snapshot = baseline_snapshot;
+			log_message(DEBUG, "Using provided snapshot for %s with %d entries",
+						root->resource->path, new_snapshot->count);
+		} else {
+			/* Create new snapshot as before */
+			new_snapshot = snapshot_create(root->resource->path, watch);
+			if (new_snapshot) {
+				log_message(DEBUG, "Created new baseline snapshot for %s with %d entries",
+							root->resource->path, new_snapshot->count);
+			} else {
+				log_message(WARNING, "Failed to create new baseline snapshot for %s, using old baseline",
+							root->resource->path);
+			}
+		}
+
 		if (new_snapshot) {
 			snapshot_destroy(root->profile->baseline_snapshot);
 			root->profile->baseline_snapshot = new_snapshot;
-			log_message(DEBUG, "Created new baseline snapshot for %s with %d entries",
-						root->resource->path, root->profile->baseline_snapshot->count);
-		} else {
-			log_message(WARNING, "Failed to create new baseline snapshot for %s, using old baseline",
-						root->resource->path);
 		}
 	} else {
+		/* Clean up provided snapshot if not needed */
+		if (baseline_snapshot) {
+			log_message(DEBUG, "Destroying unneeded provided snapshot for %s", root->resource->path);
+			snapshot_destroy(baseline_snapshot);
+		}
+
 		/* Ensure baseline snapshot is cleared if profile doesn't need snapshots */
 		if (root->profile->baseline_snapshot) {
 			log_message(DEBUG, "Destroying unneeded baseline snapshot for %s", root->resource->path);
@@ -630,7 +649,8 @@ bool stability_execute(monitor_t *monitor, check_t *check, subscription_t *root,
 		.time = root->resource->last_time,
 		.wall_time = root->resource->wall_time,
 		.user_id = getuid(),
-		.diff = diff};
+		.diff = diff,
+		.baseline_snapshot = current_snapshot};
 
 	/* Set the executing flag for the root resource before starting any commands */
 	root->resource->executing = true;
@@ -674,7 +694,7 @@ bool stability_execute(monitor_t *monitor, check_t *check, subscription_t *root,
 		if (cooldown_ms > 0 && elapsed_command < cooldown_ms && subscription->command_time != 0) {
 			log_message(DEBUG, "Command execution blocked by cooldown for %s (watch: %s), resetting baseline",
 						check->path, watch->name);
-			stability_reset(monitor, root);
+			stability_reset(monitor, root, NULL);
 			continue; /* Skip this command execution */
 		}
 
@@ -693,8 +713,10 @@ bool stability_execute(monitor_t *monitor, check_t *check, subscription_t *root,
 		*commands_executed = executed_count;
 	}
 
-	/* Clean up snapshots after command execution */
-	snapshot_destroy(current_snapshot);
+	/* Destroy snapshot if no commands were executed */
+	if (executed_count == 0 && current_snapshot) {
+		snapshot_destroy(current_snapshot);
+	}
 	diff_destroy(diff);
 
 	return executed_count > 0;
@@ -957,7 +979,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 		pthread_mutex_unlock(&root->resource->mutex);
 
 		/* Reset the stability baseline to this new state */
-		stability_reset(monitor, root);
+		stability_reset(monitor, root, NULL);
 
 		/* Clean up the queue and do not execute the command */
 		queue_remove(monitor->check_queue, check->path);
@@ -984,7 +1006,7 @@ void stability_process(monitor_t *monitor, struct timespec *current_time) {
 	if (executed_now == 0) {
 		log_message(DEBUG, "No commands executed for %s due to event filtering, resetting baseline",
 					root->resource->path);
-		stability_reset(monitor, root);
+		stability_reset(monitor, root, NULL);
 
 		/* Since no command is running, we need to clear the executing flag here */
 		pthread_mutex_lock(&root->resource->mutex);

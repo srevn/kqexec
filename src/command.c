@@ -950,7 +950,7 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 			/* Clear executing flag on the root to allow new events for the entire watch */
 			executing_resource->executing = false;
 			/* Reset directory baseline to accept command result as new authoritative state */
-			stability_reset(monitor, root ? root : subscription);
+			stability_reset(monitor, root ? root : subscription, event->baseline_snapshot);
 
 			/* Process next deferred event, if any */
 			resource_lock(executing_resource);

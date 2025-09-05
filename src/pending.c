@@ -567,7 +567,8 @@ static void pending_event(monitor_t *monitor, watchref_t watchref, const char *p
 		.time = current_time,
 		.wall_time = {0},
 		.user_id = getuid(),
-		.diff = NULL};
+		.diff = NULL,
+		.baseline_snapshot = NULL};
 
 	clock_gettime(CLOCK_REALTIME, &promotion_event.wall_time);
 

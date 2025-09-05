@@ -65,6 +65,6 @@ bool stability_stable(subscription_t *root, const stats_t *current_stats, bool s
 
 /* Command execution */
 bool stability_execute(monitor_t *monitor, check_t *check, subscription_t *root, struct timespec *current_time, int *commands_executed);
-void stability_reset(monitor_t *monitor, subscription_t *root);
+void stability_reset(monitor_t *monitor, subscription_t *root, snapshot_t *baseline_snapshot);
 
 #endif /* STABILITY_H */

@@ -241,7 +241,9 @@ void events_deferred(monitor_t *monitor, resource_t *resource) {
 			.type = deferred_group->events_aggregated,
 			.time = deferred_group->latest_time,
 			.wall_time = deferred_group->latest_wall,
-			.user_id = deferred_group->user_id};
+			.user_id = deferred_group->user_id,
+			.diff = NULL,
+			.baseline_snapshot = NULL};
 
 		/* Delegate to events_process() for consistent handling */
 		events_process(monitor, deferred_group->watchref, &aggregated_event, deferred_group->kind, true);
@@ -1030,7 +1032,9 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 			.type = filter_for_mask,
 			.time = subscription->resource->last_time,
 			.wall_time = subscription->resource->wall_time,
-			.user_id = event->user_id};
+			.user_id = event->user_id,
+			.diff = NULL,
+			.baseline_snapshot = NULL};
 
 		log_message(INFO, "Executing command for %s (watch: %s, operation: %d)", subscription->resource->path,
 					watch->name, optype);
