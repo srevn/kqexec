@@ -850,6 +850,29 @@ bool config_snapshot(const watch_t *watch) {
 		}
 	}
 
+	/* Check for template-based diff array placeholders */
+	if (strstr(watch->command, "%[")) {
+		/* Look for diff array templates like %[created:%s], %[modified:%s], etc. */
+		const char *template_arrays[] = {
+			"%[created",
+			"%[deleted", 
+			"%[modified",
+			"%[renamed",
+			"%[changed",
+			"%[created_base",
+			"%[deleted_base",
+			"%[modified_base", 
+			"%[renamed_base",
+			"%[changed_base",
+			NULL};
+
+		for (int i = 0; template_arrays[i]; i++) {
+			if (strstr(watch->command, template_arrays[i])) {
+				return true;
+			}
+		}
+	}
+
 	return false;
 }
 

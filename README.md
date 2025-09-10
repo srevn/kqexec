@@ -202,6 +202,56 @@ Commands can include the following placeholders that will be replaced at runtime
 - `%t` : Time of the event (format: YYYY-MM-DD HH:MM:SS)
 - `%u` : User who triggered the event
 - `%e` : Event type which occurred
+- `%x` : Exclusion patterns as comma-separated list (e.g., '*.txt','dir3','dir4')
+
+**Note**: Placeholders marked with *[directory watches only]* require filesystem snapshots to track changes. These placeholders automatically enable snapshot functionality for directory watches.
+
+### Array Template Placeholders
+
+For advanced formatting of array data, you can use template placeholders that apply a format string to each array element:
+
+**Syntax**: `%[array_name:template]`
+
+Where:
+- `array_name` is the name of the array (see available arrays below)
+- `template` is a format string with `%s` placeholder for each item
+
+**Available Arrays**:
+- `exclude` : Exclusion patterns from the `exclude` configuration option
+- `created` : Files/directories that were created (directory watches only)
+- `deleted` : Files/directories that were deleted (directory watches only)
+- `modified` : Files that were modified (directory watches only)
+- `renamed` : Files/directories that were renamed/moved (directory watches only)
+- `changed` : All changed items (created + deleted + modified + renamed)
+- `created_base` : Created items with basename only
+- `deleted_base` : Deleted items with basename only
+- `modified_base` : Modified items with basename only
+- `renamed_base` : Renamed items with basename only
+- `changed_base` : All changed items with basename only
+
+**Examples**:
+
+```ini
+# Multiple --exclude parameters for rsync
+command = rsync -av %[exclude:--exclude=%s] %b/ /backup/
+# Expands to: rsync -av --exclude='*.tmp' --exclude='cache/' /path/ /backup/
+
+# Git add only created and modified files
+command = git add %[created:%s] %[modified:%s]
+# Expands to: git add 'file1.txt' 'file2.txt' 'modified.txt' 'updated.txt'
+
+# Process only modified files with basename
+command = %[modified_base:process_file.sh %s;]
+# Expands to: process_file.sh file1.txt; process_file.sh file2.txt;
+
+# Custom JSON format for file changes
+command = echo '{"created":[%[created:"%s"]], "modified":[%[modified:"%s"]]}'
+
+# Log all changes to a file
+command = echo "Changes at $(date): %[changed:%s]" >> /var/log/changes.log
+```
+
+Template placeholders are more powerful than basic placeholders (like `%x`, `%created`) when you need specific formatting for different tools or commands.
 
 ### Environment Variables
 
@@ -219,6 +269,7 @@ In addition to command placeholders, kqexec can optionally set environment varia
 - `KQ_CHANGED` : Newline-separated list of all changes
 - `KQ_CREATED` : Newline-separated list of items created
 - `KQ_DELETED` : Newline-separated list of items deleted
+- `KQ_EXCLUDE` : Comma-separated list of exclusion patterns (e.g., '*.txt','dir3','dir4')
 - `KQ_RENAMED` : Newline-separated list of items renamed
 - `KQ_MODIFIED` : Newline-separated list of items modified
 - `KQ_VAR_*` : Global variables from `[Variables]` section (e.g., `KQ_VAR_PROJECT_ROOT`)

@@ -143,9 +143,7 @@ static char *command_escape_list(const char *paths) {
 			}
 
 			/* Add newline separator if not first */
-			if (!first) {
-				result[result_len++] = '\n';
-			}
+			if (!first) result[result_len++] = '\n';
 
 			/* Copy escaped path */
 			strcpy(result + result_len, escaped);
@@ -159,6 +157,38 @@ static char *command_escape_list(const char *paths) {
 
 	free(paths_copy);
 	return result;
+}
+
+/* Helper to create array with basename extraction for template processing */
+static const char **command_prepare_diff_array(char **source_array, int count, bool basename_only, int *out_count) {
+	if (!source_array || count <= 0) {
+		*out_count = 0;
+		return NULL;
+	}
+
+	/* For full paths, return the source array directly */
+	if (!basename_only) {
+		*out_count = count;
+		return (const char **)source_array;
+	}
+
+	/* For basenames, we need to create a temporary array of pointers */
+	const char **basename_array = malloc(count * sizeof(char *));
+	if (!basename_array) {
+		*out_count = 0;
+		return NULL;
+	}
+
+	int valid_count = 0;
+	for (int i = 0; i < count; i++) {
+		if (!source_array[i]) continue;
+
+		const char *basename = strrchr(source_array[i], '/');
+		basename_array[valid_count++] = basename ? basename + 1 : source_array[i];
+	}
+
+	*out_count = valid_count;
+	return basename_array;
 }
 
 /* Helper function to substitute a placeholder in a string with dynamic allocation */
@@ -210,6 +240,65 @@ static char *command_substitute(const char *input, const char *placeholder, cons
 	return result;
 }
 
+/* Format string array by applying a template to each item with optional separator */
+static char *command_format_array(const char *const *strings, int count, const char *template, const char *separator) {
+	if (!strings || count == 0) return strdup("");
+
+	/* Start with a reasonable buffer size */
+	size_t result_capacity = 4096;
+	char *result = malloc(result_capacity);
+	if (!result) return NULL;
+
+	result[0] = '\0';
+	size_t result_len = 0;
+	size_t separator_len = separator ? strlen(separator) : 0;
+	int items_added = 0;
+
+	for (int i = 0; i < count; i++) {
+		if (!strings[i]) continue;
+
+		/* Substitute the raw item into the template - template handles escaping */
+		char *formatted_item = command_substitute(template, "%s", strings[i]);
+
+		if (!formatted_item) {
+			free(result);
+			return NULL;
+		}
+
+		size_t formatted_len = strlen(formatted_item);
+		/* +separator_len if not first, +1 for null terminator */
+		size_t needed = result_len + (items_added > 0 ? separator_len : 0) + formatted_len + 1;
+
+		/* Grow buffer if needed */
+		if (needed > result_capacity) {
+			size_t new_capacity = needed * 2;
+			char *new_result = realloc(result, new_capacity);
+			if (!new_result) {
+				free(formatted_item);
+				free(result);
+				return NULL;
+			}
+			result = new_result;
+			result_capacity = new_capacity;
+		}
+
+		/* Add separator if not first and separator is specified */
+		if (items_added > 0 && separator) {
+			memcpy(result + result_len, separator, separator_len);
+			result_len += separator_len;
+		}
+
+		/* Copy formatted item */
+		strcpy(result + result_len, formatted_item);
+		result_len += formatted_len;
+
+		free(formatted_item);
+		items_added++;
+	}
+
+	return result;
+}
+
 /* Helper function to update command string with substitution */
 static bool command_update(char **result, const char *placeholder, const char *value) {
 	char *new_result = command_substitute(*result, placeholder, value);
@@ -238,6 +327,10 @@ static bool command_update(char **result, const char *placeholder, const char *v
  * %t: Time of the event (format: YYYY-MM-DD HH:MM:SS)
  * %u: User who triggered the event
  * %e: Event type which occurred
+ * %x: Exclusion patterns as comma-separated list (format: '*.txt','dir3','dir4')
+ * %[array:template]: Template-based array formatting (e.g., %[exclude:--exclude=%s])
+ *   - array: "exclude" for exclusion patterns
+ *   - template: format string with %s placeholder for each item
  */
 char *command_placeholders(monitor_t *monitor, const char *command, watchref_t watchref, const event_t *event) {
 	char *result;
@@ -259,6 +352,210 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 	if (result == NULL) {
 		log_message(ERROR, "Failed to allocate memory for command");
 		return NULL;
+	}
+
+	/* Handle formatted array placeholders like %[exclude:--exclude=%s] */
+	while (true) {
+		char *pattern_start = strstr(result, "%[");
+		if (!pattern_start) break;
+
+		char *array_name_start = pattern_start + 2;
+		char *template_start = strchr(array_name_start, ':');
+		if (!template_start) break;
+
+		char *pattern_end = strchr(template_start, ']');
+		if (!pattern_end) break;
+
+		/* Extract array name */
+		size_t array_name_len = template_start - array_name_start;
+		char *array_name = malloc(array_name_len + 1);
+		if (!array_name) {
+			log_message(ERROR, "Failed to allocate memory for array name in placeholder");
+			free(result);
+			return NULL;
+		}
+		strncpy(array_name, array_name_start, array_name_len);
+		array_name[array_name_len] = '\0';
+
+		/* Extract template */
+		size_t template_len = pattern_end - (template_start + 1);
+		char *template = malloc(template_len + 1);
+		if (!template) {
+			log_message(ERROR, "Failed to allocate memory for template in placeholder");
+			free(array_name);
+			free(result);
+			return NULL;
+		}
+		strncpy(template, template_start + 1, template_len);
+		template[template_len] = '\0';
+
+		/* Construct the full placeholder string for replacement */
+		size_t placeholder_len = pattern_end - pattern_start + 1;
+		char *placeholder = malloc(placeholder_len + 1);
+		if (!placeholder) {
+			log_message(ERROR, "Failed to allocate memory for placeholder string");
+			free(array_name);
+			free(template);
+			free(result);
+			return NULL;
+		}
+		strncpy(placeholder, pattern_start, placeholder_len);
+		placeholder[placeholder_len] = '\0';
+
+		char *replacement = NULL;
+		if (strcmp(array_name, "exclude") == 0) {
+			replacement = (watch && watch->exclude && watch->num_exclude > 0) ?
+				command_format_array((const char *const *)watch->exclude, watch->num_exclude, template, " ") :
+				strdup("");
+		} else if (watch->target == WATCH_DIRECTORY && event->diff) {
+			/* Handle diff-based arrays for directory watches */
+			const char **array_data = NULL;
+			int array_count = 0;
+			bool basename_only = false;
+			bool is_diff_array = true;
+
+			/* Create base array name (without _base suffix) for matching */
+			char *base_array_name = array_name;
+			char *base_suffix = strstr(array_name, "_base");
+			if (base_suffix) {
+				basename_only = true;
+				size_t base_len = base_suffix - array_name;
+				base_array_name = malloc(base_len + 1);
+				if (!base_array_name) {
+					log_message(ERROR, "Failed to allocate memory for base array name");
+					replacement = strdup("");
+					is_diff_array = false;
+				} else {
+					strncpy(base_array_name, array_name, base_len);
+					base_array_name[base_len] = '\0';
+				}
+			}
+
+			/* Match diff array types */
+			if (is_diff_array) {
+				if (strcmp(base_array_name, "created") == 0) {
+					array_data = command_prepare_diff_array(event->diff->created, event->diff->created_count, basename_only, &array_count);
+				} else if (strcmp(base_array_name, "deleted") == 0) {
+					array_data = command_prepare_diff_array(event->diff->deleted, event->diff->deleted_count, basename_only, &array_count);
+				} else if (strcmp(base_array_name, "modified") == 0) {
+					array_data = command_prepare_diff_array(event->diff->modified, event->diff->modified_count, basename_only, &array_count);
+				} else if (strcmp(base_array_name, "renamed") == 0) {
+					array_data = command_prepare_diff_array(event->diff->renamed, event->diff->renamed_count, basename_only, &array_count);
+				} else if (strcmp(base_array_name, "changed") == 0) {
+					/* For 'changed', we need to combine all arrays */
+					int total_count = event->diff->created_count + event->diff->deleted_count + 
+					                  event->diff->modified_count + event->diff->renamed_count;
+					
+					if (total_count > 0) {
+						/* Allocate combined array */
+						const char **combined_array = malloc(total_count * sizeof(char *));
+						if (!combined_array) {
+							log_message(ERROR, "Failed to allocate memory for combined changed array");
+							replacement = strdup("");
+							is_diff_array = false;
+						} else {
+							int index = 0;
+							
+							/* Add all change types to combined array */
+							for (int i = 0; i < event->diff->created_count; i++) {
+								if (event->diff->created[i]) {
+									if (basename_only) {
+										const char *basename = strrchr(event->diff->created[i], '/');
+										combined_array[index++] = basename ? basename + 1 : event->diff->created[i];
+									} else {
+										combined_array[index++] = event->diff->created[i];
+									}
+								}
+							}
+							
+							for (int i = 0; i < event->diff->deleted_count; i++) {
+								if (event->diff->deleted[i]) {
+									if (basename_only) {
+										const char *basename = strrchr(event->diff->deleted[i], '/');
+										combined_array[index++] = basename ? basename + 1 : event->diff->deleted[i];
+									} else {
+										combined_array[index++] = event->diff->deleted[i];
+									}
+								}
+							}
+							
+							for (int i = 0; i < event->diff->modified_count; i++) {
+								if (event->diff->modified[i]) {
+									if (basename_only) {
+										const char *basename = strrchr(event->diff->modified[i], '/');
+										combined_array[index++] = basename ? basename + 1 : event->diff->modified[i];
+									} else {
+										combined_array[index++] = event->diff->modified[i];
+									}
+								}
+							}
+							
+							for (int i = 0; i < event->diff->renamed_count; i++) {
+								if (event->diff->renamed[i]) {
+									if (basename_only) {
+										const char *basename = strrchr(event->diff->renamed[i], '/');
+										combined_array[index++] = basename ? basename + 1 : event->diff->renamed[i];
+									} else {
+										combined_array[index++] = event->diff->renamed[i];
+									}
+								}
+							}
+							
+							array_data = combined_array;
+							array_count = index;
+						}
+					} else {
+						/* Empty array */
+						array_data = NULL;
+						array_count = 0;
+					}
+				} else {
+					is_diff_array = false;
+				}
+
+				/* Process the array if we found one */
+				if (is_diff_array && array_data) {
+					replacement = command_format_array(array_data, array_count, template, " ");
+					
+					/* Free allocated arrays */
+					if (strcmp(base_array_name, "changed") == 0) {
+						/* Always free the combined array since we always allocate it */
+						free((void*)array_data);
+					} else if (basename_only) {
+						/* Free basename array if we allocated one for individual arrays */
+						free((void*)array_data);
+					}
+				} else if (is_diff_array) {
+					replacement = strdup(""); /* Empty array */
+				}
+
+				/* Free base_array_name if we allocated it */
+				if (base_suffix && base_array_name != array_name) {
+					free(base_array_name);
+				}
+			}
+		} 
+		
+		if (!replacement) {
+			log_message(WARNING, "Unsupported array name in placeholder: %s", array_name);
+			replacement = strdup("");
+		}
+
+		if (replacement) {
+			if (!command_update(&result, placeholder, replacement)) {
+				free(replacement);
+				free(array_name);
+				free(template);
+				free(placeholder);
+				/* command_update frees the old result, so we just return NULL */
+				return NULL;
+			}
+			free(replacement);
+		}
+
+		free(array_name);
+		free(template);
+		free(placeholder);
 	}
 
 	/* Substitute new snapshot-based placeholders first to avoid substring conflicts */
@@ -533,6 +830,22 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 	event_str = (char *) filter_to_string(event->type);
 	if (!command_update(&result, "%e", event_str)) return NULL;
 
+	/* Substitute %x with the exclusion patterns */
+	if (strstr(result, "%x")) {
+		char *escaped_exclusions = (watch && watch->exclude && watch->num_exclude > 0) ?
+			command_format_array((const char *const *)watch->exclude, watch->num_exclude, "'%s'", ",") :
+			strdup("");
+		if (escaped_exclusions) {
+			if (!command_update(&result, "%x", escaped_exclusions)) {
+				free(escaped_exclusions);
+				return NULL;
+			}
+			free(escaped_exclusions);
+		} else {
+			if (!command_update(&result, "%x", "")) return NULL;
+		}
+	}
+
 	return result;
 }
 
@@ -706,6 +1019,15 @@ void command_environment(monitor_t *monitor, watchref_t watchref, const event_t 
 			}
 		}
 		log_message(DEBUG, "Set %d global variables as environment variables", config->num_variables);
+	}
+
+	/* KQ_EXCLUDE - comma-separated list of exclusion patterns */
+	char *escaped_exclusions = (watch && watch->exclude && watch->num_exclude > 0) ?
+		command_format_array((const char *const *)watch->exclude, watch->num_exclude, "'%s'", ",") :
+		strdup("");
+	if (escaped_exclusions) {
+		setenv("KQ_EXCLUDE", escaped_exclusions, 1);
+		free(escaped_exclusions);
 	}
 }
 
