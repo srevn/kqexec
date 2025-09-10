@@ -1,6 +1,7 @@
 #include "protocol.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,6 +12,41 @@
 #include "logger.h"
 #include "monitor.h"
 #include "registry.h"
+#include "utilities.h"
+
+/* Parse duration string (e.g., "5s", "10m", "1h") into milliseconds */
+static long protocol_duration(const char *duration) {
+	if (!duration) return -1;
+
+	char *endptr;
+	long value = strtol(duration, &endptr, 10);
+
+	/* Check for parsing errors or invalid values */
+	if (endptr == duration || value <= 0 || value > 86400) {
+		return -1; /* Reject negative, zero, or values over 24 hours */
+	}
+
+	/* Determine multiplier based on suffix (s, m, h) */
+	long multiplier = 1; /* Default to milliseconds */
+	if (*endptr != '\0') {
+		if (strcasecmp(endptr, "s") == 0) {
+			multiplier = 1000;
+		} else if (strcasecmp(endptr, "m") == 0) {
+			multiplier = 1000 * 60;
+		} else if (strcasecmp(endptr, "h") == 0) {
+			multiplier = 1000 * 60 * 60;
+		} else if (strcasecmp(endptr, "ms") != 0) {
+			return -1; /* Invalid unit */
+		}
+	}
+
+	/* Check for overflow before multiplication */
+	if (value > LONG_MAX / multiplier) {
+		return -1; /* Would overflow */
+	}
+
+	return value * multiplier;
+}
 
 /* Initialize a new string builder */
 static bool builder_init(builder_t *b, size_t initial_capacity) {
@@ -535,6 +571,7 @@ static protocol_t protocol_status(monitor_t *monitor, const char *command_text) 
 	array_t *active_names = array_init(8);
 	array_t *disabled_names = array_init(8);
 	array_t *pending_names = array_init(4);
+	array_t *suppressed_names = array_init(4);
 	int pending_count = monitor->num_pending;
 
 	/* Categorize watches by their state, excluding internal watches */
@@ -558,6 +595,24 @@ static protocol_t protocol_status(monitor_t *monitor, const char *command_text) 
 				is_pending = true;
 				break;
 			}
+		}
+
+		/* Check if watch is suppressed */
+		bool is_suppressed = false;
+		if (watch->suppressed.tv_sec > 0) {
+			struct timespec current_time;
+			clock_gettime(CLOCK_MONOTONIC, &current_time);
+			if (timespec_before(&current_time, &watch->suppressed)) {
+				is_suppressed = true;
+			}
+		}
+
+		/* Suppressed watches are handled separately */
+		if (is_suppressed) {
+			if (!array_has(suppressed_names, watch->name)) {
+				array_add(suppressed_names, strdup(watch->name));
+			}
+			continue;
 		}
 
 		/* Only count non-pending watches in active/disabled */
@@ -604,14 +659,16 @@ static protocol_t protocol_status(monitor_t *monitor, const char *command_text) 
 	result.success = true;
 
 	/* Provide structured data */
-	char active_counter[16], disabled_counter[16], pending_counter[16];
+	char active_counter[16], disabled_counter[16], pending_counter[16], suppressed_counter[16];
 	snprintf(active_counter, sizeof(active_counter), "%d", active_names->count);
 	snprintf(disabled_counter, sizeof(disabled_counter), "%d", disabled_names->count);
 	snprintf(pending_counter, sizeof(pending_counter), "%d", pending_names->count);
+	snprintf(suppressed_counter, sizeof(suppressed_counter), "%d", suppressed_names->count);
 
 	protocol_data(&result, "active_count", active_counter);
 	protocol_data(&result, "disabled_count", disabled_counter);
 	protocol_data(&result, "pending_count", pending_counter);
+	protocol_data(&result, "suppressed_count", suppressed_counter);
 
 	/* Build comma-separated lists for names and paths */
 	if (active_names->count > 0) {
@@ -636,6 +693,17 @@ static protocol_t protocol_status(monitor_t *monitor, const char *command_text) 
 		builder_free(&disabled_list);
 	}
 
+	if (suppressed_names->count > 0) {
+		builder_t suppressed_list;
+		builder_init(&suppressed_list, 256);
+		for (int i = 0; i < suppressed_names->count; i++) {
+			if (i > 0) builder_append(&suppressed_list, ", ");
+			builder_append(&suppressed_list, "%s", suppressed_names->items[i]);
+		}
+		protocol_data(&result, "suppressed_names", suppressed_list.data);
+		builder_free(&suppressed_list);
+	}
+
 	if (pending_names->count > 0) {
 		builder_t pending_list;
 		builder_init(&pending_list, 256);
@@ -653,6 +721,7 @@ static protocol_t protocol_status(monitor_t *monitor, const char *command_text) 
 	array_free(active_names);
 	array_free(disabled_names);
 	array_free(pending_names);
+	array_free(suppressed_names);
 
 	return result;
 }
@@ -691,7 +760,22 @@ static protocol_t protocol_list(monitor_t *monitor, const char *command_text) {
 		array_add(processed_names, strdup(watch->name));
 
 		/* Extract watch information */
-		const char *status = watch->enabled ? "Active" : "Disabled";
+		const char *status;
+		bool is_suppressed = false;
+		if (watch->suppressed.tv_sec > 0) {
+			struct timespec current_time;
+			clock_gettime(CLOCK_MONOTONIC, &current_time);
+			if (timespec_before(&current_time, &watch->suppressed)) {
+				is_suppressed = true;
+			}
+		}
+
+		if (is_suppressed) {
+			status = "Suppressed";
+		} else {
+			status = watch->enabled ? "Active" : "Disabled";
+		}
+
 		const char *events_str = filter_to_string(watch->filter);
 		const char *path = watch->path ? watch->path : "N/A";
 
@@ -724,6 +808,78 @@ static protocol_t protocol_list(monitor_t *monitor, const char *command_text) {
 
 	result.success = true;
 
+	return result;
+}
+
+/* Suppress events for a watch for a specified duration */
+static protocol_t protocol_suppress(monitor_t *monitor, const char *command_text) {
+	protocol_t result;
+	protocol_init(&result);
+
+	char *watch_name = kv_value(command_text, "watch");
+	char *duration = kv_value(command_text, "duration");
+
+	if (!watch_name || !duration) {
+		result.success = false;
+		result.message = strdup("Missing 'watch' or 'duration' for suppress command");
+		free(watch_name);
+		free(duration);
+		return result;
+	}
+
+	long duration_ms = protocol_duration(duration);
+	if (duration_ms < 0) {
+		result.success = false;
+		result.message = strdup("Invalid duration format for suppress command");
+		free(watch_name);
+		free(duration);
+		return result;
+	}
+
+	watchref_t watchref = registry_find(monitor->registry, watch_name);
+	if (!watchref_valid(watchref)) {
+		result.success = false;
+		size_t msg_len = strlen("Watch '' not found") + strlen(watch_name) + 1;
+		result.message = malloc(msg_len);
+		if (result.message) {
+			snprintf(result.message, msg_len, "Watch '%s' not found", watch_name);
+		}
+		free(watch_name);
+		free(duration);
+		return result;
+	}
+
+	watch_t *watch = registry_get(monitor->registry, watchref);
+	if (!watch) {
+		result.success = false;
+		size_t msg_len = strlen("Failed to get watch ''") + strlen(watch_name) + 1;
+		result.message = malloc(msg_len);
+		if (result.message) {
+			snprintf(result.message, msg_len, "Failed to get watch '%s'", watch_name);
+		}
+		free(watch_name);
+		free(duration);
+		return result;
+	}
+
+	/* Calculate suppression end time and apply it to the watch */
+	struct timespec current_time;
+	clock_gettime(CLOCK_MONOTONIC, &current_time);
+	watch->suppressed = current_time;
+	timespec_add(&watch->suppressed, duration_ms);
+
+	log_message(INFO, "Suppressing events for watch '%s' for %ld ms", watch->name, duration_ms);
+
+	result.success = true;
+	protocol_data(&result, "response_type", "suppress");
+	protocol_data(&result, "watch_name", watch_name);
+
+	char duration_ms_val[32];
+	snprintf(duration_ms_val, sizeof(duration_ms_val), "%ld", duration_ms);
+	protocol_data(&result, "duration_ms", duration_ms_val);
+
+	free(watch_name);
+	free(duration);
 	return result;
 }
 
@@ -787,6 +943,8 @@ protocol_t protocol_process(monitor_t *monitor, const char *command_text) {
 		result = protocol_list(monitor, command_text);
 	} else if (strcmp(command, "reload") == 0) {
 		result = protocol_reload(monitor, command_text);
+	} else if (strcmp(command, "suppress") == 0) {
+		result = protocol_suppress(monitor, command_text);
 	} else {
 		result.success = false;
 		size_t msg_len = strlen("Unknown command: ") + strlen(command) + 1;

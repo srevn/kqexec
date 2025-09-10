@@ -655,6 +655,26 @@ bool stability_execute(monitor_t *monitor, check_t *check, subscription_t *root,
 	/* Set the executing flag for the root resource before starting any commands */
 	root->resource->executing = true;
 
+	/* Check for any expired suppressions and reset stability once if needed */
+	bool need_stability_reset = false;
+	for (int i = 0; i < check->num_watches; i++) {
+		watch_t *watch = registry_get(monitor->registry, check->watchrefs[i]);
+		if (watch && watch->suppressed.tv_sec > 0) {
+			struct timespec current_time;
+			clock_gettime(CLOCK_MONOTONIC, &current_time);
+			if (!timespec_before(&current_time, &watch->suppressed)) {
+				log_message(INFO, "Suppression for watch '%s' expired.", watch->name);
+				watch->suppressed = (struct timespec){0};
+				need_stability_reset = true;
+			}
+		}
+	}
+
+	if (need_stability_reset) {
+		log_message(DEBUG, "Resetting stability baseline due to expired suppressions");
+		stability_reset(monitor, root, NULL);
+	}
+
 	/* Execute commands for all watches associated with the stability check */
 	for (int i = 0; i < check->num_watches; i++) {
 		watch_t *watch = registry_get(monitor->registry, check->watchrefs[i]);
@@ -663,6 +683,16 @@ bool stability_execute(monitor_t *monitor, check_t *check, subscription_t *root,
 			log_message(DEBUG, "Skipping command for stale watch reference: (watch_id=%u, gen=%u)",
 						check->watchrefs[i].watch_id, check->watchrefs[i].generation);
 			continue;
+		}
+
+		/* Check if the watch is suppressed */
+		if (watch->suppressed.tv_sec > 0) {
+			struct timespec current_time;
+			clock_gettime(CLOCK_MONOTONIC, &current_time);
+			if (timespec_before(&current_time, &watch->suppressed)) {
+				log_message(INFO, "Command execution for watch '%s' suppressed", watch->name);
+				continue; /* Skip command execution */
+			}
 		}
 
 		/* Filter events that are not part of the watch's mask */

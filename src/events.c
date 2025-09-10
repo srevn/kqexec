@@ -1036,6 +1036,19 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 			.diff = NULL,
 			.baseline_snapshot = NULL};
 
+		/* Check if the watch is suppressed */
+		if (watch->suppressed.tv_sec > 0) {
+			struct timespec current_time;
+			clock_gettime(CLOCK_MONOTONIC, &current_time);
+			if (timespec_before(&current_time, &watch->suppressed)) {
+				log_message(INFO, "Command execution for watch '%s' suppressed", watch->name);
+				return false; /* Do not execute command */
+			} else {
+				log_message(INFO, "Suppression for watch '%s' expired", watch->name);
+				watch->suppressed = (struct timespec) {0};
+			}
+		}
+
 		log_message(INFO, "Executing command for %s (watch: %s, operation: %d)", subscription->resource->path,
 					watch->name, optype);
 

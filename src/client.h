@@ -6,10 +6,11 @@
 /* Client command types */
 typedef enum command {
 	CMD_DISABLE,                           /* Temporarily disable specified watches */
-	CMD_ENABLE,                            /* Re-enable previously disabled watches */  
+	CMD_ENABLE,                            /* Re-enable previously disabled watches */
 	CMD_STATUS,                            /* Show status of current watches */
 	CMD_LIST,                              /* List all configured watches */
-	CMD_RELOAD                             /* Reload configuration from file */
+	CMD_RELOAD,                            /* Reload configuration from file */
+	CMD_SUPPRESS                           /* Suppress a watch for a given duration */
 } command_t;
 
 /* Client command-line options */
@@ -21,6 +22,9 @@ typedef struct options {
 	/* Watch selection */
 	int num_watches;                       /* Number of watches in array */
 	char **watch_names;                    /* Array of specific watch names to target */
+
+	/* Suppress command argument */
+	char *suppress;                        /* Argument for command suppression */
 } options_t;
 
 /* Client mode entry point */

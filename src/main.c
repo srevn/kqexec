@@ -41,6 +41,7 @@ static void print_usage(void) {
 	fprintf(stderr, "  --status                 Show status of current watches\n");
 	fprintf(stderr, "  --list                   List all configured watches\n");
 	fprintf(stderr, "  --reload                 Reload configuration from file\n");
+	fprintf(stderr, "  --suppress=WATCH:DUR     Temporarily suppress watch events\n");
 	fprintf(stderr, "  --socket=PATH            Socket path to connect to (default: %s)\n", DEFAULT_SOCKET);
 }
 
@@ -87,7 +88,8 @@ int main(int argc, char *argv[]) {
 		{"status", no_argument, 0, 1002},
 		{"list", no_argument, 0, 1003},
 		{"reload", no_argument, 0, 1004},
-		{"socket", required_argument, 0, 1005},
+		{"suppress", required_argument, 0, 1005},
+		{"socket", required_argument, 0, 1006},
 		{0, 0, 0, 0}};
 
 	/* Client options */
@@ -154,7 +156,12 @@ int main(int argc, char *argv[]) {
 				mode = MODE_CLIENT;
 				options.command = CMD_RELOAD;
 				break;
-			case 1005: /* --socket */
+			case 1005: /* --suppress */
+				mode = MODE_CLIENT;
+				options.command = CMD_SUPPRESS;
+				options.suppress = strdup(optarg);
+				break;
+			case 1006: /* --socket */
 				options.socket_path = strdup(optarg);
 				break;
 

@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stdio.h>
+#include <time.h>
 
 #include "registry.h"
 
@@ -63,6 +64,9 @@ typedef struct watch {
 	/* Dynamic watch tracking */
 	bool is_dynamic;                       /* True if created from glob promotion */
 	char *source_pattern;                  /* Original glob pattern that created this watch */
+
+	/* Event suppression */
+	struct timespec suppressed;            /* Timestamp until which events are suppressed */
 } watch_t;
 
 /* Configuration file section parsing state */

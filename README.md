@@ -87,10 +87,11 @@ kqexec [options]
 When running as a daemon, kqexec provides a control interface for runtime management:
 
 - `--disable=WATCHES` : Temporarily disable specified watches (comma-separated names)
-- `--enable=WATCHES` : Re-enable previously disabled watches (comma-separated names)  
+- `--enable=WATCHES` : Re-enable previously disabled watches (comma-separated names)
 - `--status` : Display current daemon and watch status
 - `--list` : List all configured watches
 - `--reload` : Reload configuration from file
+- `--suppress=WATCH:DURATION` : Temporarily suppress events for a watch
 - `--socket=PATH` : Socket path to connect to (default: /tmp/kqexec.sock)
 
 Examples:
@@ -98,7 +99,7 @@ Examples:
 # Disable specific watches
 kqexec --disable "Web Content,Log File"
 
-# Enable specific disabled watches  
+# Enable specific disabled watches
 kqexec --enable "Web Content,Log File"
 
 # Check daemon status
@@ -109,6 +110,9 @@ kqexec --list
 
 # Reload configuration
 kqexec --reload
+
+# Suppress a watch for 30 seconds
+kqexec --suppress "Log File:30s"
 ```
 
 ### Configuration File
@@ -351,7 +355,7 @@ launchctl kill SIGHUP gui/$(id -u)/com.kqexec.daemon
 kqexec provides a Unix domain socket-based control interface for runtime management of watches. This allows you to:
 
 - **Enable/Disable watches**: Temporarily turn watches on or off without restarting the daemon
-- **Query status**: Check which watches are currently active or disabled  
+- **Query status**: Check which watches are currently active or disabled
 - **List watches**: View all configured watches and their current state
 - **Reload configuration**: Trigger a configuration reload without sending SIGHUP
 
@@ -380,7 +384,7 @@ Commands can span multiple lines using backslash continuation or proper quoting,
 The `complexity` option (range 0.1-5.0) provides fine-grained control over system responsiveness versus stability. Higher complexity values make the system more cautious and less responsive, while lower values prioritize speed:
 
 - **Stability Verification**: More checks required before executing commands
-- **Quiet Period Scaling**: Longer wait times before considering directories stable  
+- **Quiet Period Scaling**: Longer wait times before considering directories stable
 - **Backoff Behavior**: More aggressive delays during filesystem instability
 - **Batch Processing**: Higher thresholds for detecting activity gaps
 - **Depth/Size Sensitivity**: Complexity-scaled delays for deep or large directory structures
@@ -406,7 +410,7 @@ kqexec supports flexible file and directory exclusion patterns using the `exclud
 
 Exclusion patterns support glob syntax including:
 - `*` : Matches any sequence of characters (except path separators)
-- `?` : Matches any single character 
+- `?` : Matches any single character
 - `[abc]` : Matches any character in the set
 - `**` : Matches any sequence including path separators (for recursive patterns)
 

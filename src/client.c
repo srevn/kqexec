@@ -350,13 +350,29 @@ static void client_reload(const char *response) {
 	free(reload_requested);
 }
 
+/* Display formatted suppress output */
+static void client_suppress(const char *response) {
+	char *watch_name = client_value(response, "watch_name");
+	char *duration_ms = client_value(response, "duration_ms");
+
+	if (watch_name && duration_ms) {
+		printf("Watch '%s' suppressed for %s ms\n", watch_name, duration_ms);
+	} else {
+		printf("Suppress command sent\n");
+	}
+
+	free(watch_name);
+	free(duration_ms);
+}
+
 /* Display formatted status output */
 static void client_status(const char *response) {
 	char *active_counter = client_value(response, "active_count");
 	char *disabled_counter = client_value(response, "disabled_count");
 	char *pending_counter = client_value(response, "pending_count");
+	char *suppressed_counter = client_value(response, "suppressed_count");
 
-	if (!active_counter || !disabled_counter || !pending_counter) {
+	if (!active_counter || !disabled_counter || !pending_counter || !suppressed_counter) {
 		printf("Incomplete status data received\n");
 		goto cleanup;
 	}
@@ -364,9 +380,10 @@ static void client_status(const char *response) {
 	int active_count = atoi(active_counter);
 	int disabled_count = atoi(disabled_counter);
 	int pending_count = atoi(pending_counter);
+	int suppressed_count = atoi(suppressed_counter);
 
-	printf("Watches: %d active, %d disabled, %d pending",
-		   active_count, disabled_count, pending_count);
+	printf("Watches: %d active, %d disabled, %d suppressed, %d pending",
+		   active_count, disabled_count, suppressed_count, pending_count);
 
 	if (active_count > 0) {
 		char *active_names = client_value(response, "active_names");
@@ -384,6 +401,14 @@ static void client_status(const char *response) {
 		}
 	}
 
+	if (suppressed_count > 0) {
+		char *suppressed_names = client_value(response, "suppressed_names");
+		if (suppressed_names) {
+			printf("\nSuppressed: %s", suppressed_names);
+			free(suppressed_names);
+		}
+	}
+
 	if (pending_count > 0) {
 		char *pending_paths = client_value(response, "pending_paths");
 		if (pending_paths) {
@@ -398,6 +423,7 @@ cleanup:
 	free(active_counter);
 	free(disabled_counter);
 	free(pending_counter);
+	free(suppressed_counter);
 }
 
 /* Display response to user */
@@ -426,6 +452,8 @@ void client_display(const char *response) {
 		client_enable(response);
 	} else if (strcmp(response_type, "reload") == 0) {
 		client_reload(response);
+	} else if (strcmp(response_type, "suppress") == 0) {
+		client_suppress(response);
 	} else if (strcmp(response_type, "error") == 0) {
 		char *message = client_value(response, "message");
 		if (message) {
@@ -447,6 +475,33 @@ char *client_build(options_t *options) {
 
 	size_t buffer_size = 0;
 	const char *command_str = NULL;
+	char *suppressed_name = NULL;
+	char *suppressed_duration = NULL;
+	char *arg_copy = NULL;
+
+	/* Pre-parse arguments for commands with special formats */
+	if (options->command == CMD_SUPPRESS) {
+		if (options->suppress) {
+			arg_copy = strdup(options->suppress);
+			if (!arg_copy) {
+				fprintf(stderr, "Error: Failed to allocate memory for command arguments\n");
+				return NULL;
+			}
+			char *colon = strrchr(arg_copy, ':');
+			if (colon && colon != arg_copy && *(colon + 1) != '\0') {
+				*colon = '\0';
+				suppressed_name = arg_copy;
+				suppressed_duration = colon + 1;
+			} else {
+				fprintf(stderr, "Error: Invalid format, use WATCH_NAME:DURATION\n");
+				free(arg_copy);
+				return NULL;
+			}
+		} else {
+			fprintf(stderr, "Error: --suppress command requires an argument\n");
+			return NULL;
+		}
+	}
 
 	/* Determine base command string */
 	switch (options->command) {
@@ -465,12 +520,16 @@ char *client_build(options_t *options) {
 		case CMD_RELOAD:
 			command_str = "command=reload\n";
 			break;
+		case CMD_SUPPRESS:
+			command_str = "command=suppress\n";
+			break;
 		default:
+			if (arg_copy) free(arg_copy);
 			return NULL;
 	}
 	buffer_size += strlen(command_str);
 
-	/* Calculate size for watch names */
+	/* Calculate size for watch names (for disable/enable) */
 	if (options->watch_names && options->num_watches > 0) {
 		buffer_size += strlen("watches=");
 		for (int i = 0; i < options->num_watches; i++) {
@@ -484,12 +543,19 @@ char *client_build(options_t *options) {
 		buffer_size += 1; /* For newline */
 	}
 
+	/* Calculate size for suppress argument */
+	if (suppressed_name && suppressed_duration) {
+		buffer_size += strlen("watch=") + strlen(suppressed_name) + 1;
+		buffer_size += strlen("duration=") + strlen(suppressed_duration) + 1;
+	}
+
 	buffer_size += 2; /* For final \n\n terminator */
 
 	/* Allocate exact buffer size + null terminator */
 	char *command = malloc(buffer_size + 1);
 	if (!command) {
 		fprintf(stderr, "Error: Failed to allocate memory for command\n");
+		if (arg_copy) free(arg_copy);
 		return NULL;
 	}
 
@@ -508,6 +574,13 @@ char *client_build(options_t *options) {
 		}
 		snprintf(command + written, buffer_size + 1 - written, "\n");
 	}
+
+	if (suppressed_name && suppressed_duration) {
+		written += snprintf(command + written, buffer_size + 1 - written, "watch=%s\n", suppressed_name);
+		snprintf(command + written, buffer_size + 1 - written, "duration=%s\n", suppressed_duration);
+	}
+
+	if (arg_copy) free(arg_copy);
 
 	strcat(command, "\n");
 
@@ -560,6 +633,7 @@ void client_cleanup(options_t *options) {
 		free(options->watch_names);
 	}
 
+	free(options->suppress);
 	free(options->socket_path);
 	memset(options, 0, sizeof(options_t));
 }

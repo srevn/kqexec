@@ -260,6 +260,7 @@ watch_t *watch_clone(const watch_t *source) {
 	clone->batch_timeout = source->batch_timeout;
 	clone->processing_delay = source->processing_delay;
 	clone->is_dynamic = source->is_dynamic;
+	clone->suppressed = source->suppressed;
 
 	/* Copy exclude patterns array */
 	clone->num_exclude = source->num_exclude;
@@ -487,15 +488,16 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 			}
 
 			current_watch->name = strdup(str + 1);
-			current_watch->enabled = true;		  /* Default to enabled */
-			current_watch->log_output = false;	  /* Default to not logging command output */
-			current_watch->buffer_output = false; /* Default to not buffering output */
-			current_watch->recursive = true;	  /* Default to recursive for directories */
-			current_watch->hidden = false;		  /* Default to not including hidden files */
-			current_watch->complexity = 1.0;	  /* Default complexity multiplier */
-			current_watch->environment = false;	  /* Default to not injecting environment variables */
-			current_watch->batch_timeout = 0;	  /* Default to disabled */
-			current_watch->processing_delay = 0;  /* Default to no delay */
+			current_watch->enabled = true;					   /* Default to enabled */
+			current_watch->log_output = false;				   /* Default to not logging command output */
+			current_watch->buffer_output = false;			   /* Default to not buffering output */
+			current_watch->recursive = true;				   /* Default to recursive for directories */
+			current_watch->hidden = false;					   /* Default to not including hidden files */
+			current_watch->complexity = 1.0;				   /* Default complexity multiplier */
+			current_watch->environment = false;				   /* Default to not injecting environment variables */
+			current_watch->batch_timeout = 0;				   /* Default to disabled */
+			current_watch->processing_delay = 0;			   /* Default to no delay */
+			current_watch->suppressed = (struct timespec) {0}; /* Default to not suppressed */
 
 			/* Initialize exclude patterns */
 			current_watch->exclude = NULL;
