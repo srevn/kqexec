@@ -1115,6 +1115,20 @@ static char *variable_expand(const config_t *config, const char *input) {
 				}
 			}
 
+			/* Check for self-reference like VAR=${VAR} which indicates env var import */
+			if (var_value) {
+				char self_reference[MAX_LINE_LEN];
+				snprintf(self_reference, sizeof(self_reference), "${%s}", var_name);
+				if (strcmp(var_value, self_reference) == 0) {
+					var_value = NULL; /* Treat as not found to fall through to getenv */
+				}
+			}
+
+			/* If not found in config, try environment variables */
+			if (!var_value) {
+				var_value = getenv(var_name);
+			}
+
 			if (!var_value) {
 				log_message(ERROR, "Undefined variable: %s", var_name);
 				free(var_name);
