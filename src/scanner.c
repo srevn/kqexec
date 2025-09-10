@@ -1,7 +1,6 @@
 #include "scanner.h"
 
 #include <dirent.h>
-#include <errno.h>
 #include <limits.h>
 #include <pthread.h>
 #include <stdbool.h>

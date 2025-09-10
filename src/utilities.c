@@ -1,7 +1,6 @@
 #include "utilities.h"
 
 #include <math.h>
-#include <string.h>
 
 /* Add milliseconds to a timespec */
 void timespec_add(struct timespec *ts, int milliseconds) {

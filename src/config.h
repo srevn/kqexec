@@ -2,8 +2,6 @@
 #define CONFIG_H
 
 #include <stdbool.h>
-#include <stdio.h>
-#include <time.h>
 
 #include "registry.h"
 
