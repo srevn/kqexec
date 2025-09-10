@@ -17,6 +17,7 @@ A lightweight file and directory monitoring utility for FreeBSD and macOS that u
 - **Resource-Based Event Processing**: Tracks filesystem resources and their scanning profiles to detect meaningful changes
 - **Command Cooldown**: Prevent command execution flooding when many events occur rapidly
 - **Placeholder Substitution**: Dynamic command generation based on event details
+- **Global Variables**: Reusable configuration variables with `${VARIABLE}` expansion and optional environment injection
 - **Environment Variable Injection**: Event context provided to commands when enabled
 - **Feedback Loop Prevention**: Filters out self-generated events and establishes a new baseline after command execution
 - **Directory Stability Verification**: Uses `stat()` to recursively verify directory stability before executing commands
@@ -133,6 +134,22 @@ hidden = false                # Whether to monitor hidden files/dirs (default: f
 exclude = *.tmp,build/*,.git  # Comma-separated patterns to exclude from monitoring
 ```
 
+### Global Variables
+
+Define reusable variables in a `[Variables]` section to reduce configuration duplication:
+
+```ini
+[Variables]
+PROJECT_ROOT = /home/user/myproject
+BUILD_SCRIPT = ${PROJECT_ROOT}/scripts/build.sh
+ADMIN_EMAIL = admin@company.com
+
+[Source Monitor]
+directory = ${PROJECT_ROOT}/src
+command = ${BUILD_SCRIPT} && echo "Build complete" | mail ${ADMIN_EMAIL}
+environment = true  # Makes variables available as KQ_VAR_PROJECT_ROOT, etc.
+```
+
 ### Event Types
 
 Kqexec supports the following event types that can be specified in the configuration file:
@@ -200,6 +217,7 @@ In addition to command placeholders, kqexec can optionally set environment varia
 - `KQ_DELETED` : Newline-separated list of items deleted
 - `KQ_RENAMED` : Newline-separated list of items renamed
 - `KQ_MODIFIED` : Newline-separated list of items modified
+- `KQ_VAR_*` : Global variables from `[Variables]` section (e.g., `KQ_VAR_PROJECT_ROOT`)
 
 These environment variables make commands more powerful and reusable. For example:
 

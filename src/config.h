@@ -2,6 +2,7 @@
 #define CONFIG_H
 
 #include <stdbool.h>
+#include <stdio.h>
 
 #include "registry.h"
 
@@ -67,8 +68,15 @@ typedef struct watch {
 /* Configuration file section parsing state */
 typedef enum section {
 	SECTION_NONE,                          /* No section */
+	SECTION_VARIABLES,                     /* Variables section */
 	SECTION_ENTRY                          /* Configuration entry section */
 } section_t;
+
+/* Structure for a single global variable */
+typedef struct variable {
+	char *key;                             /* Variable name */
+	char *value;                           /* Variable value */
+} variable_t;
 
 /* Global configuration structure */
 typedef struct config {
@@ -76,6 +84,11 @@ typedef struct config {
 	char *socket_path;                     /* Path to control socket */
 	bool daemon_mode;                      /* Run as daemon */
 	int syslog_level;                      /* Syslog verbosity */
+	
+	/* Global variables storage */
+	variable_t *variables;                 /* Array of variables */
+	int num_variables;                     /* Number of variables */
+	int variables_capacity;                /* Capacity of variables array */
 } config_t;
 
 /* Function prototypes */
@@ -90,6 +103,10 @@ watchref_t watch_add(config_t *config, registry_t *registry, watch_t *watch);
 void watch_destroy(watch_t *watch);
 watch_t *watch_clone(const watch_t *source);
 bool watch_remove(config_t *config, registry_t *registry, watchref_t watchref);
+
+/* Variables support functions */
+bool variable_add(config_t *config, const char *key, const char *value);
+char *variable_resolve(const config_t *config, const char *value);
 
 /* Exclude pattern functions */
 bool exclude_add(watch_t *watch, const char *pattern);

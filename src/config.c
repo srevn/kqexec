@@ -310,6 +310,11 @@ config_t *config_create(void) {
 	config->daemon_mode = false;
 	config->syslog_level = NOTICE;
 
+	/* Initialize variables storage */
+	config->variables = NULL;
+	config->num_variables = 0;
+	config->variables_capacity = 0;
+
 	return config;
 }
 
@@ -321,6 +326,16 @@ void config_destroy(config_t *config) {
 
 	free(config->config_path);
 	free(config->socket_path);
+
+	/* Free variables array */
+	if (config->variables) {
+		for (int i = 0; i < config->num_variables; i++) {
+			free(config->variables[i].key);
+			free(config->variables[i].value);
+		}
+		free(config->variables);
+	}
+
 	free(config);
 }
 
@@ -345,6 +360,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 
 	config->config_path = strdup(filename);
 
+	/* Parse variables and watches */
 	while (fgets(line, sizeof(line), fp) != NULL) {
 		char *str;
 		char continued_line[MAX_LINE_LEN * 10] = {0}; /* Buffer for continued lines */
@@ -422,6 +438,14 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 
 			*end = '\0';
 
+			/* Check section type for inline processing */
+			char *section_name = config_trim(str + 1);
+			if (strcasecmp(section_name, "Variables") == 0) {
+				state = SECTION_VARIABLES;
+				log_message(DEBUG, "Entering [Variables] section for inline processing");
+				continue;
+			}
+
 			/* Create a new watch entry */
 			if (current_watch != NULL) {
 				/* Validate the previous watch entry */
@@ -486,7 +510,34 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 		}
 
 		/* Parse key-value pairs */
-		if (state == SECTION_ENTRY) {
+		if (state == SECTION_VARIABLES) {
+			/* Handle Variables section entries */
+			char *key, *value;
+
+			key = strtok(str, "=");
+			if (key == NULL) {
+				log_message(ERROR, "Malformed variable assignment at line %d", line_number);
+				fclose(fp);
+				return false;
+			}
+
+			value = strtok(NULL, "");
+			if (value == NULL) {
+				log_message(ERROR, "Missing value for variable at line %d", line_number);
+				fclose(fp);
+				return false;
+			}
+
+			key = config_trim(key);
+			value = config_trim(value);
+
+			/* Add variable to configuration */
+			if (!variable_add(config, key, value)) {
+				log_message(ERROR, "Failed to add variable '%s' at line %d", key, line_number);
+				fclose(fp);
+				return false;
+			}
+		} else if (state == SECTION_ENTRY) {
 			char *key, *value;
 
 			key = strtok(str, "=");
@@ -509,16 +560,34 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 			value = config_trim(value);
 
 			if (strcasecmp(key, "file") == 0) {
+				/* Expand variables in file path */
+				char *expanded_value = variable_resolve(config, value);
+				if (!expanded_value) {
+					log_message(ERROR, "Failed to expand variables in file path at line %d", line_number);
+					watch_destroy(current_watch);
+					fclose(fp);
+					return false;
+				}
 				current_watch->target = WATCH_FILE;
-				current_watch->path = config_canonize(value, line_number);
+				current_watch->path = config_canonize(expanded_value, line_number);
+				free(expanded_value);
 				if (current_watch->path == NULL) {
 					watch_destroy(current_watch);
 					fclose(fp);
 					return false;
 				}
 			} else if (strcasecmp(key, "directory") == 0) {
+				/* Expand variables in directory path */
+				char *expanded_value = variable_resolve(config, value);
+				if (!expanded_value) {
+					log_message(ERROR, "Failed to expand variables in directory path at line %d", line_number);
+					watch_destroy(current_watch);
+					fclose(fp);
+					return false;
+				}
 				current_watch->target = WATCH_DIRECTORY;
-				current_watch->path = config_canonize(value, line_number);
+				current_watch->path = config_canonize(expanded_value, line_number);
+				free(expanded_value);
 				if (current_watch->path == NULL) {
 					watch_destroy(current_watch);
 					fclose(fp);
@@ -545,7 +614,15 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 					return false;
 				}
 			} else if (strcasecmp(key, "command") == 0) {
-				current_watch->command = strdup(value);
+				/* Expand variables in command */
+				char *expanded_value = variable_resolve(config, value);
+				if (!expanded_value) {
+					log_message(ERROR, "Failed to expand variables in command at line %d", line_number);
+					watch_destroy(current_watch);
+					fclose(fp);
+					return false;
+				}
+				current_watch->command = expanded_value;
 			} else if (strcasecmp(key, "log_output") == 0 || strcasecmp(key, "log") == 0) {
 				if (strcasecmp(value, "true") == 0 || strcmp(value, "1") == 0) {
 					current_watch->log_output = true;
@@ -704,6 +781,23 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 	}
 
 	fclose(fp);
+
+	/* Log variables summary */
+	if (config->num_variables > 0) {
+		log_message(INFO, "Parsed %d variables from [Variables] section", config->num_variables);
+	}
+
+	/* Final pass to resolve all variables against each other for consistency */
+	for (int i = 0; i < config->num_variables; i++) {
+		char *resolved_value = variable_resolve(config, config->variables[i].value);
+		if (!resolved_value) {
+			log_message(ERROR, "Failed to resolve variable '%s' during final resolution pass",
+						config->variables[i].key);
+			return false;
+		}
+		free(config->variables[i].value);
+		config->variables[i].value = resolved_value;
+	}
 
 	/* Check if we have at least one watch entry */
 	uint32_t num_active = 0;
@@ -905,4 +999,211 @@ bool exclude_match(const watch_t *watch, const char *path) {
 	}
 
 	return false;
+}
+
+/* Add a variable to the configuration */
+bool variable_add(config_t *config, const char *key, const char *value) {
+	if (!config || !key || !value) {
+		log_message(ERROR, "Invalid arguments to variable_add");
+		return false;
+	}
+
+	/* Validate variable name - alphanumeric and underscore only */
+	for (const char *p = key; *p; p++) {
+		if (!isalnum((unsigned char) *p) && *p != '_') {
+			log_message(ERROR, "Invalid variable name '%s', contains invalid characters", key);
+			return false;
+		}
+	}
+
+	/* Check for reserved prefixes to avoid conflicts */
+	if (strncasecmp(key, "KQ_", 3) == 0) {
+		log_message(ERROR, "Variable name '%s' conflicts with reserved KQ_ prefix", key);
+		return false;
+	}
+
+	/* Check if variable already exists (overwrite) */
+	for (int i = 0; i < config->num_variables; i++) {
+		if (strcmp(config->variables[i].key, key) == 0) {
+			/* Replace existing variable */
+			free(config->variables[i].value);
+			config->variables[i].value = strdup(value);
+			if (!config->variables[i].value) {
+				log_message(ERROR, "Failed to allocate memory for variable value");
+				return false;
+			}
+			log_message(DEBUG, "Updated variable '%s' = '%s'", key, value);
+			return true;
+		}
+	}
+
+	/* Grow array if needed */
+	if (config->num_variables >= config->variables_capacity) {
+		int new_capacity = config->variables_capacity == 0 ? 8 : config->variables_capacity * 2;
+		variable_t *new_vars = realloc(config->variables, new_capacity * sizeof(variable_t));
+		if (!new_vars) {
+			log_message(ERROR, "Failed to allocate memory for variables array");
+			return false;
+		}
+		config->variables = new_vars;
+		config->variables_capacity = new_capacity;
+	}
+
+	/* Add new variable */
+	variable_t *new_var = &config->variables[config->num_variables];
+	new_var->key = strdup(key);
+	new_var->value = strdup(value);
+
+	if (!new_var->key || !new_var->value) {
+		log_message(ERROR, "Failed to allocate memory for variable");
+		free(new_var->key);
+		free(new_var->value);
+		return false;
+	}
+
+	config->num_variables++;
+	log_message(DEBUG, "Added variable '%s' = '%s'", key, value);
+
+	return true;
+}
+
+/* Expands all variables found in configuraion file */
+static char *variable_expand(const config_t *config, const char *input) {
+	const char *src = input;
+	size_t input_len = strlen(input);
+	size_t result_capacity = input_len * 2; /* Start with reasonable capacity */
+	char *result = malloc(result_capacity + 1);
+
+	if (!result) {
+		log_message(ERROR, "Failed to allocate memory for variable expansion");
+		return NULL;
+	}
+
+	size_t result_len = 0;
+
+	while (*src) {
+		if (src[0] == '$' && src[1] == '{') {
+			/* Found variable reference */
+			const char *var_start = src + 2;
+			const char *var_end = strchr(var_start, '}');
+
+			if (!var_end) {
+				log_message(ERROR, "Unclosed variable reference in: %s", input);
+				free(result);
+				return NULL;
+			}
+
+			/* Extract variable name */
+			size_t var_name_len = var_end - var_start;
+			char *var_name = malloc(var_name_len + 1);
+			if (!var_name) {
+				log_message(ERROR, "Failed to allocate memory for variable name");
+				free(result);
+				return NULL;
+			}
+			memcpy(var_name, var_start, var_name_len);
+			var_name[var_name_len] = '\0';
+
+			/* Look up variable value */
+			const char *var_value = NULL;
+			for (int i = 0; i < config->num_variables; i++) {
+				if (strcmp(config->variables[i].key, var_name) == 0) {
+					var_value = config->variables[i].value;
+					break;
+				}
+			}
+
+			if (!var_value) {
+				log_message(ERROR, "Undefined variable: %s", var_name);
+				free(var_name);
+				free(result);
+				return NULL;
+			}
+
+			/* Ensure result buffer has enough capacity */
+			size_t var_value_len = strlen(var_value);
+			if (result_len + var_value_len >= result_capacity) {
+				result_capacity = (result_len + var_value_len + input_len) * 2;
+				char *new_result = realloc(result, result_capacity + 1);
+				if (!new_result) {
+					log_message(ERROR, "Failed to reallocate memory for variable expansion");
+					free(var_name);
+					free(result);
+					return NULL;
+				}
+				result = new_result;
+			}
+
+			/* Copy variable value to result */
+			memcpy(result + result_len, var_value, var_value_len);
+			result_len += var_value_len;
+
+			/* Clean up */
+			free(var_name);
+
+			/* Move past the variable reference */
+			src = var_end + 1;
+		} else {
+			/* Regular character - ensure buffer capacity */
+			if (result_len >= result_capacity) {
+				result_capacity *= 2;
+				char *new_result = realloc(result, result_capacity + 1);
+				if (!new_result) {
+					log_message(ERROR, "Failed to reallocate memory for variable expansion");
+					free(result);
+					return NULL;
+				}
+				result = new_result;
+			}
+
+			/* Copy regular character */
+			result[result_len++] = *src++;
+		}
+	}
+
+	result[result_len] = '\0';
+	return result;
+}
+
+/* Variable expansion resolving with circular reference detection */
+char *variable_resolve(const config_t *config, const char *value) {
+	if (!config || !value) {
+		return value ? strdup(value) : NULL;
+	}
+
+	/* If no variables defined or no ${} patterns, return copy of original */
+	if (config->num_variables == 0 || strstr(value, "${") == NULL) {
+		return strdup(value);
+	}
+
+	/* Multi-pass expansion for nested variables with circular reference detection */
+	char *current = strdup(value);
+	if (!current) {
+		log_message(ERROR, "Failed to allocate memory for variable expansion");
+		return NULL;
+	}
+
+	int max_depth = 32;
+	for (int depth = 0; depth < max_depth; depth++) {
+		char *expanded = variable_expand(config, current);
+		if (!expanded) {
+			free(current);
+			return NULL;
+		}
+
+		/* If no change occurred, we're done */
+		if (strcmp(current, expanded) == 0) {
+			free(current);
+			log_message(DEBUG, "Variable expansion completed after %d passes", depth + 1);
+			return expanded;
+		}
+
+		free(current);
+		current = expanded;
+		log_message(DEBUG, "Expanded variables (pass %d): %s", depth + 1, current);
+	}
+
+	log_message(ERROR, "Variable expansion exceeded maximum depth (%d), circular reference", max_depth);
+	free(current);
+	return NULL;
 }

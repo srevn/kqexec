@@ -685,6 +685,28 @@ void command_environment(monitor_t *monitor, watchref_t watchref, const event_t 
 			free(modified);
 		}
 	}
+
+	/* KQ_VAR_ - add global variables as environment variables */
+	const config_t *config = monitor->config;
+	if (config && config->num_variables > 0) {
+		for (int i = 0; i < config->num_variables; i++) {
+			const char *prefix = "KQ_VAR_";
+			const char *key = config->variables[i].key;
+			const char *value = config->variables[i].value;
+
+			size_t env_name_len = strlen(prefix) + strlen(key);
+			char *env_name = malloc(env_name_len + 1);
+
+			if (env_name) {
+				sprintf(env_name, "%s%s", prefix, key);
+				setenv(env_name, value, 1);
+				free(env_name);
+			} else {
+				log_message(WARNING, "Failed to allocate memory for environment variable: %s%s", prefix, key);
+			}
+		}
+		log_message(DEBUG, "Set %d global variables as environment variables", config->num_variables);
+	}
 }
 
 /* Add line to output buffer */
