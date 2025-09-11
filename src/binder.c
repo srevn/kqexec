@@ -17,43 +17,37 @@
 #include "stability.h"
 #include "utilities.h"
 
-/* Result metadata for placeholder resolution */
-typedef struct {
-	char *value;           /* The resolved value */
-	bool allocated;        /* Should we free this value? */
-	bool pre_formatted;    /* Is this already formatted? (use as-is) */
-} placeholder_result_t;
 
 /* Forward declarations for placeholder resolvers */
-static placeholder_result_t resolve_path_placeholder(binder_context_t *ctx);
-static placeholder_result_t resolve_basename_placeholder(binder_context_t *ctx);
-static placeholder_result_t resolve_dirname_placeholder(binder_context_t *ctx);
-static placeholder_result_t resolve_watch_path_placeholder(binder_context_t *ctx);
-static placeholder_result_t resolve_watch_name_placeholder(binder_context_t *ctx);
-static placeholder_result_t resolve_relative_path_placeholder(binder_context_t *ctx);
-static placeholder_result_t resolve_time_placeholder(binder_context_t *ctx);
-static placeholder_result_t resolve_user_placeholder(binder_context_t *ctx);
-static placeholder_result_t resolve_event_type_placeholder(binder_context_t *ctx);
-static placeholder_result_t resolve_size_placeholder(binder_context_t *ctx);
-static placeholder_result_t resolve_human_size_placeholder(binder_context_t *ctx);
-static placeholder_result_t resolve_diff_placeholder(binder_context_t *ctx, const char *type, bool basename_only);
-static placeholder_result_t resolve_array_placeholder(binder_context_t *ctx, const char *array_spec);
-static placeholder_result_t resolve_exclusion_placeholder(binder_context_t *ctx);
+static placeholder_t resolve_path(binder_t *ctx);
+static placeholder_t resolve_basename(binder_t *ctx);
+static placeholder_t resolve_dirname(binder_t *ctx);
+static placeholder_t resolve_watch_path(binder_t *ctx);
+static placeholder_t resolve_watch_name(binder_t *ctx);
+static placeholder_t resolve_relative_path(binder_t *ctx);
+static placeholder_t resolve_time(binder_t *ctx);
+static placeholder_t resolve_user(binder_t *ctx);
+static placeholder_t resolve_event_type(binder_t *ctx);
+static placeholder_t resolve_size(binder_t *ctx);
+static placeholder_t resolve_human_size(binder_t *ctx);
+static placeholder_t resolve_diff(binder_t *ctx, const char *type, bool basename_only);
+static placeholder_t resolve_array(binder_t *ctx, const char *array_spec);
+static placeholder_t resolve_exclusion(binder_t *ctx);
 
 /* Create a new binder context */
-binder_context_t *binder_context_create(monitor_t *monitor, watchref_t watchref, const event_t *event) {
+binder_t *binder_create(monitor_t *monitor, watchref_t watchref, const event_t *event) {
 	if (!monitor || !event) {
-		log_message(ERROR, "Invalid arguments to binder_context_create");
+		log_message(ERROR, "Invalid arguments to binder_create");
 		return NULL;
 	}
 	
 	const watch_t *watch = registry_get(monitor->registry, watchref);
 	if (!watch) {
-		log_message(ERROR, "Invalid watchref in binder_context_create");
+		log_message(ERROR, "Invalid watchref in binder_create");
 		return NULL;
 	}
 	
-	binder_context_t *ctx = calloc(1, sizeof(binder_context_t));
+	binder_t *ctx = calloc(1, sizeof(binder_t));
 	if (!ctx) {
 		log_message(ERROR, "Failed to allocate binder context");
 		return NULL;
@@ -69,7 +63,7 @@ binder_context_t *binder_context_create(monitor_t *monitor, watchref_t watchref,
 }
 
 /* Destroy binder context and free all cached data */
-void binder_context_destroy(binder_context_t *ctx) {
+void binder_destroy(binder_t *ctx) {
 	if (!ctx) return;
 	
 	free(ctx->escaped_path);
@@ -80,6 +74,7 @@ void binder_context_destroy(binder_context_t *ctx) {
 	free(ctx->escaped_basename);
 	free(ctx->escaped_dirname);
 	free(ctx->escaped_watch_path);
+	free(ctx->escaped_watch_name);
 	free(ctx->time_string);
 	free(ctx->user_string);
 	free(ctx->event_string);
@@ -90,11 +85,11 @@ void binder_context_destroy(binder_context_t *ctx) {
 }
 
 /* Lazy-computed path placeholder */
-static placeholder_result_t resolve_path_placeholder(binder_context_t *ctx) {
+static placeholder_t resolve_path(binder_t *ctx) {
 	if (!ctx->escaped_path) {
 		ctx->escaped_path = string_escape(ctx->event->path);
 	}
-	return (placeholder_result_t){
+	return (placeholder_t){
 		.value = ctx->escaped_path ? ctx->escaped_path : "",
 		.allocated = false,     /* Don't free - it's cached in context */
 		.pre_formatted = true   /* Already escaped, use as-is */
@@ -102,7 +97,7 @@ static placeholder_result_t resolve_path_placeholder(binder_context_t *ctx) {
 }
 
 /* Lazy-computed basename placeholder */
-static placeholder_result_t resolve_basename_placeholder(binder_context_t *ctx) {
+static placeholder_t resolve_basename(binder_t *ctx) {
 	if (!ctx->basename) {
 		char *path_copy = strdup(ctx->event->path);
 		if (path_copy) {
@@ -115,7 +110,7 @@ static placeholder_result_t resolve_basename_placeholder(binder_context_t *ctx) 
 		ctx->escaped_basename = string_escape(ctx->basename);
 	}
 	
-	return (placeholder_result_t){
+	return (placeholder_t){
 		.value = ctx->escaped_basename ? ctx->escaped_basename : "",
 		.allocated = false,  /* Don't free - it's cached in context */
 		.pre_formatted = true
@@ -123,7 +118,7 @@ static placeholder_result_t resolve_basename_placeholder(binder_context_t *ctx) 
 }
 
 /* Lazy-computed dirname placeholder */
-static placeholder_result_t resolve_dirname_placeholder(binder_context_t *ctx) {
+static placeholder_t resolve_dirname(binder_t *ctx) {
 	if (!ctx->dirname) {
 		char *path_copy = strdup(ctx->event->path);
 		if (path_copy) {
@@ -136,7 +131,7 @@ static placeholder_result_t resolve_dirname_placeholder(binder_context_t *ctx) {
 		ctx->escaped_dirname = string_escape(ctx->dirname);
 	}
 	
-	return (placeholder_result_t){
+	return (placeholder_t){
 		.value = ctx->escaped_dirname ? ctx->escaped_dirname : "",
 		.allocated = false,
 		.pre_formatted = true
@@ -144,11 +139,11 @@ static placeholder_result_t resolve_dirname_placeholder(binder_context_t *ctx) {
 }
 
 /* Watch path placeholder */
-static placeholder_result_t resolve_watch_path_placeholder(binder_context_t *ctx) {
+static placeholder_t resolve_watch_path(binder_t *ctx) {
 	if (!ctx->escaped_watch_path) {
 		ctx->escaped_watch_path = string_escape(ctx->watch->path);
 	}
-	return (placeholder_result_t){
+	return (placeholder_t){
 		.value = ctx->escaped_watch_path ? ctx->escaped_watch_path : "",
 		.allocated = false,
 		.pre_formatted = true
@@ -156,16 +151,19 @@ static placeholder_result_t resolve_watch_path_placeholder(binder_context_t *ctx
 }
 
 /* Watch name placeholder */
-static placeholder_result_t resolve_watch_name_placeholder(binder_context_t *ctx) {
-	return (placeholder_result_t){
-		.value = ctx->watch->name ? (char *)ctx->watch->name : "",
+static placeholder_t resolve_watch_name(binder_t *ctx) {
+	if (!ctx->escaped_watch_name && ctx->watch->name) {
+		ctx->escaped_watch_name = string_escape(ctx->watch->name);
+	}
+	return (placeholder_t){
+		.value = ctx->escaped_watch_name ? ctx->escaped_watch_name : "",
 		.allocated = false,
 		.pre_formatted = true
 	};
 }
 
 /* Relative path placeholder */
-static placeholder_result_t resolve_relative_path_placeholder(binder_context_t *ctx) {
+static placeholder_t resolve_relative_path(binder_t *ctx) {
 	if (!ctx->relative_path) {
 		const char *rel_path = ctx->event->path + strlen(ctx->watch->path);
 		if (*rel_path == '/') {
@@ -178,7 +176,7 @@ static placeholder_result_t resolve_relative_path_placeholder(binder_context_t *
 		ctx->escaped_relative_path = string_escape(ctx->relative_path);
 	}
 	
-	return (placeholder_result_t){
+	return (placeholder_t){
 		.value = ctx->escaped_relative_path ? ctx->escaped_relative_path : "",
 		.allocated = false,
 		.pre_formatted = true
@@ -186,7 +184,7 @@ static placeholder_result_t resolve_relative_path_placeholder(binder_context_t *
 }
 
 /* Time placeholder */
-static placeholder_result_t resolve_time_placeholder(binder_context_t *ctx) {
+static placeholder_t resolve_time(binder_t *ctx) {
 	if (!ctx->time_string) {
 		ctx->time_string = malloc(64);
 		if (ctx->time_string) {
@@ -195,7 +193,7 @@ static placeholder_result_t resolve_time_placeholder(binder_context_t *ctx) {
 			strftime(ctx->time_string, 64, "%Y-%m-%d %H:%M:%S", &tm);
 		}
 	}
-	return (placeholder_result_t){
+	return (placeholder_t){
 		.value = ctx->time_string ? ctx->time_string : "",
 		.allocated = false,
 		.pre_formatted = true
@@ -203,7 +201,7 @@ static placeholder_result_t resolve_time_placeholder(binder_context_t *ctx) {
 }
 
 /* User placeholder */
-static placeholder_result_t resolve_user_placeholder(binder_context_t *ctx) {
+static placeholder_t resolve_user(binder_t *ctx) {
 	if (!ctx->user_string) {
 		ctx->user_string = malloc(128);
 		if (ctx->user_string) {
@@ -218,7 +216,7 @@ static placeholder_result_t resolve_user_placeholder(binder_context_t *ctx) {
 			}
 		}
 	}
-	return (placeholder_result_t){
+	return (placeholder_t){
 		.value = ctx->user_string ? ctx->user_string : "",
 		.allocated = false,
 		.pre_formatted = true
@@ -226,12 +224,12 @@ static placeholder_result_t resolve_user_placeholder(binder_context_t *ctx) {
 }
 
 /* Event type placeholder */
-static placeholder_result_t resolve_event_type_placeholder(binder_context_t *ctx) {
+static placeholder_t resolve_event_type(binder_t *ctx) {
 	if (!ctx->event_string) {
 		const char *event_str = filter_to_string(ctx->event->type);
 		ctx->event_string = strdup(event_str);
 	}
-	return (placeholder_result_t){
+	return (placeholder_t){
 		.value = ctx->event_string ? ctx->event_string : "",
 		.allocated = false,
 		.pre_formatted = true
@@ -239,7 +237,7 @@ static placeholder_result_t resolve_event_type_placeholder(binder_context_t *ctx
 }
 
 /* File size placeholder */
-static placeholder_result_t resolve_size_placeholder(binder_context_t *ctx) {
+static placeholder_t resolve_size(binder_t *ctx) {
 	if (!ctx->size_calculated) {
 		subscription_t *subscription = NULL;
 		if (watchref_valid(ctx->watchref)) {
@@ -272,7 +270,7 @@ static placeholder_result_t resolve_size_placeholder(binder_context_t *ctx) {
 		}
 	}
 	
-	return (placeholder_result_t){
+	return (placeholder_t){
 		.value = ctx->size_string ? ctx->size_string : "0",
 		.allocated = false,
 		.pre_formatted = true
@@ -280,10 +278,10 @@ static placeholder_result_t resolve_size_placeholder(binder_context_t *ctx) {
 }
 
 /* Human-readable size placeholder */
-static placeholder_result_t resolve_human_size_placeholder(binder_context_t *ctx) {
+static placeholder_t resolve_human_size(binder_t *ctx) {
 	if (!ctx->size_calculated) {
 		/* Trigger size calculation */
-		resolve_size_placeholder(ctx);
+		resolve_size(ctx);
 	}
 	
 	if (!ctx->human_size_string) {
@@ -291,7 +289,7 @@ static placeholder_result_t resolve_human_size_placeholder(binder_context_t *ctx
 		ctx->human_size_string = strdup(human_size);
 	}
 	
-	return (placeholder_result_t){
+	return (placeholder_t){
 		.value = ctx->human_size_string ? ctx->human_size_string : "0 B",
 		.allocated = false,
 		.pre_formatted = true
@@ -299,15 +297,15 @@ static placeholder_result_t resolve_human_size_placeholder(binder_context_t *ctx
 }
 
 /* Diff-based placeholder resolution using unified diff_list() function */
-static placeholder_result_t resolve_diff_placeholder(binder_context_t *ctx, const char *type, bool basename_only) {
+static placeholder_t resolve_diff(binder_t *ctx, const char *type, bool basename_only) {
 	if (ctx->watch->target != WATCH_DIRECTORY || !ctx->event->diff) {
-		return (placeholder_result_t){.value = "", .allocated = false, .pre_formatted = true};
+		return (placeholder_t){.value = "", .allocated = false, .pre_formatted = true};
 	}
 	
 	/* Use unified diff_list() function for efficiency */
 	char *result = diff_list(ctx->event->diff, basename_only, type);
 	if (result && result[0] != '\0') {
-		return (placeholder_result_t){
+		return (placeholder_t){
 			.value = result,
 			.allocated = true,       /* diff_list() returns allocated memory */
 			.pre_formatted = false   /* Raw list that needs escaping */
@@ -316,17 +314,17 @@ static placeholder_result_t resolve_diff_placeholder(binder_context_t *ctx, cons
 	
 	/* Free empty result */
 	free(result);
-	return (placeholder_result_t){.value = "", .allocated = false, .pre_formatted = true};
+	return (placeholder_t){.value = "", .allocated = false, .pre_formatted = true};
 }
 
 /* Exclusion patterns placeholder */
-static placeholder_result_t resolve_exclusion_placeholder(binder_context_t *ctx) {
+static placeholder_t resolve_exclusion(binder_t *ctx) {
 	if (!ctx->watch->exclude || ctx->watch->num_exclude == 0) {
-		return (placeholder_result_t){.value = "", .allocated = false, .pre_formatted = true};
+		return (placeholder_t){.value = "", .allocated = false, .pre_formatted = true};
 	}
 	
 	char *result = format_array((const char *const *)ctx->watch->exclude, ctx->watch->num_exclude, "'%s'", ",");
-	return (placeholder_result_t){
+	return (placeholder_t){
 		.value = result ? result : "",
 		.allocated = result != NULL,  /* format_array() returns allocated memory */
 		.pre_formatted = true        /* Pre-formatted, no additional escaping needed */
@@ -334,16 +332,16 @@ static placeholder_result_t resolve_exclusion_placeholder(binder_context_t *ctx)
 }
 
 /* Array placeholder resolver using unified diff_list() for efficiency */
-static placeholder_result_t resolve_array_placeholder(binder_context_t *ctx, const char *array_spec) {
+static placeholder_t resolve_array(binder_t *ctx, const char *array_spec) {
 	char *spec_copy = strdup(array_spec);
 	if (!spec_copy) {
-		return (placeholder_result_t){.value = "", .allocated = false, .pre_formatted = true};
+		return (placeholder_t){.value = "", .allocated = false, .pre_formatted = true};
 	}
 	
 	char *colon = strchr(spec_copy, ':');
 	if (!colon) {
 		free(spec_copy);
-		return (placeholder_result_t){.value = "", .allocated = false, .pre_formatted = true};
+		return (placeholder_t){.value = "", .allocated = false, .pre_formatted = true};
 	}
 	
 	*colon = '\0';
@@ -353,7 +351,7 @@ static placeholder_result_t resolve_array_placeholder(binder_context_t *ctx, con
 	char *result = NULL;
 	
 	/* Handle exclusion patterns */
-	if (strcmp(array_name, "exclude") == 0) {
+	if (strcmp(array_name, "excluded") == 0) {
 		if (ctx->watch->exclude && ctx->watch->num_exclude > 0) {
 			result = format_array((const char *const *)ctx->watch->exclude, ctx->watch->num_exclude, template, " ");
 		}
@@ -403,7 +401,7 @@ static placeholder_result_t resolve_array_placeholder(binder_context_t *ctx, con
 	}
 	
 	free(spec_copy);
-	return (placeholder_result_t){
+	return (placeholder_t){
 		.value = result ? result : "",
 		.allocated = result != NULL,  /* format_array() returns allocated memory */
 		.pre_formatted = true        /* Pre-formatted, no additional escaping needed */
@@ -434,10 +432,10 @@ static placeholder_result_t resolve_array_placeholder(binder_context_t *ctx, con
  *   - deleted, deleted_base: deleted items (with/without full paths)
  *   - modified, modified_base: modified items (with/without full paths)
  *   - renamed, renamed_base: renamed items (with/without full paths)
- *   - exclude: exclusion patterns from configuration
+ *   - excluded: exclusion patterns from configuration
  *   Template is applied to each item in the array (e.g., %[created:'%s'] wraps each created file in quotes)
  */
-char *binder_placeholders(binder_context_t *ctx, const char *template) {
+char *binder_placeholders(binder_t *ctx, const char *template) {
 	if (!ctx || !template) {
 		log_message(ERROR, "Invalid arguments to binder_placeholders");
 		return NULL;
@@ -455,7 +453,7 @@ char *binder_placeholders(binder_context_t *ctx, const char *template) {
 			const char *placeholder_start = current;
 			current++;
 			
-			/* Handle array placeholders like %[exclude:--exclude=%s] */
+			/* Handle array placeholders like %[excluded:--exclude=%s] */
 			if (*current == '[') {
 				const char *array_start = current + 1;
 				const char *array_end = strchr(array_start, ']');
@@ -466,7 +464,7 @@ char *binder_placeholders(binder_context_t *ctx, const char *template) {
 						strncpy(array_spec, array_start, array_len);
 						array_spec[array_len] = '\0';
 						
-						placeholder_result_t result = resolve_array_placeholder(ctx, array_spec);
+						placeholder_t result = resolve_array(ctx, array_spec);
 						if (result.value && result.value[0] != '\0') {
 							builder_append(&builder, "%s", result.value);
 						}
@@ -482,22 +480,22 @@ char *binder_placeholders(binder_context_t *ctx, const char *template) {
 			
 			/* Handle regular single-character placeholders */
 			if (*current) {
-				placeholder_result_t result = {.value = NULL};
+				placeholder_t result = {.value = NULL};
 				switch (*current) {
-					case 'p': result = resolve_path_placeholder(ctx); break;
-					case 'n': result = resolve_basename_placeholder(ctx); break;
-					case 'd': result = resolve_dirname_placeholder(ctx); break;
-					case 'b': result = resolve_watch_path_placeholder(ctx); break;
-					case 'w': result = resolve_watch_name_placeholder(ctx); break;
-					case 'r': result = resolve_relative_path_placeholder(ctx); break;
-					case 't': result = resolve_time_placeholder(ctx); break;
-					case 'u': result = resolve_user_placeholder(ctx); break;
-					case 'e': result = resolve_event_type_placeholder(ctx); break;
-					case 'h': result = resolve_size_placeholder(ctx); break;
-					case 'H': result = resolve_human_size_placeholder(ctx); break;
-					case 'x': result = resolve_exclusion_placeholder(ctx); break;
-					case 'l': result = resolve_diff_placeholder(ctx, "changed", true); break;
-					case 'L': result = resolve_diff_placeholder(ctx, "changed", false); break;
+					case 'p': result = resolve_path(ctx); break;
+					case 'n': result = resolve_basename(ctx); break;
+					case 'd': result = resolve_dirname(ctx); break;
+					case 'b': result = resolve_watch_path(ctx); break;
+					case 'w': result = resolve_watch_name(ctx); break;
+					case 'r': result = resolve_relative_path(ctx); break;
+					case 't': result = resolve_time(ctx); break;
+					case 'u': result = resolve_user(ctx); break;
+					case 'e': result = resolve_event_type(ctx); break;
+					case 'h': result = resolve_size(ctx); break;
+					case 'H': result = resolve_human_size(ctx); break;
+					case 'x': result = resolve_exclusion(ctx); break;
+					case 'l': result = resolve_diff(ctx, "changed", true); break;
+					case 'L': result = resolve_diff(ctx, "changed", false); break;
 					default: {
 						const char* diff_type = NULL;
 						size_t len = 0;
@@ -522,11 +520,11 @@ char *binder_placeholders(binder_context_t *ctx, const char *template) {
 						}
 					
 						if (diff_type) {
-							result = resolve_diff_placeholder(ctx, diff_type, false);
+							result = resolve_diff(ctx, diff_type, false);
 							current += len - 1; /* Will be incremented again at end */
 						} else {
 							/* Unknown placeholder - copy as literal */
-							builder_append(&builder, "%%c%%c", placeholder_start[0], *current);
+							builder_append(&builder, "%c%c", placeholder_start[0], *current);
 							current++;
 							continue;
 						}
@@ -569,9 +567,9 @@ char *binder_placeholders(binder_context_t *ctx, const char *template) {
 }
 
 /* Set environment variables for command execution */
-void binder_set_environment(binder_context_t *ctx) {
+void binder_environment(binder_t *ctx) {
 	if (!ctx) {
-		log_message(WARNING, "Invalid context in binder_set_environment");
+		log_message(WARNING, "Invalid context in binder_environment");
 		return;
 	}
 	

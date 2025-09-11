@@ -7,8 +7,15 @@
 #include "monitor.h"
 #include "events.h"
 
+/* Result metadata for placeholder resolution */
+typedef struct placeholder {
+	char *value;                           /* The resolved value */
+	bool allocated;                        /* Should we free this value? */
+	bool pre_formatted;                    /* Is this already formatted? (use as-is) */
+} placeholder_t;
+
 /* Context for placeholder binding operations */
-typedef struct binder_context {
+typedef struct binder {
 	monitor_t *monitor;                    /* Monitor reference */
 	watchref_t watchref;                   /* Watch reference */
 	const event_t *event;                  /* Event data */
@@ -23,6 +30,7 @@ typedef struct binder_context {
 	char *escaped_basename;                /* Escaped basename */
 	char *escaped_dirname;                 /* Escaped directory name */
 	char *escaped_watch_path;              /* Escaped watch path */
+	char *escaped_watch_name;              /* Escaped watch name */
 	char *time_string;                     /* Formatted time string */
 	char *user_string;                     /* User name or ID string */
 	char *event_string;                    /* Event type string */
@@ -32,14 +40,14 @@ typedef struct binder_context {
 	/* Size calculation cache */
 	size_t file_size;                      /* Calculated file size */
 	bool size_calculated;                  /* Whether size has been calculated */
-} binder_context_t;
+} binder_t;
 
 /* Context lifecycle */
-binder_context_t *binder_context_create(monitor_t *monitor, watchref_t watchref, const event_t *event);
-void binder_context_destroy(binder_context_t *ctx);
+binder_t *binder_create(monitor_t *monitor, watchref_t watchref, const event_t *event);
+void binder_destroy(binder_t *ctx);
 
 /* Main binding operations */
-char *binder_placeholders(binder_context_t *ctx, const char *template);
-void binder_set_environment(binder_context_t *ctx);
+char *binder_placeholders(binder_t *ctx, const char *template);
+void binder_environment(binder_t *ctx);
 
 #endif /* BINDER_H */

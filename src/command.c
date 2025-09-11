@@ -130,7 +130,7 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 	time(&start);
 
 	/* Substitute placeholders in the command using binder module */
-	binder_context_t *binder_ctx = binder_context_create(monitor, watchref, event);
+	binder_t *binder_ctx = binder_create(monitor, watchref, event);
 	if (!binder_ctx) {
 		log_message(ERROR, "Failed to create binder context");
 		return false;
@@ -138,7 +138,7 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 
 	command = binder_placeholders(binder_ctx, watch->command);
 	if (command == NULL) {
-		binder_context_destroy(binder_ctx);
+		binder_destroy(binder_ctx);
 		return false;
 	}
 
@@ -149,7 +149,7 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 		if (pipe(stdout_pipe) < 0 || pipe(stderr_pipe) < 0) {
 			log_message(ERROR, "Failed to create pipes: %s", strerror(errno));
 			free(command);
-			binder_context_destroy(binder_ctx);
+			binder_destroy(binder_ctx);
 			return false;
 		}
 	}
@@ -165,7 +165,7 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 			close(stderr_pipe[1]);
 		}
 		free(command);
-		binder_context_destroy(binder_ctx);
+		binder_destroy(binder_ctx);
 		return false;
 	}
 
@@ -188,7 +188,7 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 
 		/* Set environment variables for the command if enabled */
 		if (watch->environment) {
-			binder_set_environment(binder_ctx);
+			binder_environment(binder_ctx);
 		}
 
 		/* Execute the command */
@@ -348,7 +348,7 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 	}
 
 	free(command);
-	binder_context_destroy(binder_ctx);
+	binder_destroy(binder_ctx);
 	return true;
 }
 
