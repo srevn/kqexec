@@ -49,11 +49,12 @@ double complexity_temporary(double complexity);
 
 /* String utilities */
 char *string_escape(const char *str);
-char *string_escape_list(const char *list);
 char *string_substitute(const char *input, const char *placeholder, const char *value);
 
 /* Formatting utilities */
 const char *format_size(ssize_t size, bool show_sign);
 char *format_array(const char *const *strings, int count, const char *template, const char *separator);
+char *format_path_array(const char *const *paths, int count, const char *template, const char *separator, bool basename_only);
+char *format_escaped_path_array(const char *const *paths, int count, const char *separator, bool basename_only);
 
 #endif /* UTILITIES_H */

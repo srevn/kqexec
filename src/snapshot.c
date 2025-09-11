@@ -172,58 +172,85 @@ static bool string_copy(char ***dest_array, int *dest_count, char **source_array
 	return true;
 }
 
-/* Helper function to generate a newline-separated string from a string array */
-static char *string_list(char **array, int count, bool basename_only) {
-	if (!array || count <= 0) {
-		return strdup("");
+/* Get a read-only view of a list of paths from a diff based on change type */
+diff_list_t diff_list(const diff_t *diff, const char *change_type) {
+	if (!diff || !change_type) {
+		return (diff_list_t) {.paths = NULL, .count = 0};
 	}
 
-	/* Calculate total size needed */
-	size_t total_size = 1; /* For null terminator */
-	for (int i = 0; i < count; i++) {
-		if (!array[i]) continue;
-
-		const char *path_to_use = array[i];
-		if (basename_only) {
-			const char *basename = strrchr(array[i], '/');
-			if (basename) {
-				path_to_use = basename + 1;
-			}
-		}
-
-		total_size += strlen(path_to_use);
-		if (i > 0) total_size++; /* For newline separator */
+	if (strcmp(change_type, "created") == 0) {
+		return (diff_list_t) {.paths = (const char *const *) diff->created, .count = diff->created_count};
+	} else if (strcmp(change_type, "deleted") == 0) {
+		return (diff_list_t) {.paths = (const char *const *) diff->deleted, .count = diff->deleted_count};
+	} else if (strcmp(change_type, "renamed") == 0) {
+		return (diff_list_t) {.paths = (const char *const *) diff->renamed, .count = diff->renamed_count};
+	} else if (strcmp(change_type, "modified") == 0) {
+		return (diff_list_t) {.paths = (const char *const *) diff->modified, .count = diff->modified_count};
+	} else {
+		/* "changed" is not supported as it's a compound list; consumer must handle it */
+		log_message(WARNING, "Unknown or unsupported change type requested from diff_list: %s", change_type);
+		return (diff_list_t) {.paths = NULL, .count = 0};
 	}
+}
 
-	/* Allocate result buffer */
-	char *result = malloc(total_size);
-	if (!result) {
-		log_message(ERROR, "Failed to allocate memory for string list");
+/* Create a deep copy of a diff structure */
+diff_t *diff_copy(const diff_t *source) {
+	if (!source) return NULL;
+
+	diff_t *copy = calloc(1, sizeof(diff_t));
+	if (!copy) return NULL;
+
+	copy->total_changes = source->total_changes;
+	copy->structural_changes = source->structural_changes;
+
+	if (!string_copy(&copy->created, &copy->created_count, source->created, source->created_count) ||
+		!string_copy(&copy->deleted, &copy->deleted_count, source->deleted, source->deleted_count) ||
+		!string_copy(&copy->renamed, &copy->renamed_count, source->renamed, source->renamed_count) ||
+		!string_copy(&copy->modified, &copy->modified_count, source->modified, source->modified_count)) {
+		diff_destroy(copy);
 		return NULL;
 	}
 
-	/* Build the string */
-	char *pos = result;
-	for (int i = 0; i < count; i++) {
-		if (!array[i]) continue;
+	return copy;
+}
 
-		const char *path_to_use = array[i];
-		if (basename_only) {
-			const char *basename = strrchr(array[i], '/');
-			if (basename) {
-				path_to_use = basename + 1;
-			}
-		}
+/* Destroy a diff structure and free all associated memory */
+void diff_destroy(diff_t *diff) {
+	if (!diff) return;
 
-		if (pos != result) {
-			*pos++ = '\n';
+	/* Free created files array */
+	if (diff->created) {
+		for (int i = 0; i < diff->created_count; i++) {
+			free(diff->created[i]);
 		}
-		strcpy(pos, path_to_use);
-		pos += strlen(path_to_use);
+		free(diff->created);
 	}
-	*pos = '\0';
 
-	return result;
+	/* Free deleted files array */
+	if (diff->deleted) {
+		for (int i = 0; i < diff->deleted_count; i++) {
+			free(diff->deleted[i]);
+		}
+		free(diff->deleted);
+	}
+
+	/* Free renamed files array */
+	if (diff->renamed) {
+		for (int i = 0; i < diff->renamed_count; i++) {
+			free(diff->renamed[i]);
+		}
+		free(diff->renamed);
+	}
+
+	/* Free modified files array */
+	if (diff->modified) {
+		for (int i = 0; i < diff->modified_count; i++) {
+			free(diff->modified[i]);
+		}
+		free(diff->modified);
+	}
+
+	free(diff);
 }
 
 /* Helper function to add an entry to a snapshot */
@@ -576,229 +603,4 @@ diff_t *snapshot_diff(const snapshot_t *baseline, const snapshot_t *current) {
 				diff->total_changes);
 
 	return diff;
-}
-
-/* Destroy a diff structure and free all associated memory */
-void diff_destroy(diff_t *diff) {
-	if (!diff) return;
-
-	/* Free created files array */
-	if (diff->created) {
-		for (int i = 0; i < diff->created_count; i++) {
-			free(diff->created[i]);
-		}
-		free(diff->created);
-	}
-
-	/* Free deleted files array */
-	if (diff->deleted) {
-		for (int i = 0; i < diff->deleted_count; i++) {
-			free(diff->deleted[i]);
-		}
-		free(diff->deleted);
-	}
-
-	/* Free renamed files array */
-	if (diff->renamed) {
-		for (int i = 0; i < diff->renamed_count; i++) {
-			free(diff->renamed[i]);
-		}
-		free(diff->renamed);
-	}
-
-	/* Free modified files array */
-	if (diff->modified) {
-		for (int i = 0; i < diff->modified_count; i++) {
-			free(diff->modified[i]);
-		}
-		free(diff->modified);
-	}
-
-	free(diff);
-}
-
-/* Create a deep copy of a diff structure */
-diff_t *diff_copy(const diff_t *source) {
-	if (!source) return NULL;
-
-	diff_t *copy = calloc(1, sizeof(diff_t));
-	if (!copy) return NULL;
-
-	copy->total_changes = source->total_changes;
-	copy->structural_changes = source->structural_changes;
-
-	if (!string_copy(&copy->created, &copy->created_count, source->created, source->created_count) ||
-		!string_copy(&copy->deleted, &copy->deleted_count, source->deleted, source->deleted_count) ||
-		!string_copy(&copy->renamed, &copy->renamed_count, source->renamed, source->renamed_count) ||
-		!string_copy(&copy->modified, &copy->modified_count, source->modified, source->modified_count)) {
-		diff_destroy(copy);
-		return NULL;
-	}
-
-	return copy;
-}
-
-/* Get a string list of created files */
-char *diff_created(const diff_t *diff, bool basename_only) {
-	if (!diff) return strdup("");
-	return string_list(diff->created, diff->created_count, basename_only);
-}
-
-/* Get a string list of deleted files */
-char *diff_deleted(const diff_t *diff, bool basename_only) {
-	if (!diff) return strdup("");
-	return string_list(diff->deleted, diff->deleted_count, basename_only);
-}
-
-/* Get a string list of renamed files */
-char *diff_renamed(const diff_t *diff, bool basename_only) {
-	if (!diff) return strdup("");
-	return string_list(diff->renamed, diff->renamed_count, basename_only);
-}
-
-/* Get a string list of modified files */
-char *diff_modified(const diff_t *diff, bool basename_only) {
-	if (!diff) return strdup("");
-	return string_list(diff->modified, diff->modified_count, basename_only);
-}
-
-/* Get a string list of all changed files */
-char *diff_changed(const diff_t *diff, bool basename_only) {
-	if (!diff || diff->total_changes == 0) {
-		return strdup("");
-	}
-
-	/* Calculate total size needed */
-	size_t total_size = 1; /* For null terminator */
-	int total_entries = diff->created_count + diff->deleted_count + diff->modified_count + diff->renamed_count;
-
-	/* Calculate size for each category */
-	for (int i = 0; i < diff->created_count; i++) {
-		if (!diff->created[i]) continue; /* Skip NULL entries */
-		const char *path_to_use = diff->created[i];
-		if (basename_only) {
-			const char *basename = strrchr(diff->created[i], '/');
-			if (basename) path_to_use = basename + 1;
-		}
-		total_size += strlen(path_to_use);
-	}
-
-	for (int i = 0; i < diff->deleted_count; i++) {
-		if (!diff->deleted[i]) continue; /* Skip NULL entries */
-		const char *path_to_use = diff->deleted[i];
-		if (basename_only) {
-			const char *basename = strrchr(diff->deleted[i], '/');
-			if (basename) path_to_use = basename + 1;
-		}
-		total_size += strlen(path_to_use);
-	}
-
-	for (int i = 0; i < diff->renamed_count; i++) {
-		if (!diff->renamed[i]) continue; /* Skip NULL entries */
-		/* Renamed files always show full info regardless of basename_only */
-		total_size += strlen(diff->renamed[i]);
-	}
-
-	for (int i = 0; i < diff->modified_count; i++) {
-		if (!diff->modified[i]) continue; /* Skip NULL entries */
-		const char *path_to_use = diff->modified[i];
-		if (basename_only) {
-			const char *basename = strrchr(diff->modified[i], '/');
-			if (basename) path_to_use = basename + 1;
-		}
-		total_size += strlen(path_to_use);
-	}
-
-	/* Add space for newlines between entries (total_entries - 1) */
-	if (total_entries > 1) {
-		total_size += (total_entries - 1);
-	}
-
-	/* Allocate result buffer */
-	char *result = malloc(total_size);
-	if (!result) {
-		log_message(ERROR, "Failed to allocate memory for combined string list");
-		return NULL;
-	}
-
-	/* Build the combined string */
-	char *pos = result;
-	bool first = true;
-
-	/* Add created files */
-	for (int i = 0; i < diff->created_count; i++) {
-		if (!diff->created[i]) continue; /* Skip NULL entries */
-		const char *path_to_use = diff->created[i];
-		if (basename_only) {
-			const char *basename = strrchr(diff->created[i], '/');
-			if (basename) path_to_use = basename + 1;
-		}
-
-		if (!first) *pos++ = '\n';
-		strcpy(pos, path_to_use);
-		pos += strlen(path_to_use);
-		first = false;
-	}
-
-	/* Add deleted files */
-	for (int i = 0; i < diff->deleted_count; i++) {
-		if (!diff->deleted[i]) continue; /* Skip NULL entries */
-		const char *path_to_use = diff->deleted[i];
-		if (basename_only) {
-			const char *basename = strrchr(diff->deleted[i], '/');
-			if (basename) path_to_use = basename + 1;
-		}
-
-		if (!first) *pos++ = '\n';
-		strcpy(pos, path_to_use);
-		pos += strlen(path_to_use);
-		first = false;
-	}
-
-	/* Add renamed files */
-	for (int i = 0; i < diff->renamed_count; i++) {
-		if (!diff->renamed[i]) continue; /* Skip NULL entries */
-		if (!first) *pos++ = '\n';
-		strcpy(pos, diff->renamed[i]);
-		pos += strlen(diff->renamed[i]);
-		first = false;
-	}
-
-	/* Add modified files */
-	for (int i = 0; i < diff->modified_count; i++) {
-		if (!diff->modified[i]) continue; /* Skip NULL entries */
-		const char *path_to_use = diff->modified[i];
-		if (basename_only) {
-			const char *basename = strrchr(diff->modified[i], '/');
-			if (basename) path_to_use = basename + 1;
-		}
-
-		if (!first) *pos++ = '\n';
-		strcpy(pos, path_to_use);
-		pos += strlen(path_to_use);
-		first = false;
-	}
-
-	*pos = '\0';
-	return result;
-}
-
-/* General function to get string list by change type */
-char *diff_list(const diff_t *diff, bool basename_only, const char *change_type) {
-	if (!diff || !change_type) return strdup("");
-
-	if (strcmp(change_type, "created") == 0) {
-		return diff_created(diff, basename_only);
-	} else if (strcmp(change_type, "deleted") == 0) {
-		return diff_deleted(diff, basename_only);
-	} else if (strcmp(change_type, "renamed") == 0) {
-		return diff_renamed(diff, basename_only);
-	} else if (strcmp(change_type, "modified") == 0) {
-		return diff_modified(diff, basename_only);
-	} else if (strcmp(change_type, "changed") == 0) {
-		return diff_changed(diff, basename_only);
-	} else {
-		log_message(WARNING, "Unknown change type requested: %s", change_type);
-		return strdup("");
-	}
 }

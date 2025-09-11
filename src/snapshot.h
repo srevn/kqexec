@@ -59,6 +59,12 @@ typedef struct diff {
 	bool structural_changes;               /* True if directories were created/deleted */
 } diff_t;
 
+/* A read-only view of a list of paths from a diff */
+typedef struct diff_list {
+	int count;                             /* Number of paths in the array */
+	const char *const *paths;              /* Pointer to the array of path strings */
+} diff_list_t;
+
 /* Core snapshot operations */
 snapshot_t *snapshot_create(const char *root_path, const watch_t *watch);
 void snapshot_destroy(snapshot_t *snapshot);
@@ -68,14 +74,7 @@ diff_t *snapshot_diff(const snapshot_t *baseline, const snapshot_t *current);
 void diff_destroy(diff_t *diff);
 
 /* Diff utility functions */
-char *diff_list(const diff_t *diff, bool basename_only, const char *change_type);
 diff_t *diff_copy(const diff_t *source);
-
-/* Individual change type string lists for placeholders */
-char *diff_created(const diff_t *diff, bool basename_only);
-char *diff_deleted(const diff_t *diff, bool basename_only);
-char *diff_renamed(const diff_t *diff, bool basename_only);
-char *diff_modified(const diff_t *diff, bool basename_only);
-char *diff_changed(const diff_t *diff, bool basename_only);
+diff_list_t diff_list(const diff_t *diff, const char *change_type);
 
 #endif /* SNAPSHOT_H */

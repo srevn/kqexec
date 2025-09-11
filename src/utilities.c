@@ -380,62 +380,39 @@ char *string_escape(const char *str) {
 }
 
 /* Shell-escape a newline-separated list of paths */
-char *string_escape_list(const char *paths) {
-	if (!paths || !*paths) return strdup("");
+char *format_escaped_path_array(const char *const *paths, int count, const char *separator, bool basename_only) {
+    if (!paths || count == 0) {
+        return strdup("");
+    }
 
-	/* Start with dynamic buffer */
-	size_t result_capacity = 4096;
-	char *result = malloc(result_capacity);
-	if (!result) return NULL;
+    builder_t builder;
+    if (!builder_init(&builder, 4096)) {
+        return NULL;
+    }
 
-	result[0] = '\0';
-	size_t result_len = 0;
+    for (int i = 0; i < count; i++) {
+        const char *path = paths[i];
+        if (!path) continue;
 
-	char *paths_copy = strdup(paths);
-	if (!paths_copy) {
-		free(result);
-		return NULL;
-	}
+        const char *path_to_use = path;
+        if (basename_only) {
+            const char *basename = strrchr(path, '/');
+            if (basename) {
+                path_to_use = basename + 1;
+            }
+        }
 
-	char *line = strtok(paths_copy, "\n");
-	bool first = true;
+        char *escaped = string_escape(path_to_use);
+        if (escaped) {
+            if (i > 0 && separator) {
+                builder_append(&builder, "%%s", separator);
+            }
+            builder_append(&builder, "%%s", escaped);
+            free(escaped);
+        }
+    }
 
-	while (line != NULL) {
-		char *escaped = string_escape(line);
-		if (escaped) {
-			size_t escaped_len = strlen(escaped);
-			/* +1 for newline if not first, +1 for null */
-			size_t needed = result_len + (first ? 0 : 1) + escaped_len + 1;
-
-			/* Grow buffer if needed */
-			if (needed > result_capacity) {
-				size_t new_capacity = needed * 2; /* Double to avoid frequent reallocations */
-				char *new_result = realloc(result, new_capacity);
-				if (!new_result) {
-					free(escaped);
-					free(result);
-					free(paths_copy);
-					return NULL;
-				}
-				result = new_result;
-				result_capacity = new_capacity;
-			}
-
-			/* Add newline separator if not first */
-			if (!first) result[result_len++] = '\n';
-
-			/* Copy escaped path */
-			strcpy(result + result_len, escaped);
-			result_len += escaped_len;
-
-			free(escaped);
-			first = false;
-		}
-		line = strtok(NULL, "\n");
-	}
-
-	free(paths_copy);
-	return result;
+    return builder_string(&builder);
 }
 
 /* Helper function to substitute a placeholder in a string with dynamic allocation */
@@ -544,6 +521,77 @@ char *format_array(const char *const *strings, int count, const char *template, 
 	}
 
 	return result;
+}
+
+/* Format a path array by applying a template to each item with an optional separator */
+char *format_path_array(const char *const *paths, int count, const char *template, const char *separator, bool basename_only) {
+    if (!paths || count == 0) {
+        return strdup("");
+    }
+
+    builder_t builder;
+    if (!builder_init(&builder, 4096)) {
+        return NULL;
+    }
+
+    /* Efficiently pre-calculate prefix and suffix of the template */
+    const char *ph = "%s";
+    const char *template_start = strstr(template, ph);
+    size_t template_ph_len = strlen(ph);
+
+    char *prefix = NULL;
+    size_t prefix_len = 0;
+    const char *suffix = NULL;
+    size_t suffix_len = 0;
+
+    if (template_start) {
+        prefix_len = template_start - template;
+        if (prefix_len > 0) {
+            prefix = malloc(prefix_len + 1);
+            if (prefix) {
+                strncpy(prefix, template, prefix_len);
+                prefix[prefix_len] = '\0';
+            }
+        }
+        suffix = template_start + template_ph_len;
+        suffix_len = strlen(suffix);
+    } else {
+        /* If no placeholder, the template is static and repeated for each item */
+        for (int i = 0; i < count; i++) {
+            if (i > 0 && separator) {
+                builder_append(&builder, "%s", separator);
+            }
+            builder_append(&builder, "%s", template);
+        }
+        char *result = builder_string(&builder);
+        free(prefix);
+        return result;
+    }
+
+    for (int i = 0; i < count; i++) {
+        const char *path = paths[i];
+        if (!path) continue;
+
+        const char *path_to_use = path;
+        if (basename_only) {
+            const char *basename = strrchr(path, '/');
+            if (basename) {
+                path_to_use = basename + 1;
+            }
+        }
+
+        if (i > 0 && separator) {
+            builder_append(&builder, "%s", separator);
+        }
+
+        /* Append prefix, value, and suffix for efficiency */
+        if (prefix_len > 0 && prefix) builder_append(&builder, "%s", prefix);
+        builder_append(&builder, "%s", path_to_use);
+        if (suffix_len > 0 && suffix) builder_append(&builder, "%s", suffix);
+    }
+
+    free(prefix);
+    return builder_string(&builder);
 }
 
 /* Format size in bytes to a human-readable string */

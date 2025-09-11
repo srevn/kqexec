@@ -29,7 +29,6 @@ static placeholder_t resolve_user(binder_t *ctx);
 static placeholder_t resolve_event_type(binder_t *ctx);
 static placeholder_t resolve_size(binder_t *ctx);
 static placeholder_t resolve_human_size(binder_t *ctx);
-static placeholder_t resolve_diff(binder_t *ctx, const char *type, bool basename_only);
 static placeholder_t resolve_array(binder_t *ctx, const char *array_spec);
 static placeholder_t resolve_exclusion(binder_t *ctx);
 
@@ -294,27 +293,6 @@ static placeholder_t resolve_human_size(binder_t *ctx) {
 	};
 }
 
-/* Diff-based placeholder resolution using unified diff_list() function */
-static placeholder_t resolve_diff(binder_t *ctx, const char *type, bool basename_only) {
-	if (ctx->watch->target != WATCH_DIRECTORY || !ctx->event->diff) {
-		return (placeholder_t) {.value = "", .allocated = false, .pre_formatted = true};
-	}
-
-	/* Use unified diff_list() function for efficiency */
-	char *result = diff_list(ctx->event->diff, basename_only, type);
-	if (result && result[0] != '\0') {
-		return (placeholder_t) {
-			.value = result,
-			.allocated = true,	   /* diff_list() returns allocated memory */
-			.pre_formatted = false /* Raw list that needs escaping */
-		};
-	}
-
-	/* Free empty result */
-	free(result);
-	return (placeholder_t) {.value = "", .allocated = false, .pre_formatted = true};
-}
-
 /* Exclusion patterns placeholder */
 static placeholder_t resolve_exclusion(binder_t *ctx) {
 	if (!ctx->watch->exclude || ctx->watch->num_exclude == 0) {
@@ -329,7 +307,7 @@ static placeholder_t resolve_exclusion(binder_t *ctx) {
 	};
 }
 
-/* Array placeholder resolver using unified diff_list() for efficiency */
+/* Array placeholder resolver using direct diff list access for efficiency */
 static placeholder_t resolve_array(binder_t *ctx, const char *array_spec) {
 	char *spec_copy = strdup(array_spec);
 	if (!spec_copy) {
@@ -354,7 +332,7 @@ static placeholder_t resolve_array(binder_t *ctx, const char *array_spec) {
 			result = format_array((const char *const *) ctx->watch->exclude, ctx->watch->num_exclude, template, " ");
 		}
 	} else if (ctx->watch->target == WATCH_DIRECTORY && ctx->event->diff) {
-		/* Handle diff-based arrays using unified diff_list() */
+		/* Handle diff-based arrays using direct array access */
 		bool basename_only = true; /* Default to basenames */
 		char *base_name = strdup(array_name);
 
@@ -366,29 +344,12 @@ static placeholder_t resolve_array(binder_t *ctx, const char *array_spec) {
 				basename_only = false;
 			}
 
-			/* Get list using unified diff_list() function */
-			char *list_str = diff_list(ctx->event->diff, basename_only, base_name);
-			if (list_str && list_str[0] != '\0') {
-				/* Convert newline-separated list to a formatted string based on the template */
-				builder_t builder;
-				if (builder_init(&builder, strlen(list_str) * 2)) {
-					char *list_copy = strdup(list_str);
-					if (list_copy) {
-						char *token = strtok(list_copy, "\n");
-						while (token) {
-							char *formatted_item = string_substitute(template, "%s", token);
-							if (formatted_item) {
-								builder_append(&builder, "%s", formatted_item);
-								free(formatted_item);
-							}
-							token = strtok(NULL, "\n");
-						}
-						free(list_copy);
-					}
-					result = builder_string(&builder);
-				}
+			/* Get list view using the new direct access function */
+			diff_list_t list = diff_list(ctx->event->diff, base_name);
+			if (list.count > 0) {
+				/* Use the new efficient path array formatter */
+				result = format_path_array(list.paths, list.count, template, " ", basename_only);
 			}
-			free(list_str);
 			free(base_name);
 		}
 	}
@@ -396,8 +357,8 @@ static placeholder_t resolve_array(binder_t *ctx, const char *array_spec) {
 	free(spec_copy);
 	return (placeholder_t) {
 		.value = result ? result : "",
-		.allocated = result != NULL, /* format_array() returns allocated memory */
-		.pre_formatted = true		 /* Pre-formatted, no additional escaping needed */
+		.allocated = result != NULL,
+		.pre_formatted = true /* Pre-formatted, no additional escaping needed */
 	};
 }
 
@@ -509,29 +470,59 @@ char *binder_placeholders(binder_t *ctx, const char *template) {
 					result = resolve_human_size(ctx);
 				else if (strcmp(name_buffer, "x") == 0)
 					result = resolve_exclusion(ctx);
-				else if (strcmp(name_buffer, "l") == 0)
-					result = resolve_diff(ctx, "changed", true);
-				else if (strcmp(name_buffer, "L") == 0)
-					result = resolve_diff(ctx, "changed", false);
-				else if (strcmp(name_buffer, "created") == 0)
-					result = resolve_diff(ctx, "created", true);
-				else if (strcmp(name_buffer, "deleted") == 0)
-					result = resolve_diff(ctx, "deleted", true);
-				else if (strcmp(name_buffer, "renamed") == 0)
-					result = resolve_diff(ctx, "renamed", true);
-				else if (strcmp(name_buffer, "modified") == 0)
-					result = resolve_diff(ctx, "modified", true);
+				else if (strcmp(name_buffer, "l") == 0 || strcmp(name_buffer, "L") == 0) {
+					bool basename_only = (strcmp(name_buffer, "l") == 0);
+					if (ctx->watch->target == WATCH_DIRECTORY && ctx->event->diff) {
+						builder_t list_builder;
+						builder_init(&list_builder, 1024);
+						const char *types[] = {"created", "deleted", "modified", "renamed"};
+						for (int i = 0; i < 4; i++) {
+							diff_list_t list = diff_list(ctx->event->diff, types[i]);
+							if (list.count > 0) {
+								bool use_basename = basename_only && (strcmp(types[i], "renamed") != 0);
+								char *value = format_escaped_path_array(list.paths, list.count, "\n", use_basename);
+								if (value && *value) {
+									if (list_builder.length > 0) {
+										builder_append(&list_builder, "\n");
+									}
+									builder_append(&list_builder, "%s", value);
+								}
+								free(value);
+							}
+						}
+						char *final_value = builder_string(&list_builder);
+						result = (placeholder_t) {
+							.value = final_value ? final_value : "",
+							.allocated = true,
+							.pre_formatted = true};
+					}
+				} else if (strcmp(name_buffer, "created") == 0 ||
+						   strcmp(name_buffer, "deleted") == 0 ||
+						   strcmp(name_buffer, "renamed") == 0 ||
+						   strcmp(name_buffer, "modified") == 0) {
+					if (ctx->watch->target == WATCH_DIRECTORY && ctx->event->diff) {
+						diff_list_t list = diff_list(ctx->event->diff, name_buffer);
+						if (list.count > 0) {
+							char *value = format_escaped_path_array(list.paths, list.count, "\n", true);
+							result = (placeholder_t) {
+								.value = value,
+								.allocated = true,
+								.pre_formatted = true
+							};
+						}
+					}
+				}
 			}
 		}
 
 		/* Handle the result from the resolver */
 		if (result.value) {
+			// All resolvers now return pre-formatted or pre-escaped values.
 			if (result.pre_formatted) {
-				/* Pre-formatted value, use as-is */
 				builder_append(&builder, "%s", result.value);
 			} else {
-				/* Raw value that needs escaping */
-				char *escaped = string_escape_list(result.value);
+				// This path is for raw values that need simple escaping.
+				char *escaped = string_escape(result.value);
 				if (escaped) {
 					builder_append(&builder, "%s", escaped);
 					free(escaped);
@@ -591,30 +582,45 @@ void binder_environment(binder_t *ctx) {
 
 	/* Handle list-based variables */
 	if (ctx->watch->target == WATCH_DIRECTORY && ctx->event->diff) {
-		#define SET_ENV_SPACE_LIST(key, type_str) do { \
-			placeholder_t p = resolve_diff(ctx, type_str, true); /* Get basenames */ \
-			if (p.value) { \
-				char *space_list = strdup(p.value); \
-                if (space_list) { \
-                    for (char *ptr = space_list; *ptr; ptr++) { \
-                        if (*ptr == '\n') { \
-                            *ptr = ' '; \
-                        } \
-                    } \
-                    SET_ENV(key, space_list); \
-                    free(space_list); \
-                } \
-				if (p.allocated) free(p.value); \
-			} \
-		} while (0)
+		const char *types[] = {"created", "deleted", "renamed", "modified"};
+		builder_t changed_builder;
+		bool builder_inited = builder_init(&changed_builder, 1024);
 
-		SET_ENV_SPACE_LIST("KQ_CHANGED", "changed");
-		SET_ENV_SPACE_LIST("KQ_CREATED", "created");
-		SET_ENV_SPACE_LIST("KQ_DELETED", "deleted");
-		SET_ENV_SPACE_LIST("KQ_RENAMED", "renamed");
-		SET_ENV_SPACE_LIST("KQ_MODIFIED", "modified");
+		for (int i = 0; i < 4; i++) {
+			diff_list_t list = diff_list(ctx->event->diff, types[i]);
+			if (list.count > 0) {
+				bool basename_only = (strcmp(types[i], "renamed") != 0);
+				char *value = format_path_array(list.paths, list.count, "%s", " ", basename_only);
 
-		#undef SET_ENV_SPACE_LIST
+				if (value) {
+					if (strcmp(types[i], "created") == 0) {
+						SET_ENV("KQ_CREATED", value);
+					} else if (strcmp(types[i], "deleted") == 0) {
+						SET_ENV("KQ_DELETED", value);
+					} else if (strcmp(types[i], "renamed") == 0) {
+						SET_ENV("KQ_RENAMED", value);
+					} else if (strcmp(types[i], "modified") == 0) {
+						SET_ENV("KQ_MODIFIED", value);
+					}
+
+					if (builder_inited && *value) {
+						if (changed_builder.length > 0) {
+							builder_append(&changed_builder, " ");
+						}
+						builder_append(&changed_builder, "%s", value);
+					}
+					free(value);
+				}
+			}
+		}
+
+		if (builder_inited) {
+			char *changed_value = builder_string(&changed_builder);
+			if (changed_value && *changed_value) {
+				SET_ENV("KQ_CHANGED", changed_value);
+			}
+			free(changed_value);
+		}
 	}
 
 	/* KQ_EXCLUDE environment variable */
