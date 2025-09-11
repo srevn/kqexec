@@ -357,36 +357,31 @@ static placeholder_t resolve_array(binder_t *ctx, const char *array_spec) {
 		}
 	} else if (ctx->watch->target == WATCH_DIRECTORY && ctx->event->diff) {
 		/* Handle diff-based arrays using unified diff_list() */
-		bool basename_only = false;
+		bool basename_only = true; /* Default to basenames */
 		char *base_name = strdup(array_name);
-		
+
 		if (base_name) {
-			/* Check for _base suffix */
-			char *base_suffix = strstr(base_name, "_base");
-			if (base_suffix) {
-				*base_suffix = '\0';
-				basename_only = true;
+			/* Check for _path suffix to get full paths */
+			char *path_suffix = strstr(base_name, "_path");
+			if (path_suffix) {
+				*path_suffix = '\0';
+				basename_only = false;
 			}
-			
+
 			/* Get list using unified diff_list() function */
 			char *list_str = diff_list(ctx->event->diff, basename_only, base_name);
 			if (list_str && list_str[0] != '\0') {
-				/* Convert newline-separated list to space-separated formatted string */
+				/* Convert newline-separated list to a formatted string based on the template */
 				builder_t builder;
 				if (builder_init(&builder, strlen(list_str) * 2)) {
 					char *list_copy = strdup(list_str);
 					if (list_copy) {
 						char *token = strtok(list_copy, "\n");
-						bool first = true;
 						while (token) {
 							char *formatted_item = string_substitute(template, "%s", token);
 							if (formatted_item) {
-								if (!first) {
-									builder_append(&builder, " ");
-								}
 								builder_append(&builder, "%s", formatted_item);
 								free(formatted_item);
-								first = false;
 							}
 							token = strtok(NULL, "\n");
 						}
@@ -428,12 +423,12 @@ static placeholder_t resolve_array(binder_t *ctx, const char *array_spec) {
  * %e: Event type which occurred
  * %x: Comma-separated list of exclusion patterns for this watch
  * %[array:template]: Advanced template substitution where 'array' can be:
- *   - created, created_base: created items (with/without full paths)
- *   - deleted, deleted_base: deleted items (with/without full paths)
- *   - modified, modified_base: modified items (with/without full paths)
- *   - renamed, renamed_base: renamed items (with/without full paths)
+ *   - created, created_path: created items (basenames by default, or full paths with _path)
+ *   - deleted, deleted_path: deleted items (basenames by default, or full paths with _path)
+ *   - renamed, renamed_path: renamed items (basenames by default, or full paths with _path)
+ *   - modified, modified_path: modified items (basenames by default, or full paths with _path)
  *   - excluded: exclusion patterns from configuration
- *   Template is applied to each item in the array (e.g., %[created:'%s'] wraps each created file in quotes)
+ *   Template is applied to each item in the array (e.g., %[created_path:'%s'] wraps each created file path in quotes)
  */
 char *binder_placeholders(binder_t *ctx, const char *template) {
 	if (!ctx || !template) {
@@ -520,7 +515,7 @@ char *binder_placeholders(binder_t *ctx, const char *template) {
 						}
 					
 						if (diff_type) {
-							result = resolve_diff(ctx, diff_type, false);
+							result = resolve_diff(ctx, diff_type, true);
 							current += len - 1; /* Will be incremented again at end */
 						} else {
 							/* Unknown placeholder - copy as literal */
