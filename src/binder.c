@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#include <ctype.h>
 
 #include "logger.h"
 #include "resource.h"
@@ -204,13 +205,16 @@ static placeholder_result_t resolve_time_placeholder(binder_context_t *ctx) {
 /* User placeholder */
 static placeholder_result_t resolve_user_placeholder(binder_context_t *ctx) {
 	if (!ctx->user_string) {
-		ctx->user_string = malloc(64);
+		ctx->user_string = malloc(128);
 		if (ctx->user_string) {
-			struct passwd *pwd = getpwuid(ctx->event->user_id);
-			if (pwd && pwd->pw_name) {
-				snprintf(ctx->user_string, 64, "%s", pwd->pw_name);
+			struct passwd pwd;
+			struct passwd *result;
+			char pw_buf[1024];
+			int ret = getpwuid_r(ctx->event->user_id, &pwd, pw_buf, sizeof(pw_buf), &result);
+			if (ret == 0 && result != NULL) {
+				snprintf(ctx->user_string, 128, "%s", pwd.pw_name);
 			} else {
-				snprintf(ctx->user_string, 64, "%d", ctx->event->user_id);
+				snprintf(ctx->user_string, 128, "%d", ctx->event->user_id);
 			}
 		}
 	}
@@ -369,23 +373,28 @@ static placeholder_result_t resolve_array_placeholder(binder_context_t *ctx, con
 			/* Get list using unified diff_list() function */
 			char *list_str = diff_list(ctx->event->diff, basename_only, base_name);
 			if (list_str && list_str[0] != '\0') {
-				/* Convert newline-separated list to array for template formatting */
-				array_t *items = array_init(16);
-				if (items) {
+				/* Convert newline-separated list to space-separated formatted string */
+				builder_t builder;
+				if (builder_init(&builder, strlen(list_str) * 2)) {
 					char *list_copy = strdup(list_str);
 					if (list_copy) {
 						char *token = strtok(list_copy, "\n");
+						bool first = true;
 						while (token) {
-							array_add(items, strdup(token));
+							char *formatted_item = string_substitute(template, "%s", token);
+							if (formatted_item) {
+								if (!first) {
+									builder_append(&builder, " ");
+								}
+								builder_append(&builder, "%s", formatted_item);
+								free(formatted_item);
+								first = false;
+							}
 							token = strtok(NULL, "\n");
 						}
 						free(list_copy);
-						
-						if (items->count > 0) {
-							result = format_array((const char *const *)items->items, items->count, template, " ");
-						}
 					}
-					array_free(items);
+					result = builder_string(&builder);
 				}
 			}
 			free(list_str);
@@ -489,27 +498,40 @@ char *binder_placeholders(binder_context_t *ctx, const char *template) {
 					case 'x': result = resolve_exclusion_placeholder(ctx); break;
 					case 'l': result = resolve_diff_placeholder(ctx, "changed", true); break;
 					case 'L': result = resolve_diff_placeholder(ctx, "changed", false); break;
-					default:
-						/* Handle multi-word placeholders (created, deleted, etc.) */
+					default: {
+						const char* diff_type = NULL;
+						size_t len = 0;
+					
 						if (strncmp(current, "created", 7) == 0) {
-							result = resolve_diff_placeholder(ctx, "created", false);
-							current += 6; /* Will be incremented again at end */
+							len = 7;
+							diff_type = "created";
 						} else if (strncmp(current, "deleted", 7) == 0) {
-							result = resolve_diff_placeholder(ctx, "deleted", false);
-							current += 6;
+							len = 7;
+							diff_type = "deleted";
 						} else if (strncmp(current, "renamed", 7) == 0) {
-							result = resolve_diff_placeholder(ctx, "renamed", false);
-							current += 6;
+							len = 7;
+							diff_type = "renamed";
 						} else if (strncmp(current, "modified", 8) == 0) {
-							result = resolve_diff_placeholder(ctx, "modified", false);
-							current += 7;
+							len = 8;
+							diff_type = "modified";
+						}
+					
+						/* Ensure we matched a whole word placeholder */
+						if (diff_type && isalnum(current[len])) {
+							diff_type = NULL;
+						}
+					
+						if (diff_type) {
+							result = resolve_diff_placeholder(ctx, diff_type, false);
+							current += len - 1; /* Will be incremented again at end */
 						} else {
 							/* Unknown placeholder - copy as literal */
-							builder_append(&builder, "%c%c", placeholder_start[0], *current);
+							builder_append(&builder, "%%c%%c", placeholder_start[0], *current);
 							current++;
 							continue;
 						}
 						break;
+					}
 				}
 				
 				/* Handle the result based on its metadata */
@@ -628,9 +650,12 @@ void binder_set_environment(binder_context_t *ctx) {
 	SET_ENV("KQ_USER_ID", buffer);
 	
 	/* KQ_USERNAME */
-	struct passwd *pwd = getpwuid(ctx->event->user_id);
-	if (pwd && pwd->pw_name) {
-		SET_ENV_ESCAPED("KQ_USERNAME", pwd->pw_name);
+	struct passwd pwd;
+	struct passwd *result;
+	char pw_buf[1024];
+	int ret = getpwuid_r(ctx->event->user_id, &pwd, pw_buf, sizeof(pw_buf), &result);
+	if (ret == 0 && result != NULL) {
+		SET_ENV_ESCAPED("KQ_USERNAME", pwd.pw_name);
 	} else {
 		snprintf(buffer, sizeof(buffer), "%d", ctx->event->user_id);
 		SET_ENV("KQ_USERNAME", buffer);

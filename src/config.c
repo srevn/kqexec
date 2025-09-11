@@ -145,7 +145,7 @@ const char *filter_to_string(filter_t event) {
 	if (event == EVENT_NONE) return "NONE";
 
 	/* Handle composite event types by listing all that apply */
-	static char buffer[64];
+	static __thread char buffer[64];
 	buffer[0] = '\0';
 
 	if (event & EVENT_STRUCTURE) {

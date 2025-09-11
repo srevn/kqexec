@@ -548,7 +548,7 @@ char *format_array(const char *const *strings, int count, const char *template, 
 
 /* Format size in bytes to a human-readable string */
 const char *format_size(ssize_t size, bool show_sign) {
-	static char buf[32];
+	static __thread char buf[32];
 	const char *suffixes[] = {"B", "KB", "MB", "GB", "TB"};
 	size_t i = 0;
 	double d_size;
