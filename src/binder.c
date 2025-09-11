@@ -1,0 +1,691 @@
+#include "binder.h"
+
+#include <errno.h>
+#include <libgen.h>
+#include <pwd.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
+
+#include "logger.h"
+#include "resource.h"
+#include "snapshot.h"
+#include "stability.h"
+#include "utilities.h"
+
+/* Result metadata for placeholder resolution */
+typedef struct {
+	char *value;           /* The resolved value */
+	bool allocated;        /* Should we free this value? */
+	bool pre_formatted;    /* Is this already formatted? (use as-is) */
+} placeholder_result_t;
+
+/* Forward declarations for placeholder resolvers */
+static placeholder_result_t resolve_path_placeholder(binder_context_t *ctx);
+static placeholder_result_t resolve_basename_placeholder(binder_context_t *ctx);
+static placeholder_result_t resolve_dirname_placeholder(binder_context_t *ctx);
+static placeholder_result_t resolve_watch_path_placeholder(binder_context_t *ctx);
+static placeholder_result_t resolve_watch_name_placeholder(binder_context_t *ctx);
+static placeholder_result_t resolve_relative_path_placeholder(binder_context_t *ctx);
+static placeholder_result_t resolve_time_placeholder(binder_context_t *ctx);
+static placeholder_result_t resolve_user_placeholder(binder_context_t *ctx);
+static placeholder_result_t resolve_event_type_placeholder(binder_context_t *ctx);
+static placeholder_result_t resolve_size_placeholder(binder_context_t *ctx);
+static placeholder_result_t resolve_human_size_placeholder(binder_context_t *ctx);
+static placeholder_result_t resolve_diff_placeholder(binder_context_t *ctx, const char *type, bool basename_only);
+static placeholder_result_t resolve_array_placeholder(binder_context_t *ctx, const char *array_spec);
+static placeholder_result_t resolve_exclusion_placeholder(binder_context_t *ctx);
+
+/* Create a new binder context */
+binder_context_t *binder_context_create(monitor_t *monitor, watchref_t watchref, const event_t *event) {
+	if (!monitor || !event) {
+		log_message(ERROR, "Invalid arguments to binder_context_create");
+		return NULL;
+	}
+	
+	const watch_t *watch = registry_get(monitor->registry, watchref);
+	if (!watch) {
+		log_message(ERROR, "Invalid watchref in binder_context_create");
+		return NULL;
+	}
+	
+	binder_context_t *ctx = calloc(1, sizeof(binder_context_t));
+	if (!ctx) {
+		log_message(ERROR, "Failed to allocate binder context");
+		return NULL;
+	}
+	
+	ctx->monitor = monitor;
+	ctx->watchref = watchref;
+	ctx->event = event;
+	ctx->watch = watch;
+	ctx->size_calculated = false;
+	
+	return ctx;
+}
+
+/* Destroy binder context and free all cached data */
+void binder_context_destroy(binder_context_t *ctx) {
+	if (!ctx) return;
+	
+	free(ctx->escaped_path);
+	free(ctx->basename);
+	free(ctx->dirname);
+	free(ctx->relative_path);
+	free(ctx->escaped_relative_path);
+	free(ctx->escaped_basename);
+	free(ctx->escaped_dirname);
+	free(ctx->escaped_watch_path);
+	free(ctx->time_string);
+	free(ctx->user_string);
+	free(ctx->event_string);
+	free(ctx->size_string);
+	free(ctx->human_size_string);
+	
+	free(ctx);
+}
+
+/* Lazy-computed path placeholder */
+static placeholder_result_t resolve_path_placeholder(binder_context_t *ctx) {
+	if (!ctx->escaped_path) {
+		ctx->escaped_path = string_escape(ctx->event->path);
+	}
+	return (placeholder_result_t){
+		.value = ctx->escaped_path ? ctx->escaped_path : "",
+		.allocated = false,     /* Don't free - it's cached in context */
+		.pre_formatted = true   /* Already escaped, use as-is */
+	};
+}
+
+/* Lazy-computed basename placeholder */
+static placeholder_result_t resolve_basename_placeholder(binder_context_t *ctx) {
+	if (!ctx->basename) {
+		char *path_copy = strdup(ctx->event->path);
+		if (path_copy) {
+			ctx->basename = strdup(basename(path_copy));
+			free(path_copy);
+		}
+	}
+	
+	if (!ctx->escaped_basename && ctx->basename) {
+		ctx->escaped_basename = string_escape(ctx->basename);
+	}
+	
+	return (placeholder_result_t){
+		.value = ctx->escaped_basename ? ctx->escaped_basename : "",
+		.allocated = false,  /* Don't free - it's cached in context */
+		.pre_formatted = true
+	};
+}
+
+/* Lazy-computed dirname placeholder */
+static placeholder_result_t resolve_dirname_placeholder(binder_context_t *ctx) {
+	if (!ctx->dirname) {
+		char *path_copy = strdup(ctx->event->path);
+		if (path_copy) {
+			ctx->dirname = strdup(dirname(path_copy));
+			free(path_copy);
+		}
+	}
+	
+	if (!ctx->escaped_dirname && ctx->dirname) {
+		ctx->escaped_dirname = string_escape(ctx->dirname);
+	}
+	
+	return (placeholder_result_t){
+		.value = ctx->escaped_dirname ? ctx->escaped_dirname : "",
+		.allocated = false,
+		.pre_formatted = true
+	};
+}
+
+/* Watch path placeholder */
+static placeholder_result_t resolve_watch_path_placeholder(binder_context_t *ctx) {
+	if (!ctx->escaped_watch_path) {
+		ctx->escaped_watch_path = string_escape(ctx->watch->path);
+	}
+	return (placeholder_result_t){
+		.value = ctx->escaped_watch_path ? ctx->escaped_watch_path : "",
+		.allocated = false,
+		.pre_formatted = true
+	};
+}
+
+/* Watch name placeholder */
+static placeholder_result_t resolve_watch_name_placeholder(binder_context_t *ctx) {
+	return (placeholder_result_t){
+		.value = ctx->watch->name ? (char *)ctx->watch->name : "",
+		.allocated = false,
+		.pre_formatted = true
+	};
+}
+
+/* Relative path placeholder */
+static placeholder_result_t resolve_relative_path_placeholder(binder_context_t *ctx) {
+	if (!ctx->relative_path) {
+		const char *rel_path = ctx->event->path + strlen(ctx->watch->path);
+		if (*rel_path == '/') {
+			rel_path++;
+		}
+		ctx->relative_path = strdup(rel_path);
+	}
+	
+	if (!ctx->escaped_relative_path && ctx->relative_path) {
+		ctx->escaped_relative_path = string_escape(ctx->relative_path);
+	}
+	
+	return (placeholder_result_t){
+		.value = ctx->escaped_relative_path ? ctx->escaped_relative_path : "",
+		.allocated = false,
+		.pre_formatted = true
+	};
+}
+
+/* Time placeholder */
+static placeholder_result_t resolve_time_placeholder(binder_context_t *ctx) {
+	if (!ctx->time_string) {
+		ctx->time_string = malloc(64);
+		if (ctx->time_string) {
+			struct tm tm;
+			localtime_r(&ctx->event->wall_time.tv_sec, &tm);
+			strftime(ctx->time_string, 64, "%Y-%m-%d %H:%M:%S", &tm);
+		}
+	}
+	return (placeholder_result_t){
+		.value = ctx->time_string ? ctx->time_string : "",
+		.allocated = false,
+		.pre_formatted = true
+	};
+}
+
+/* User placeholder */
+static placeholder_result_t resolve_user_placeholder(binder_context_t *ctx) {
+	if (!ctx->user_string) {
+		ctx->user_string = malloc(64);
+		if (ctx->user_string) {
+			struct passwd *pwd = getpwuid(ctx->event->user_id);
+			if (pwd && pwd->pw_name) {
+				snprintf(ctx->user_string, 64, "%s", pwd->pw_name);
+			} else {
+				snprintf(ctx->user_string, 64, "%d", ctx->event->user_id);
+			}
+		}
+	}
+	return (placeholder_result_t){
+		.value = ctx->user_string ? ctx->user_string : "",
+		.allocated = false,
+		.pre_formatted = true
+	};
+}
+
+/* Event type placeholder */
+static placeholder_result_t resolve_event_type_placeholder(binder_context_t *ctx) {
+	if (!ctx->event_string) {
+		const char *event_str = filter_to_string(ctx->event->type);
+		ctx->event_string = strdup(event_str);
+	}
+	return (placeholder_result_t){
+		.value = ctx->event_string ? ctx->event_string : "",
+		.allocated = false,
+		.pre_formatted = true
+	};
+}
+
+/* File size placeholder */
+static placeholder_result_t resolve_size_placeholder(binder_context_t *ctx) {
+	if (!ctx->size_calculated) {
+		subscription_t *subscription = NULL;
+		if (watchref_valid(ctx->watchref)) {
+			subscription = resources_subscription(ctx->monitor->resources, ctx->monitor->registry,
+												  ctx->event->path, ctx->watchref, ENTITY_UNKNOWN);
+		}
+		
+		if (subscription && subscription->resource->kind == ENTITY_DIRECTORY) {
+			subscription_t *size_subscription = stability_root(ctx->monitor, subscription);
+			if (size_subscription) {
+				resource_lock(size_subscription->resource);
+				if (size_subscription->profile && size_subscription->profile->stability) {
+					ctx->file_size = size_subscription->profile->stability->stats.tree_size;
+				}
+				resource_unlock(size_subscription->resource);
+			}
+		} else {
+			struct stat info;
+			if (stat(ctx->event->path, &info) == 0) {
+				ctx->file_size = info.st_size;
+			}
+		}
+		ctx->size_calculated = true;
+	}
+	
+	if (!ctx->size_string) {
+		ctx->size_string = malloc(32);
+		if (ctx->size_string) {
+			snprintf(ctx->size_string, 32, "%zu", ctx->file_size);
+		}
+	}
+	
+	return (placeholder_result_t){
+		.value = ctx->size_string ? ctx->size_string : "0",
+		.allocated = false,
+		.pre_formatted = true
+	};
+}
+
+/* Human-readable size placeholder */
+static placeholder_result_t resolve_human_size_placeholder(binder_context_t *ctx) {
+	if (!ctx->size_calculated) {
+		/* Trigger size calculation */
+		resolve_size_placeholder(ctx);
+	}
+	
+	if (!ctx->human_size_string) {
+		const char *human_size = format_size((ssize_t)ctx->file_size, false);
+		ctx->human_size_string = strdup(human_size);
+	}
+	
+	return (placeholder_result_t){
+		.value = ctx->human_size_string ? ctx->human_size_string : "0 B",
+		.allocated = false,
+		.pre_formatted = true
+	};
+}
+
+/* Diff-based placeholder resolution using unified diff_list() function */
+static placeholder_result_t resolve_diff_placeholder(binder_context_t *ctx, const char *type, bool basename_only) {
+	if (ctx->watch->target != WATCH_DIRECTORY || !ctx->event->diff) {
+		return (placeholder_result_t){.value = "", .allocated = false, .pre_formatted = true};
+	}
+	
+	/* Use unified diff_list() function for efficiency */
+	char *result = diff_list(ctx->event->diff, basename_only, type);
+	if (result && result[0] != '\0') {
+		return (placeholder_result_t){
+			.value = result,
+			.allocated = true,       /* diff_list() returns allocated memory */
+			.pre_formatted = false   /* Raw list that needs escaping */
+		};
+	}
+	
+	/* Free empty result */
+	free(result);
+	return (placeholder_result_t){.value = "", .allocated = false, .pre_formatted = true};
+}
+
+/* Exclusion patterns placeholder */
+static placeholder_result_t resolve_exclusion_placeholder(binder_context_t *ctx) {
+	if (!ctx->watch->exclude || ctx->watch->num_exclude == 0) {
+		return (placeholder_result_t){.value = "", .allocated = false, .pre_formatted = true};
+	}
+	
+	char *result = format_array((const char *const *)ctx->watch->exclude, ctx->watch->num_exclude, "'%s'", ",");
+	return (placeholder_result_t){
+		.value = result ? result : "",
+		.allocated = result != NULL,  /* format_array() returns allocated memory */
+		.pre_formatted = true        /* Pre-formatted, no additional escaping needed */
+	};
+}
+
+/* Array placeholder resolver using unified diff_list() for efficiency */
+static placeholder_result_t resolve_array_placeholder(binder_context_t *ctx, const char *array_spec) {
+	char *spec_copy = strdup(array_spec);
+	if (!spec_copy) {
+		return (placeholder_result_t){.value = "", .allocated = false, .pre_formatted = true};
+	}
+	
+	char *colon = strchr(spec_copy, ':');
+	if (!colon) {
+		free(spec_copy);
+		return (placeholder_result_t){.value = "", .allocated = false, .pre_formatted = true};
+	}
+	
+	*colon = '\0';
+	const char *array_name = spec_copy;
+	const char *template = colon + 1;
+	
+	char *result = NULL;
+	
+	/* Handle exclusion patterns */
+	if (strcmp(array_name, "exclude") == 0) {
+		if (ctx->watch->exclude && ctx->watch->num_exclude > 0) {
+			result = format_array((const char *const *)ctx->watch->exclude, ctx->watch->num_exclude, template, " ");
+		}
+	} else if (ctx->watch->target == WATCH_DIRECTORY && ctx->event->diff) {
+		/* Handle diff-based arrays using unified diff_list() */
+		bool basename_only = false;
+		char *base_name = strdup(array_name);
+		
+		if (base_name) {
+			/* Check for _base suffix */
+			char *base_suffix = strstr(base_name, "_base");
+			if (base_suffix) {
+				*base_suffix = '\0';
+				basename_only = true;
+			}
+			
+			/* Get list using unified diff_list() function */
+			char *list_str = diff_list(ctx->event->diff, basename_only, base_name);
+			if (list_str && list_str[0] != '\0') {
+				/* Convert newline-separated list to array for template formatting */
+				array_t *items = array_init(16);
+				if (items) {
+					char *list_copy = strdup(list_str);
+					if (list_copy) {
+						char *token = strtok(list_copy, "\n");
+						while (token) {
+							array_add(items, strdup(token));
+							token = strtok(NULL, "\n");
+						}
+						free(list_copy);
+						
+						if (items->count > 0) {
+							result = format_array((const char *const *)items->items, items->count, template, " ");
+						}
+					}
+					array_free(items);
+				}
+			}
+			free(list_str);
+			free(base_name);
+		}
+	}
+	
+	free(spec_copy);
+	return (placeholder_result_t){
+		.value = result ? result : "",
+		.allocated = result != NULL,  /* format_array() returns allocated memory */
+		.pre_formatted = true        /* Pre-formatted, no additional escaping needed */
+	};
+}
+
+/* Substitutes placeholders in the command string:
+ * %created: List of created items (newline-separated)
+ * %deleted: List of deleted items (newline-separated)
+ * %renamed: List of renamed items (format: old -> new, newline-separated)
+ * %modified: List of modified files (newline-separated)
+ * %p: Path where the event occurred
+ * %n: Filename (for files) or subdirectory name (for directories) which triggered the event
+ * %d: Directory containing the path that triggered the event
+ * %b: Base path of the watch from the config
+ * %w: Name of the watch from the config
+ * %r: Event path relative to the watch path
+ * %l: List of items (basenames) changed
+ * %L: List of items changed (newline-separated)
+ * %h: Size of the file in bytes (recursive for directories)
+ * %H: Human-readable size (e.g., 1.2M, 512K)
+ * %t: Time of the event (format: YYYY-MM-DD HH:MM:SS)
+ * %u: User who triggered the event
+ * %e: Event type which occurred
+ * %x: Comma-separated list of exclusion patterns for this watch
+ * %[array:template]: Advanced template substitution where 'array' can be:
+ *   - created, created_base: created items (with/without full paths)
+ *   - deleted, deleted_base: deleted items (with/without full paths)
+ *   - modified, modified_base: modified items (with/without full paths)
+ *   - renamed, renamed_base: renamed items (with/without full paths)
+ *   - exclude: exclusion patterns from configuration
+ *   Template is applied to each item in the array (e.g., %[created:'%s'] wraps each created file in quotes)
+ */
+char *binder_placeholders(binder_context_t *ctx, const char *template) {
+	if (!ctx || !template) {
+		log_message(ERROR, "Invalid arguments to binder_placeholders");
+		return NULL;
+	}
+	
+	builder_t builder;
+	if (!builder_init(&builder, strlen(template) * 2)) {
+		log_message(ERROR, "Failed to initialize string builder");
+		return NULL;
+	}
+	
+	const char *current = template;
+	while (*current) {
+		if (*current == '%') {
+			const char *placeholder_start = current;
+			current++;
+			
+			/* Handle array placeholders like %[exclude:--exclude=%s] */
+			if (*current == '[') {
+				const char *array_start = current + 1;
+				const char *array_end = strchr(array_start, ']');
+				if (array_end) {
+					size_t array_len = array_end - array_start;
+					char *array_spec = malloc(array_len + 1);
+					if (array_spec) {
+						strncpy(array_spec, array_start, array_len);
+						array_spec[array_len] = '\0';
+						
+						placeholder_result_t result = resolve_array_placeholder(ctx, array_spec);
+						if (result.value && result.value[0] != '\0') {
+							builder_append(&builder, "%s", result.value);
+						}
+						if (result.allocated) {
+							free(result.value);
+						}
+						free(array_spec);
+					}
+					current = array_end + 1;
+					continue;
+				}
+			}
+			
+			/* Handle regular single-character placeholders */
+			if (*current) {
+				placeholder_result_t result = {.value = NULL};
+				switch (*current) {
+					case 'p': result = resolve_path_placeholder(ctx); break;
+					case 'n': result = resolve_basename_placeholder(ctx); break;
+					case 'd': result = resolve_dirname_placeholder(ctx); break;
+					case 'b': result = resolve_watch_path_placeholder(ctx); break;
+					case 'w': result = resolve_watch_name_placeholder(ctx); break;
+					case 'r': result = resolve_relative_path_placeholder(ctx); break;
+					case 't': result = resolve_time_placeholder(ctx); break;
+					case 'u': result = resolve_user_placeholder(ctx); break;
+					case 'e': result = resolve_event_type_placeholder(ctx); break;
+					case 'h': result = resolve_size_placeholder(ctx); break;
+					case 'H': result = resolve_human_size_placeholder(ctx); break;
+					case 'x': result = resolve_exclusion_placeholder(ctx); break;
+					case 'l': result = resolve_diff_placeholder(ctx, "changed", true); break;
+					case 'L': result = resolve_diff_placeholder(ctx, "changed", false); break;
+					default:
+						/* Handle multi-word placeholders (created, deleted, etc.) */
+						if (strncmp(current, "created", 7) == 0) {
+							result = resolve_diff_placeholder(ctx, "created", false);
+							current += 6; /* Will be incremented again at end */
+						} else if (strncmp(current, "deleted", 7) == 0) {
+							result = resolve_diff_placeholder(ctx, "deleted", false);
+							current += 6;
+						} else if (strncmp(current, "renamed", 7) == 0) {
+							result = resolve_diff_placeholder(ctx, "renamed", false);
+							current += 6;
+						} else if (strncmp(current, "modified", 8) == 0) {
+							result = resolve_diff_placeholder(ctx, "modified", false);
+							current += 7;
+						} else {
+							/* Unknown placeholder - copy as literal */
+							builder_append(&builder, "%c%c", placeholder_start[0], *current);
+							current++;
+							continue;
+						}
+						break;
+				}
+				
+				/* Handle the result based on its metadata */
+				if (result.value && result.value[0] != '\0') {
+					if (result.pre_formatted) {
+						/* Pre-formatted value, use as-is */
+						builder_append(&builder, "%s", result.value);
+					} else {
+						/* Raw value that needs escaping */
+						char *escaped = string_escape_list(result.value);
+						if (escaped) {
+							builder_append(&builder, "%s", escaped);
+							free(escaped);
+						}
+					}
+				}
+				
+				/* Clean up allocated result */
+				if (result.allocated && result.value) {
+					free(result.value);
+				}
+				current++;
+			} else {
+				/* Trailing % at end of string */
+				builder_append(&builder, "%%");
+			}
+		} else {
+			/* Regular character - append as is */
+			builder_append(&builder, "%c", *current);
+			current++;
+		}
+	}
+	
+	return builder_string(&builder);
+}
+
+/* Set environment variables for command execution */
+void binder_set_environment(binder_context_t *ctx) {
+	if (!ctx) {
+		log_message(WARNING, "Invalid context in binder_set_environment");
+		return;
+	}
+	
+	char buffer[1024];
+	
+	/* Helper macros to reduce repetitive environment variable setting */
+	#define SET_ENV(key, value) \
+		if (value) { setenv(key, value, 1); }
+	
+	#define SET_ENV_ESCAPED(key, value) \
+		if (value) { \
+			char *escaped = string_escape(value); \
+			if (escaped) { \
+				setenv(key, escaped, 1); \
+				free(escaped); \
+			} \
+		}
+	
+	#define SET_ENV_LIST(key, list_value) \
+		if (list_value) { \
+			char *escaped_list = string_escape_list(list_value); \
+			if (escaped_list) { \
+				setenv(key, escaped_list, 1); \
+				free(escaped_list); \
+			} \
+		}
+	
+	#define SET_ENV_DIFF_LIST(key, diff_func) \
+		{ char *list = diff_func(ctx->event->diff, true); \
+		  SET_ENV_LIST(key, list); \
+		  if (list) free(list); }
+	
+	/* KQ_EVENT_TYPE */
+	SET_ENV("KQ_EVENT_TYPE", filter_to_string(ctx->event->type));
+	
+	/* KQ_TRIGGER_PATH */
+	SET_ENV_ESCAPED("KQ_TRIGGER_PATH", ctx->event->path);
+	
+	/* KQ_WATCH_NAME */
+	SET_ENV_ESCAPED("KQ_WATCH_NAME", ctx->watch->name);
+	
+	/* KQ_WATCH_PATH */
+	SET_ENV_ESCAPED("KQ_WATCH_PATH", ctx->watch->path);
+	
+	/* KQ_RELATIVE_PATH */
+	if (ctx->event->path && ctx->watch->path && strlen(ctx->event->path) > strlen(ctx->watch->path)) {
+		const char *relative_path = ctx->event->path + strlen(ctx->watch->path);
+		if (*relative_path == '/') {
+			relative_path++;
+		}
+		char *escaped_rel_path = string_escape(relative_path);
+		if (escaped_rel_path) {
+			setenv("KQ_RELATIVE_PATH", escaped_rel_path, 1);
+			free(escaped_rel_path);
+		}
+	}
+	
+	/* KQ_TRIGGER_DIR */
+	if (ctx->event->path) {
+		char *path_copy = strdup(ctx->event->path);
+		if (path_copy) {
+			char *dir_result = dirname(path_copy);
+			if (dir_result) {
+				char *escaped_dir = string_escape(dir_result);
+				if (escaped_dir) {
+					setenv("KQ_TRIGGER_DIR", escaped_dir, 1);
+					free(escaped_dir);
+				}
+			}
+			free(path_copy);
+		}
+	}
+	
+	/* KQ_USER_ID */
+	snprintf(buffer, sizeof(buffer), "%d", ctx->event->user_id);
+	SET_ENV("KQ_USER_ID", buffer);
+	
+	/* KQ_USERNAME */
+	struct passwd *pwd = getpwuid(ctx->event->user_id);
+	if (pwd && pwd->pw_name) {
+		SET_ENV_ESCAPED("KQ_USERNAME", pwd->pw_name);
+	} else {
+		snprintf(buffer, sizeof(buffer), "%d", ctx->event->user_id);
+		SET_ENV("KQ_USERNAME", buffer);
+	}
+	
+	/* KQ_TIMESTAMP */
+	struct tm tm;
+	if (localtime_r(&ctx->event->wall_time.tv_sec, &tm)) {
+		strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%S", &tm);
+		SET_ENV("KQ_TIMESTAMP", buffer);
+	}
+	
+	/* Directory watch diff-based environment variables */
+	if (ctx->watch->target == WATCH_DIRECTORY && ctx->event->diff) {
+		SET_ENV_DIFF_LIST("KQ_CHANGED", diff_changed);
+		SET_ENV_DIFF_LIST("KQ_CREATED", diff_created);
+		SET_ENV_DIFF_LIST("KQ_DELETED", diff_deleted);
+		SET_ENV_DIFF_LIST("KQ_RENAMED", diff_renamed);
+		SET_ENV_DIFF_LIST("KQ_MODIFIED", diff_modified);
+	}
+	
+	/* Global variables from config */
+	const config_t *config = ctx->monitor->config;
+	if (config && config->num_variables > 0) {
+		for (int i = 0; i < config->num_variables; i++) {
+			const char *prefix = "KQ_VAR_";
+			const char *key = config->variables[i].key;
+			const char *value = config->variables[i].value;
+			
+			size_t env_name_len = strlen(prefix) + strlen(key);
+			char *env_name = malloc(env_name_len + 1);
+			
+			if (env_name) {
+				snprintf(env_name, env_name_len + 1, "%s%s", prefix, key);
+				setenv(env_name, value, 1);
+				free(env_name);
+			} else {
+				log_message(WARNING, "Failed to allocate memory for environment variable: %s%s", prefix, key);
+			}
+		}
+		log_message(DEBUG, "Set %d global variables as environment variables", config->num_variables);
+	}
+	
+	/* KQ_EXCLUDE */
+	char *escaped_exclusions = (ctx->watch->exclude && ctx->watch->num_exclude > 0) ?
+								   format_array((const char *const *)ctx->watch->exclude, ctx->watch->num_exclude, "'%s'", ",") :
+								   strdup("");
+	SET_ENV("KQ_EXCLUDE", escaped_exclusions);
+	if (escaped_exclusions) {
+		free(escaped_exclusions);
+	}
+	
+	/* Clean up helper macros */
+	#undef SET_ENV
+	#undef SET_ENV_ESCAPED
+	#undef SET_ENV_LIST
+	#undef SET_ENV_DIFF_LIST
+}

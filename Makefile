@@ -47,6 +47,7 @@ endif
 # Source files
 SRCS = src/main.c \
 	   src/queue.c \
+	   src/binder.c \
 	   src/events.c \
 	   src/config.c \
 	   src/mapper.c \
