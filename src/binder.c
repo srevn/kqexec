@@ -561,110 +561,72 @@ void binder_environment(binder_t *ctx) {
 		log_message(WARNING, "Invalid context in binder_environment");
 		return;
 	}
-	
+
 	char buffer[1024];
-	
-	/* Helper macros to reduce repetitive environment variable setting */
-	#define SET_ENV(key, value) \
-		if (value) { setenv(key, value, 1); }
-	
-	#define SET_ENV_ESCAPED(key, value) \
-		if (value) { \
-			char *escaped = string_escape(value); \
-			if (escaped) { \
-				setenv(key, escaped, 1); \
-				free(escaped); \
-			} \
-		}
-	
-	#define SET_ENV_LIST(key, list_value) \
-		if (list_value) { \
-			char *escaped_list = string_escape_list(list_value); \
-			if (escaped_list) { \
-				setenv(key, escaped_list, 1); \
-				free(escaped_list); \
-			} \
-		}
-	
-	#define SET_ENV_DIFF_LIST(key, diff_func) \
-		{ char *list = diff_func(ctx->event->diff, true); \
-		  SET_ENV_LIST(key, list); \
-		  if (list) free(list); }
 
-	/* KQ_EVENT_TYPE */
-	SET_ENV("KQ_EVENT_TYPE", filter_to_string(ctx->event->type));
+	/* Helper macro for setting env vars - ensures value is not NULL or empty */
+	#define SET_ENV(key, value) do { if (value && *value) { setenv(key, value, 1); } } while (0)
 
-	/* KQ_TRIGGER_PATH */
-	SET_ENV_ESCAPED("KQ_TRIGGER_PATH", ctx->event->path);
+	/* Ensure all values are populated by calling resolvers */
+	resolve_event_type(ctx);	/* Caches event type */
+	resolve_path(ctx);			/* Caches escaped_path, but we'll use raw event->path */
+	resolve_basename(ctx);		/* Caches basename */
+	resolve_dirname(ctx);		/* Caches dirname */
+	resolve_relative_path(ctx); /* Caches relative_path */
+	resolve_user(ctx);			/* Caches user_string */
+	resolve_time(ctx);			/* Caches time_string */
 
-	/* KQ_WATCH_NAME */
-	SET_ENV_ESCAPED("KQ_WATCH_NAME", ctx->watch->name);
+	/* Set simple environment variables with raw data */
+	SET_ENV("KQ_EVENT_TYPE", ctx->event_string);
+	SET_ENV("KQ_TRIGGER_PATH", ctx->event->path);		 // Use raw path from event
+	SET_ENV("KQ_WATCH_NAME", (char *) ctx->watch->name); // Use raw name from watch
+	SET_ENV("KQ_WATCH_PATH", (char *) ctx->watch->path); // Use raw path from watch
+	SET_ENV("KQ_RELATIVE_PATH", ctx->relative_path);
+	SET_ENV("KQ_TRIGGER_DIR", ctx->dirname);
+	SET_ENV("KQ_USERNAME", ctx->user_string);
+	SET_ENV("KQ_TIMESTAMP", ctx->time_string);
 
-	/* KQ_WATCH_PATH */
-	SET_ENV_ESCAPED("KQ_WATCH_PATH", ctx->watch->path);
-
-	/* KQ_RELATIVE_PATH */
-	if (ctx->event->path && ctx->watch->path && strlen(ctx->event->path) > strlen(ctx->watch->path)) {
-		const char *relative_path = ctx->event->path + strlen(ctx->watch->path);
-		if (*relative_path == '/') {
-			relative_path++;
-		}
-		char *escaped_rel_path = string_escape(relative_path);
-		if (escaped_rel_path) {
-			setenv("KQ_RELATIVE_PATH", escaped_rel_path, 1);
-			free(escaped_rel_path);
-		}
-	}
-
-	/* KQ_TRIGGER_DIR */
-	if (ctx->event->path) {
-		char *path_copy = strdup(ctx->event->path);
-		if (path_copy) {
-			char *dir_result = dirname(path_copy);
-			if (dir_result) {
-				char *escaped_dir = string_escape(dir_result);
-				if (escaped_dir) {
-					setenv("KQ_TRIGGER_DIR", escaped_dir, 1);
-					free(escaped_dir);
-				}
-			}
-			free(path_copy);
-		}
-	}
-
-	/* KQ_USER_ID */
 	snprintf(buffer, sizeof(buffer), "%d", ctx->event->user_id);
 	SET_ENV("KQ_USER_ID", buffer);
 
-	/* KQ_USERNAME */
-	struct passwd pwd;
-	struct passwd *result;
-	char pw_buf[1024];
-	int ret = getpwuid_r(ctx->event->user_id, &pwd, pw_buf, sizeof(pw_buf), &result);
-	if (ret == 0 && result != NULL) {
-		SET_ENV_ESCAPED("KQ_USERNAME", pwd.pw_name);
-	} else {
-		snprintf(buffer, sizeof(buffer), "%d", ctx->event->user_id);
-		SET_ENV("KQ_USERNAME", buffer);
-	}
-
-	/* KQ_TIMESTAMP */
-	struct tm tm;
-	if (localtime_r(&ctx->event->wall_time.tv_sec, &tm)) {
-		strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%S", &tm);
-		SET_ENV("KQ_TIMESTAMP", buffer);
-	}
-
-	/* Directory watch diff-based environment variables */
+	/* Handle list-based variables */
 	if (ctx->watch->target == WATCH_DIRECTORY && ctx->event->diff) {
-		SET_ENV_DIFF_LIST("KQ_CHANGED", diff_changed);
-		SET_ENV_DIFF_LIST("KQ_CREATED", diff_created);
-		SET_ENV_DIFF_LIST("KQ_DELETED", diff_deleted);
-		SET_ENV_DIFF_LIST("KQ_RENAMED", diff_renamed);
-		SET_ENV_DIFF_LIST("KQ_MODIFIED", diff_modified);
+		#define SET_ENV_SPACE_LIST(key, type_str) do { \
+			placeholder_t p = resolve_diff(ctx, type_str, true); /* Get basenames */ \
+			if (p.value) { \
+				char *space_list = strdup(p.value); \
+                if (space_list) { \
+                    for (char *ptr = space_list; *ptr; ptr++) { \
+                        if (*ptr == '\n') { \
+                            *ptr = ' '; \
+                        } \
+                    } \
+                    SET_ENV(key, space_list); \
+                    free(space_list); \
+                } \
+				if (p.allocated) free(p.value); \
+			} \
+		} while (0)
+
+		SET_ENV_SPACE_LIST("KQ_CHANGED", "changed");
+		SET_ENV_SPACE_LIST("KQ_CREATED", "created");
+		SET_ENV_SPACE_LIST("KQ_DELETED", "deleted");
+		SET_ENV_SPACE_LIST("KQ_RENAMED", "renamed");
+		SET_ENV_SPACE_LIST("KQ_MODIFIED", "modified");
+
+		#undef SET_ENV_SPACE_LIST
 	}
 
-	/* Global variables from config */
+	/* KQ_EXCLUDE environment variable */
+	if (ctx->watch->exclude && ctx->watch->num_exclude > 0) {
+		char *exclusions = format_array((const char *const *) ctx->watch->exclude, ctx->watch->num_exclude, "'%s'", ",");
+		if (exclusions) {
+			SET_ENV("KQ_EXCLUDE", exclusions);
+			free(exclusions);
+		}
+	}
+
+	/* Global KQ_VAR_* variables from config */
 	const config_t *config = ctx->monitor->config;
 	if (config && config->num_variables > 0) {
 		for (int i = 0; i < config->num_variables; i++) {
@@ -677,31 +639,11 @@ void binder_environment(binder_t *ctx) {
 
 			if (env_name) {
 				snprintf(env_name, env_name_len + 1, "%s%s", prefix, key);
-				setenv(env_name, value, 1);
+				SET_ENV(env_name, value);
 				free(env_name);
-			} else {
-				log_message(WARNING, "Failed to allocate memory for environment variable: %s%s", prefix, key);
 			}
 		}
-		log_message(DEBUG, "Set %d global variables as environment variables", config->num_variables);
 	}
 
-	/* KQ_EXCLUDE */
-	char *escaped_exclusions;
-	if (ctx->watch->exclude && ctx->watch->num_exclude > 0) {
-		escaped_exclusions = format_array((const char *const *) ctx->watch->exclude,
-										  ctx->watch->num_exclude, "'%s'", ",");
-	} else {
-		escaped_exclusions = strdup("");
-	}
-	SET_ENV("KQ_EXCLUDE", escaped_exclusions);
-	if (escaped_exclusions) {
-		free(escaped_exclusions);
-	}
-
-	/* Clean up helper macros */
 	#undef SET_ENV
-	#undef SET_ENV_ESCAPED
-	#undef SET_ENV_LIST
-	#undef SET_ENV_DIFF_LIST
 }
