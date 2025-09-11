@@ -5,27 +5,14 @@
 #include <stddef.h>
 
 #include "control.h"
-
-/* Dynamic array for managing lists of strings */
-typedef struct array {
-	char **items;                          /* Array of string pointers */
-	int count;                             /* Number of items currently in the array */
-	int capacity;                          /* Allocated capacity of the items array */
-} array_t;
-
-/* Dynamic string builder for string concatenation */
-typedef struct builder {
-	char *data;                            /* The character buffer */
-	size_t capacity;                       /* The allocated capacity of the buffer */
-	size_t length;                         /* The current length of the string in the buffer*/
-} builder_t;
+#include "utilities.h"
 
 /* Protocol result for key-value protocol responses */
 typedef struct protocol {
 	/* Status information */
 	bool success;                          /* Command success status */
 	char *message;                         /* Result message */
-	
+
 	/* Data payload */
 	int data_count;                        /* Number of key-value pairs in response */
 	int data_capacity;                     /* Allocated capacity for data arrays */

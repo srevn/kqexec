@@ -2,7 +2,6 @@
 
 #include <pthread.h>
 #include <stdarg.h>
-#include <stdbool.h>
 #include <stdio.h>
 #include <time.h>
 
@@ -108,39 +107,4 @@ void log_message(loglevel_t loglevel, const char *format, ...) {
 
 	/* Unlock after logging */
 	pthread_mutex_unlock(&log_mutex);
-}
-
-/* Format size in bytes to a human-readable string */
-const char *format_size(ssize_t size, bool show_sign) {
-	static char buf[32];
-	const char *suffixes[] = {"B", "KB", "MB", "GB", "TB"};
-	size_t i = 0;
-	double d_size;
-	bool negative = false;
-
-	if (size == 0) {
-		return "0 B";
-	}
-
-	/* Handle negative sizes for size deltas */
-	if (size < 0) {
-		negative = true;
-		d_size = (double) (-size);
-	} else {
-		d_size = (double) size;
-	}
-
-	/* Determine the appropriate suffix */
-	while (d_size >= 1024 && i < (sizeof(suffixes) / sizeof(suffixes[0])) - 1) {
-		d_size /= 1024;
-		i++;
-	}
-
-	/* Format the string with proper sign handling */
-	if (show_sign && size > 0) {
-		snprintf(buf, sizeof(buf), "+%.2f %s", d_size, suffixes[i]);
-	} else {
-		snprintf(buf, sizeof(buf), "%s%.2f %s", negative ? "-" : "", d_size, suffixes[i]);
-	}
-	return buf;
 }

@@ -16,6 +16,7 @@
 #include "snapshot.h"
 #include "stability.h"
 #include "tracker.h"
+#include "utilities.h"
 
 /* Free resources used by a subscription */
 static void subscription_free(subscription_t *subscription) {

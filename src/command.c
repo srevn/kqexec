@@ -21,6 +21,7 @@
 #include "snapshot.h"
 #include "stability.h"
 #include "threads.h"
+#include "utilities.h"
 
 /* Module-scoped threads reference */
 static threads_t *command_threads = NULL;
@@ -64,101 +65,6 @@ void command_cooldown_time(int milliseconds) {
 /* Get cooldown time */
 int command_get_cooldown_time(void) { return cooldown_ms; }
 
-/* Shell-escape a single path by wrapping in single quotes */
-static char *command_escape(const char *path) {
-	if (!path) return NULL;
-
-	/* Calculate required buffer size */
-	size_t len = strlen(path);
-	size_t quotes = len + 8;
-	for (const char *p = path; *p; p++) {
-		/* Escape internal quotes 'x' becomes '\''x'\'' */
-		if (*p == '\'') quotes += 4;
-	}
-
-	char *escaped = malloc(quotes);
-	if (!escaped) return NULL;
-
-	char *out = escaped;
-	*out++ = '\''; /* Opening quote */
-
-	for (const char *in = path; *in; in++) {
-		if (*in == '\'') {
-			/* Replace ' with '\'' */
-			*out++ = '\'';
-			*out++ = '\\';
-			*out++ = '\'';
-			*out++ = '\'';
-		} else {
-			*out++ = *in;
-		}
-	}
-
-	*out++ = '\''; /* Closing quote */
-	*out = '\0';
-
-	return escaped;
-}
-
-/* Shell-escape a newline-separated list of paths */
-static char *command_escape_list(const char *paths) {
-	if (!paths || !*paths) return strdup("");
-
-	/* Start with dynamic buffer */
-	size_t result_capacity = 4096;
-	char *result = malloc(result_capacity);
-	if (!result) return NULL;
-
-	result[0] = '\0';
-	size_t result_len = 0;
-
-	char *paths_copy = strdup(paths);
-	if (!paths_copy) {
-		free(result);
-		return NULL;
-	}
-
-	char *line = strtok(paths_copy, "\n");
-	bool first = true;
-
-	while (line != NULL) {
-		char *escaped = command_escape(line);
-		if (escaped) {
-			size_t escaped_len = strlen(escaped);
-			/* +1 for newline if not first, +1 for null */
-			size_t needed = result_len + (first ? 0 : 1) + escaped_len + 1;
-
-			/* Grow buffer if needed */
-			if (needed > result_capacity) {
-				size_t new_capacity = needed * 2; /* Double to avoid frequent reallocations */
-				char *new_result = realloc(result, new_capacity);
-				if (!new_result) {
-					free(escaped);
-					free(result);
-					free(paths_copy);
-					return NULL;
-				}
-				result = new_result;
-				result_capacity = new_capacity;
-			}
-
-			/* Add newline separator if not first */
-			if (!first) result[result_len++] = '\n';
-
-			/* Copy escaped path */
-			strcpy(result + result_len, escaped);
-			result_len += escaped_len;
-
-			free(escaped);
-			first = false;
-		}
-		line = strtok(NULL, "\n");
-	}
-
-	free(paths_copy);
-	return result;
-}
-
 /* Helper to create array with basename extraction for template processing */
 static const char **command_prepare_diff_array(char **source_array, int count, bool basename_only, int *out_count) {
 	if (!source_array || count <= 0) {
@@ -169,7 +75,7 @@ static const char **command_prepare_diff_array(char **source_array, int count, b
 	/* For full paths, return the source array directly */
 	if (!basename_only) {
 		*out_count = count;
-		return (const char **)source_array;
+		return (const char **) source_array;
 	}
 
 	/* For basenames, we need to create a temporary array of pointers */
@@ -191,117 +97,9 @@ static const char **command_prepare_diff_array(char **source_array, int count, b
 	return basename_array;
 }
 
-/* Helper function to substitute a placeholder in a string with dynamic allocation */
-static char *command_substitute(const char *input, const char *placeholder, const char *value) {
-	if (!input || !placeholder || !value) return input ? strdup(input) : NULL;
-
-	const char *current_pos = strstr(input, placeholder);
-	if (!current_pos) {
-		return strdup(input); /* No substitution needed */
-	}
-
-	size_t placeholder_len = strlen(placeholder);
-	size_t value_len = strlen(value);
-	size_t input_len = strlen(input);
-
-	/* Calculate new length after all substitutions */
-	size_t new_len = input_len;
-	const char *search_pos = input;
-	while ((search_pos = strstr(search_pos, placeholder)) != NULL) {
-		new_len = new_len - placeholder_len + value_len;
-		search_pos += placeholder_len;
-	}
-
-	/* Allocate result buffer */
-	char *result = malloc(new_len + 1);
-	if (!result) return NULL;
-
-	/* Perform substitutions */
-	const char *src = input;
-	char *dst = result;
-
-	while ((current_pos = strstr(src, placeholder)) != NULL) {
-		/* Copy text before placeholder */
-		size_t prefix_len = current_pos - src;
-		memcpy(dst, src, prefix_len);
-		dst += prefix_len;
-
-		/* Copy replacement value */
-		memcpy(dst, value, value_len);
-		dst += value_len;
-
-		/* Move past placeholder */
-		src = current_pos + placeholder_len;
-	}
-
-	/* Copy remaining text */
-	strcpy(dst, src);
-
-	return result;
-}
-
-/* Format string array by applying a template to each item with optional separator */
-static char *command_format_array(const char *const *strings, int count, const char *template, const char *separator) {
-	if (!strings || count == 0) return strdup("");
-
-	/* Start with a reasonable buffer size */
-	size_t result_capacity = 4096;
-	char *result = malloc(result_capacity);
-	if (!result) return NULL;
-
-	result[0] = '\0';
-	size_t result_len = 0;
-	size_t separator_len = separator ? strlen(separator) : 0;
-	int items_added = 0;
-
-	for (int i = 0; i < count; i++) {
-		if (!strings[i]) continue;
-
-		/* Substitute the raw item into the template - template handles escaping */
-		char *formatted_item = command_substitute(template, "%s", strings[i]);
-
-		if (!formatted_item) {
-			free(result);
-			return NULL;
-		}
-
-		size_t formatted_len = strlen(formatted_item);
-		/* +separator_len if not first, +1 for null terminator */
-		size_t needed = result_len + (items_added > 0 ? separator_len : 0) + formatted_len + 1;
-
-		/* Grow buffer if needed */
-		if (needed > result_capacity) {
-			size_t new_capacity = needed * 2;
-			char *new_result = realloc(result, new_capacity);
-			if (!new_result) {
-				free(formatted_item);
-				free(result);
-				return NULL;
-			}
-			result = new_result;
-			result_capacity = new_capacity;
-		}
-
-		/* Add separator if not first and separator is specified */
-		if (items_added > 0 && separator) {
-			memcpy(result + result_len, separator, separator_len);
-			result_len += separator_len;
-		}
-
-		/* Copy formatted item */
-		strcpy(result + result_len, formatted_item);
-		result_len += formatted_len;
-
-		free(formatted_item);
-		items_added++;
-	}
-
-	return result;
-}
-
 /* Helper function to update command string with substitution */
 static bool command_update(char **result, const char *placeholder, const char *value) {
-	char *new_result = command_substitute(*result, placeholder, value);
+	char *new_result = string_substitute(*result, placeholder, value);
 	if (!new_result) return false;
 
 	free(*result);
@@ -405,8 +203,8 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 		char *replacement = NULL;
 		if (strcmp(array_name, "exclude") == 0) {
 			replacement = (watch && watch->exclude && watch->num_exclude > 0) ?
-				command_format_array((const char *const *)watch->exclude, watch->num_exclude, template, " ") :
-				strdup("");
+							  format_array((const char *const *) watch->exclude, watch->num_exclude, template, " ") :
+							  strdup("");
 		} else if (watch->target == WATCH_DIRECTORY && event->diff) {
 			/* Handle diff-based arrays for directory watches */
 			const char **array_data = NULL;
@@ -443,9 +241,9 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 					array_data = command_prepare_diff_array(event->diff->renamed, event->diff->renamed_count, basename_only, &array_count);
 				} else if (strcmp(base_array_name, "changed") == 0) {
 					/* For 'changed', we need to combine all arrays */
-					int total_count = event->diff->created_count + event->diff->deleted_count + 
-					                  event->diff->modified_count + event->diff->renamed_count;
-					
+					int total_count = event->diff->created_count + event->diff->deleted_count +
+									  event->diff->modified_count + event->diff->renamed_count;
+
 					if (total_count > 0) {
 						/* Allocate combined array */
 						const char **combined_array = malloc(total_count * sizeof(char *));
@@ -455,7 +253,7 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 							is_diff_array = false;
 						} else {
 							int index = 0;
-							
+
 							/* Add all change types to combined array */
 							for (int i = 0; i < event->diff->created_count; i++) {
 								if (event->diff->created[i]) {
@@ -467,7 +265,7 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 									}
 								}
 							}
-							
+
 							for (int i = 0; i < event->diff->deleted_count; i++) {
 								if (event->diff->deleted[i]) {
 									if (basename_only) {
@@ -478,7 +276,7 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 									}
 								}
 							}
-							
+
 							for (int i = 0; i < event->diff->modified_count; i++) {
 								if (event->diff->modified[i]) {
 									if (basename_only) {
@@ -489,7 +287,7 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 									}
 								}
 							}
-							
+
 							for (int i = 0; i < event->diff->renamed_count; i++) {
 								if (event->diff->renamed[i]) {
 									if (basename_only) {
@@ -500,7 +298,7 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 									}
 								}
 							}
-							
+
 							array_data = combined_array;
 							array_count = index;
 						}
@@ -515,15 +313,15 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 
 				/* Process the array if we found one */
 				if (is_diff_array && array_data) {
-					replacement = command_format_array(array_data, array_count, template, " ");
-					
+					replacement = format_array(array_data, array_count, template, " ");
+
 					/* Free allocated arrays */
 					if (strcmp(base_array_name, "changed") == 0) {
 						/* Always free the combined array since we always allocate it */
-						free((void*)array_data);
+						free((void *) array_data);
 					} else if (basename_only) {
 						/* Free basename array if we allocated one for individual arrays */
-						free((void*)array_data);
+						free((void *) array_data);
 					}
 				} else if (is_diff_array) {
 					replacement = strdup(""); /* Empty array */
@@ -534,8 +332,8 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 					free(base_array_name);
 				}
 			}
-		} 
-		
+		}
+
 		if (!replacement) {
 			log_message(WARNING, "Unsupported array name in placeholder: %s", array_name);
 			replacement = strdup("");
@@ -564,7 +362,7 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 		if (strstr(result, "%created")) {
 			char *created = diff_created(event->diff, false);
 			if (created) {
-				char *escaped_created = command_escape_list(created);
+				char *escaped_created = string_escape_list(created);
 				if (escaped_created) {
 					if (!command_update(&result, "%created", escaped_created)) {
 						free(escaped_created);
@@ -581,7 +379,7 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 		if (strstr(result, "%deleted")) {
 			char *deleted = diff_deleted(event->diff, false);
 			if (deleted) {
-				char *escaped_deleted = command_escape_list(deleted);
+				char *escaped_deleted = string_escape_list(deleted);
 				if (escaped_deleted) {
 					if (!command_update(&result, "%deleted", escaped_deleted)) {
 						free(escaped_deleted);
@@ -598,7 +396,7 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 		if (strstr(result, "%renamed")) {
 			char *renamed = diff_renamed(event->diff, false);
 			if (renamed) {
-				char *escaped_renamed = command_escape_list(renamed);
+				char *escaped_renamed = string_escape_list(renamed);
 				if (escaped_renamed) {
 					if (!command_update(&result, "%renamed", escaped_renamed)) {
 						free(escaped_renamed);
@@ -615,7 +413,7 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 		if (strstr(result, "%modified")) {
 			char *modified = diff_modified(event->diff, false);
 			if (modified) {
-				char *escaped_modified = command_escape_list(modified);
+				char *escaped_modified = string_escape_list(modified);
 				if (escaped_modified) {
 					if (!command_update(&result, "%modified", escaped_modified)) {
 						free(escaped_modified);
@@ -636,7 +434,7 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 	}
 
 	/* Substitute %p with the path */
-	char *escaped_path = command_escape(event->path);
+	char *escaped_path = string_escape(event->path);
 	if (escaped_path) {
 		if (!command_update(&result, "%p", escaped_path)) {
 			free(escaped_path);
@@ -649,7 +447,7 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 	if (strstr(result, "%n")) {
 		char *path_copy = strdup(event->path);
 		if (path_copy) {
-			char *escaped_basename = command_escape(basename(path_copy));
+			char *escaped_basename = string_escape(basename(path_copy));
 			if (escaped_basename) {
 				if (!command_update(&result, "%n", escaped_basename)) {
 					free(escaped_basename);
@@ -666,7 +464,7 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 	if (strstr(result, "%d")) {
 		char *path_copy = strdup(event->path);
 		if (path_copy) {
-			char *escaped_dirname = command_escape(dirname(path_copy));
+			char *escaped_dirname = string_escape(dirname(path_copy));
 			if (escaped_dirname) {
 				if (!command_update(&result, "%d", escaped_dirname)) {
 					free(escaped_dirname);
@@ -680,7 +478,7 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 	}
 
 	/* Substitute %b with the base watch path */
-	char *escaped_base_path = command_escape(watch->path);
+	char *escaped_base_path = string_escape(watch->path);
 	if (escaped_base_path) {
 		if (!command_update(&result, "%b", escaped_base_path)) {
 			free(escaped_base_path);
@@ -698,7 +496,7 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 		if (*relative_path == '/') {
 			relative_path++;
 		}
-		char *escaped_relative = command_escape(relative_path);
+		char *escaped_relative = string_escape(relative_path);
 		if (escaped_relative) {
 			if (!command_update(&result, "%r", escaped_relative)) {
 				free(escaped_relative);
@@ -720,7 +518,7 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 			/* Use accurate snapshot-based change detection for basenames */
 			char *changed = diff_changed(event->diff, true); /* basename_only = true */
 			if (changed && changed[0] != '\0') {
-				char *escaped_changed = command_escape_list(changed);
+				char *escaped_changed = string_escape_list(changed);
 				if (escaped_changed) {
 					if (!command_update(&result, "%l", escaped_changed)) {
 						free(escaped_changed);
@@ -755,7 +553,7 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 			/* Use accurate snapshot-based change detection for absolute paths */
 			char *changed = diff_changed(event->diff, false); /* basename_only = false, absolute paths */
 			if (changed && changed[0] != '\0') {
-				char *escaped_changed = command_escape_list(changed);
+				char *escaped_changed = string_escape_list(changed);
 				if (escaped_changed) {
 					if (!command_update(&result, "%L", escaped_changed)) {
 						free(escaped_changed);
@@ -778,7 +576,7 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 			free(changed);
 		} else {
 			/* For file watches or when no diff available, use the full file path */
-			char *escaped_path = command_escape(event->path);
+			char *escaped_path = string_escape(event->path);
 			if (escaped_path) {
 				if (!command_update(&result, "%L", escaped_path)) {
 					free(escaped_path);
@@ -833,8 +631,8 @@ char *command_placeholders(monitor_t *monitor, const char *command, watchref_t w
 	/* Substitute %x with the exclusion patterns */
 	if (strstr(result, "%x")) {
 		char *escaped_exclusions = (watch && watch->exclude && watch->num_exclude > 0) ?
-			command_format_array((const char *const *)watch->exclude, watch->num_exclude, "'%s'", ",") :
-			strdup("");
+									   format_array((const char *const *) watch->exclude, watch->num_exclude, "'%s'", ",") :
+									   strdup("");
 		if (escaped_exclusions) {
 			if (!command_update(&result, "%x", escaped_exclusions)) {
 				free(escaped_exclusions);
@@ -865,7 +663,7 @@ void command_environment(monitor_t *monitor, watchref_t watchref, const event_t 
 
 	/* KQ_TRIGGER_PATH - full path where the event occurred */
 	if (event->path) {
-		char *escaped_trigger_path = command_escape(event->path);
+		char *escaped_trigger_path = string_escape(event->path);
 		if (escaped_trigger_path) {
 			setenv("KQ_TRIGGER_PATH", escaped_trigger_path, 1);
 			free(escaped_trigger_path);
@@ -874,7 +672,7 @@ void command_environment(monitor_t *monitor, watchref_t watchref, const event_t 
 
 	/* KQ_WATCH_NAME - name of the watch from the configuration */
 	if (watch->name) {
-		char *escaped_watch_name = command_escape(watch->name);
+		char *escaped_watch_name = string_escape(watch->name);
 		if (escaped_watch_name) {
 			setenv("KQ_WATCH_NAME", escaped_watch_name, 1);
 			free(escaped_watch_name);
@@ -883,7 +681,7 @@ void command_environment(monitor_t *monitor, watchref_t watchref, const event_t 
 
 	/* KQ_WATCH_PATH - base path being monitored */
 	if (watch->path) {
-		char *escaped_watch_path = command_escape(watch->path);
+		char *escaped_watch_path = string_escape(watch->path);
 		if (escaped_watch_path) {
 			setenv("KQ_WATCH_PATH", escaped_watch_path, 1);
 			free(escaped_watch_path);
@@ -896,7 +694,7 @@ void command_environment(monitor_t *monitor, watchref_t watchref, const event_t 
 		if (*relative_path == '/') {
 			relative_path++;
 		}
-		char *escaped_relative_path = command_escape(relative_path);
+		char *escaped_relative_path = string_escape(relative_path);
 		if (escaped_relative_path) {
 			setenv("KQ_RELATIVE_PATH", escaped_relative_path, 1);
 			free(escaped_relative_path);
@@ -909,7 +707,7 @@ void command_environment(monitor_t *monitor, watchref_t watchref, const event_t 
 		if (path_copy) {
 			char *dir_result = dirname(path_copy);
 			if (dir_result) {
-				char *escaped_trigger_dir = command_escape(dir_result);
+				char *escaped_trigger_dir = string_escape(dir_result);
 				if (escaped_trigger_dir) {
 					setenv("KQ_TRIGGER_DIR", escaped_trigger_dir, 1);
 					free(escaped_trigger_dir);
@@ -926,7 +724,7 @@ void command_environment(monitor_t *monitor, watchref_t watchref, const event_t 
 	/* KQ_USERNAME - try to resolve user ID to name */
 	pwd = getpwuid(event->user_id);
 	if (pwd && pwd->pw_name) {
-		char *escaped_username = command_escape(pwd->pw_name);
+		char *escaped_username = string_escape(pwd->pw_name);
 		if (escaped_username) {
 			setenv("KQ_USERNAME", escaped_username, 1);
 			free(escaped_username);
@@ -946,7 +744,7 @@ void command_environment(monitor_t *monitor, watchref_t watchref, const event_t 
 	if (watch->target == WATCH_DIRECTORY && event->diff) {
 		char *changed = diff_changed(event->diff, true); /* basename_only = true */
 		if (changed) {
-			char *escaped_changed = command_escape_list(changed);
+			char *escaped_changed = string_escape_list(changed);
 			if (escaped_changed) {
 				setenv("KQ_CHANGED", escaped_changed, 1);
 				free(escaped_changed);
@@ -957,7 +755,7 @@ void command_environment(monitor_t *monitor, watchref_t watchref, const event_t 
 		/* KQ_CREATED - list of created items */
 		char *created = diff_created(event->diff, true); /* basename_only = true */
 		if (created) {
-			char *escaped_created = command_escape_list(created);
+			char *escaped_created = string_escape_list(created);
 			if (escaped_created) {
 				setenv("KQ_CREATED", escaped_created, 1);
 				free(escaped_created);
@@ -968,7 +766,7 @@ void command_environment(monitor_t *monitor, watchref_t watchref, const event_t 
 		/* KQ_DELETED - list of deleted items */
 		char *deleted = diff_deleted(event->diff, true); /* basename_only = true */
 		if (deleted) {
-			char *escaped_deleted = command_escape_list(deleted);
+			char *escaped_deleted = string_escape_list(deleted);
 			if (escaped_deleted) {
 				setenv("KQ_DELETED", escaped_deleted, 1);
 				free(escaped_deleted);
@@ -979,7 +777,7 @@ void command_environment(monitor_t *monitor, watchref_t watchref, const event_t 
 		/* KQ_RENAMED - list of renamed items */
 		char *renamed = diff_renamed(event->diff, true); /* basename_only = true */
 		if (renamed) {
-			char *escaped_renamed = command_escape_list(renamed);
+			char *escaped_renamed = string_escape_list(renamed);
 			if (escaped_renamed) {
 				setenv("KQ_RENAMED", escaped_renamed, 1);
 				free(escaped_renamed);
@@ -990,7 +788,7 @@ void command_environment(monitor_t *monitor, watchref_t watchref, const event_t 
 		/* KQ_MODIFIED - list of modified items */
 		char *modified = diff_modified(event->diff, true); /* basename_only = true */
 		if (modified) {
-			char *escaped_modified = command_escape_list(modified);
+			char *escaped_modified = string_escape_list(modified);
 			if (escaped_modified) {
 				setenv("KQ_MODIFIED", escaped_modified, 1);
 				free(escaped_modified);
@@ -1023,8 +821,8 @@ void command_environment(monitor_t *monitor, watchref_t watchref, const event_t 
 
 	/* KQ_EXCLUDE - comma-separated list of exclusion patterns */
 	char *escaped_exclusions = (watch && watch->exclude && watch->num_exclude > 0) ?
-		command_format_array((const char *const *)watch->exclude, watch->num_exclude, "'%s'", ",") :
-		strdup("");
+								   format_array((const char *const *) watch->exclude, watch->num_exclude, "'%s'", ",") :
+								   strdup("");
 	if (escaped_exclusions) {
 		setenv("KQ_EXCLUDE", escaped_exclusions, 1);
 		free(escaped_exclusions);
