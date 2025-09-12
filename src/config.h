@@ -41,7 +41,6 @@ typedef struct watch {
 	
 	/* Output handling */
 	bool log_output;                       /* Whether to capture and log command output */
-	bool buffer_output;                    /* Whether to buffer output until command completes */
 	
 	/* Monitoring options */
 	bool enabled;                          /* Whether the watch is currently enabled */

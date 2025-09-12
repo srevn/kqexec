@@ -162,7 +162,6 @@ kqexec.conf.sample:
 	@echo "command = logger -p daemon.notice \"Configuration changed in %p\"" >> $@
 	@echo "log_output = false" >> $@
 	@echo "complexity = 0.7" >> $@
-	@echo "buffer_output = false" >> $@
 	@echo "recursive = true" >> $@
 	@echo "hidden = false" >> $@
 	@echo "" >> $@

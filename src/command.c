@@ -111,7 +111,6 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 	char *command;
 	int stdout_pipe[2] = {-1, -1}, stderr_pipe[2] = {-1, -1};
 	bool capture_output = watch->log_output;
-	bool buffer_output = watch->buffer_output;
 	time_t start, end_time;
 
 	/* Output buffering variables */
@@ -248,16 +247,9 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 						if (buffer[i] == '\n') {
 							line_buffer[line_pos] = '\0';
 							if (line_pos > 0) {
-								if (buffer_output) {
-									/* Add to buffer */
-									if (!buffer_append(&output_buffer, &output_count, &output_capacity, line_buffer)) {
-										log_message(WARNING, "[%s]: Failed to buffer output, switching to real-time", watch->name);
-										buffer_output = false;
-										log_message(NOTICE, "[%s]: %s", watch->name, line_buffer);
-									}
-								} else {
-									/* Real-time logging */
-									log_message(NOTICE, "[%s]: %s", watch->name, line_buffer);
+								/* Buffer output for atomic logging */
+								if (!buffer_append(&output_buffer, &output_count, &output_capacity, line_buffer)) {
+									log_message(WARNING, "[%s]: Failed to buffer output", watch->name);
 								}
 							}
 							line_pos = 0;
@@ -284,12 +276,9 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 		/* Log any remaining partial line */
 		if (line_pos > 0) {
 			line_buffer[line_pos] = '\0';
-			if (buffer_output) {
-				if (!buffer_append(&output_buffer, &output_count, &output_capacity, line_buffer)) {
-					log_message(NOTICE, "[%s]: %s", watch->name, line_buffer);
-				}
-			} else {
-				log_message(NOTICE, "[%s]: %s", watch->name, line_buffer);
+			/* Buffer remaining output for atomic logging */
+			if (!buffer_append(&output_buffer, &output_count, &output_capacity, line_buffer)) {
+				log_message(WARNING, "[%s]: Failed to buffer remaining output", watch->name);
 			}
 		}
 
@@ -305,8 +294,8 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 	/* Record end time */
 	time(&end_time);
 
-	/* Flush buffered output if buffering was enabled */
-	if (capture_output && buffer_output && output_buffer) {
+	/* Flush buffered output */
+	if (capture_output && output_buffer) {
 		buffer_flush(watch, output_buffer, output_count);
 
 		/* Clean up buffer */

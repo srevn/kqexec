@@ -251,7 +251,6 @@ watch_t *watch_clone(const watch_t *source) {
 	clone->filter = source->filter;
 	clone->enabled = source->enabled;
 	clone->log_output = source->log_output;
-	clone->buffer_output = source->buffer_output;
 	clone->recursive = source->recursive;
 	clone->hidden = source->hidden;
 	clone->environment = source->environment;
@@ -490,7 +489,6 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 			current_watch->name = strdup(str + 1);
 			current_watch->enabled = true;					   /* Default to enabled */
 			current_watch->log_output = false;				   /* Default to not logging command output */
-			current_watch->buffer_output = false;			   /* Default to not buffering output */
 			current_watch->recursive = true;				   /* Default to recursive for directories */
 			current_watch->hidden = false;					   /* Default to not including hidden files */
 			current_watch->complexity = 1.0;				   /* Default complexity multiplier */
@@ -630,18 +628,6 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 					current_watch->log_output = true;
 				} else if (strcasecmp(value, "false") == 0 || strcmp(value, "0") == 0) {
 					current_watch->log_output = false;
-				} else {
-					log_message(ERROR, "Invalid value for %s at line %d: %s", key,
-								line_number, value);
-					watch_destroy(current_watch);
-					fclose(fp);
-					return false;
-				}
-			} else if (strcasecmp(key, "buffer_output") == 0 || strcasecmp(key, "buffer") == 0) {
-				if (strcasecmp(value, "true") == 0 || strcmp(value, "1") == 0) {
-					current_watch->buffer_output = true;
-				} else if (strcasecmp(value, "false") == 0 || strcmp(value, "0") == 0) {
-					current_watch->buffer_output = false;
 				} else {
 					log_message(ERROR, "Invalid value for %s at line %d: %s", key,
 								line_number, value);

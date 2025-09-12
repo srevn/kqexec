@@ -843,7 +843,6 @@ static watch_t *monitor_config(const char *config_file_path) {
 	config_watch->enabled = true;
 	config_watch->command = strdup("__config_reload__");
 	config_watch->log_output = false;
-	config_watch->buffer_output = false;
 	config_watch->recursive = false;
 	config_watch->hidden = false;
 	config_watch->environment = false;

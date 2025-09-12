@@ -132,7 +132,6 @@ processing_delay = 5000       # Delay in milliseconds before processing events (
 batch_timeout = 30000         # Batch events and process them when filesystem activity settles (default: 0)
 complexity = 2.5              # System responsiveness with 0.1-5.0 range, higher = more cautious (default: 1.0)
 log_output = false            # Whether to capture and log command output (default: false)
-buffer_output = false         # Whether to buffer log output until command completes (default: false)
 recursive = true              # For recursive directory monitoring (default: true)
 hidden = false                # Whether to monitor hidden files/dirs (default: false)
 exclude = *.tmp,build/*,.git  # Comma-separated patterns to exclude from monitoring
@@ -324,7 +323,6 @@ directory = /usr/local/www/data
 events = STRUCTURE
 command = /usr/local/bin/refresh_cache.sh %p %e
 log_output = true
-buffer_output = true
 recursive = true
 hidden = false
 
@@ -344,7 +342,6 @@ events = STRUCTURE
 command = /home/user/scripts/run-tests.sh
 batch_timeout = 4000
 log_output = true
-buffer_output = true
 recursive = true
 exclude = .git/*,node_modules/*,*.tmp
 ```
@@ -413,6 +410,7 @@ launchctl kill SIGHUP gui/$(id -u)/com.kqexec.daemon
 kqexec provides a Unix domain socket-based control interface for runtime management of watches. This allows you to:
 
 - **Enable/Disable watches**: Temporarily turn watches on or off without restarting the daemon
+- **Suppress command execution**: Block command execution for a specified duration
 - **Query status**: Check which watches are currently active or disabled
 - **List watches**: View all configured watches and their current state
 - **Reload configuration**: Trigger a configuration reload without sending SIGHUP
@@ -460,7 +458,7 @@ The `batch_timeout`/`timeout` option defers events during active filesystem oper
 
 #### Buffered Command Output
 
-When running commands, you have two options for handling their output: streaming it directly to logs as it is generated or buffering and flushing it once the command completes. Using `buffer_output` can be particularly helpful with verbose commands that produce extensive output.
+When `log_output` is enabled, command output is automatically buffered and flushed atomically once the command completes. This provides clean, non-interleaved log output even when multiple commands run concurrently, which is particularly helpful with verbose commands that produce extensive output.
 
 #### File and Directory Exclusion
 
