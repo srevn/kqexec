@@ -1,6 +1,7 @@
 #include "command.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <libgen.h>
 #include <pthread.h>
 #include <pwd.h>
@@ -273,6 +274,14 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 			/* Close write ends after dup2 */
 			close(stdout_pipe[1]);
 			close(stderr_pipe[1]);
+		} else {
+			/* Suppress output by redirecting to /dev/null */
+			int dev_null = open("/dev/null", O_WRONLY);
+			if (dev_null >= 0) {
+				dup2(dev_null, STDOUT_FILENO);
+				dup2(dev_null, STDERR_FILENO);
+				close(dev_null);
+			}
 		}
 
 		/* Set environment variables for the command if enabled */
