@@ -154,6 +154,22 @@ command = ${BUILD_SCRIPT} && echo "Build complete" | mail ${ADMIN_EMAIL}
 environment = true  # Makes variables available as KQ_VAR_PROJECT_ROOT, etc.
 ```
 
+**Note:** You can instruct `kqexec` to load the value for a variable from the environment at startup. To do this, define a variable in the `[Variables]` section where the value is a reference to itself.
+
+```ini
+[Variables]
+# Import API_KEY from the environment
+API_KEY = ${API_KEY}
+PROJECT_PATH = ${PROJECT_PATH}
+```
+or
+
+```sh
+PROJECT_PATH=/home/user/myproject API_KEY=mysecretvalue kqexec
+```
+
+When `kqexec` starts, it will look for `API_KEY` and `PROJECT_PATH` in the environment and substitute them.
+
 ### Event Types
 
 Kqexec supports the following event types that can be specified in the configuration file:
@@ -195,20 +211,18 @@ Commands can include the following placeholders that will be replaced at runtime
 - `%b` : Base path of the watch from the config
 - `%w` : Name of the watch from the config
 - `%r` : Event path relative to the watch path
-- `%l` : List of items (basenames) changed
-- `%L` : List of items changed (newline-separated)
-- `%s` : Size of the file in bytes (recursive for directories)
-- `%S` : Human-readable size (e.g., 1.2M, 512K)
+- `%l` : Newline-separated list of changed item basenames
+- `%L` : Newline-separated list of changed item full paths
+- `%h` : Size of the file in bytes (recursive for directories)
+- `%H` : Human-readable size (e.g., 1.2M, 512K)
 - `%t` : Time of the event (format: YYYY-MM-DD HH:MM:SS)
 - `%u` : User who triggered the event
 - `%e` : Event type which occurred
-- `%x` : Exclusion patterns as comma-separated list (e.g., '*.txt','dir3','dir4')
-
-**Note**: Placeholders marked with *[directory watches only]* require filesystem snapshots to track changes. These placeholders automatically enable snapshot functionality for directory watches.
+- `%x` : Exclusion patterns as a comma-separated list of single-quoted strings (e.g., `'*.txt','dir3','dir4'`)
 
 ### Array Template Placeholders
 
-For advanced formatting of array data, you can use template placeholders that apply a format string to each array element:
+For advanced formatting of array data, you can use template placeholders that apply a format string to each array element. The items in the expanded list are space-separated.
 
 **Syntax**: `%[array_name:template]`
 
@@ -217,38 +231,31 @@ Where:
 - `template` is a format string with `%s` placeholder for each item
 
 **Available Arrays**:
-- `exclude` : Exclusion patterns from the `exclude` configuration option
-- `created` : Files/directories that were created (directory watches only)
-- `deleted` : Files/directories that were deleted (directory watches only)
-- `modified` : Files that were modified (directory watches only)
-- `renamed` : Files/directories that were renamed/moved (directory watches only)
-- `changed` : All changed items (created + deleted + modified + renamed)
-- `created_base` : Created items with basename only
-- `deleted_base` : Deleted items with basename only
-- `modified_base` : Modified items with basename only
-- `renamed_base` : Renamed items with basename only
-- `changed_base` : All changed items with basename only
+
+- `created` : Files/directories that were created (basenames)
+- `deleted` : Files/directories that were deleted (basenames)
+- `renamed` : Files/directories that were renamed/moved
+- `modified` : Files/directories that were modified (basenames)
+- `excluded` : Exclusion patterns from the `exclude` configuration option
+- `created_path` : Created items with full path
+- `deleted_path` : Deleted items with full path
+- `renamed_path` : Renamed items with full path
+- `modified_path` : Modified items with full path
 
 **Examples**:
 
 ```ini
 # Multiple --exclude parameters for rsync
-command = rsync -av %[exclude:--exclude=%s] %b/ /backup/
-# Expands to: rsync -av --exclude='*.tmp' --exclude='cache/' /path/ /backup/
+command = rsync -av %[excluded:--exclude '%s'] %b/ /backup/
+# Expands to: rsync -av --exclude '*.tmp' --exclude 'cache/' /path/ /backup/
 
-# Git add only created and modified files
-command = git add %[created:%s] %[modified:%s]
+# Git add only created and modified files (using basenames)
+command = git add %[created:'%s'] %[modified:'%s']
 # Expands to: git add 'file1.txt' 'file2.txt' 'modified.txt' 'updated.txt'
 
-# Process only modified files with basename
-command = %[modified_base:process_file.sh %s;]
-# Expands to: process_file.sh file1.txt; process_file.sh file2.txt;
-
-# Custom JSON format for file changes
-command = echo '{"created":[%[created:"%s"]], "modified":[%[modified:"%s"]]}'
-
-# Log all changes to a file
-command = echo "Changes at $(date): %[changed:%s]" >> /var/log/changes.log
+# Create a tar archive of all modified files (full paths)
+command = tar -czf changes.tar.gz %[modified_path:%s]
+# Expands to: tar -czf changes.tar.gz /path/to/file1.txt /path/to/file2.txt
 ```
 
 Template placeholders are more powerful than basic placeholders (like `%x`, `%created`) when you need specific formatting for different tools or commands.
@@ -265,13 +272,13 @@ In addition to command placeholders, kqexec can optionally set environment varia
 - `KQ_TRIGGER_DIR` : Directory containing the file that triggered the event
 - `KQ_USER_ID` : Numeric user ID that caused the event
 - `KQ_USERNAME` : Username that caused the event (resolved from user ID)
-- `KQ_TIMESTAMP` : ISO 8601 timestamp of the event
-- `KQ_CHANGED` : Newline-separated list of all changes
-- `KQ_CREATED` : Newline-separated list of items created
-- `KQ_DELETED` : Newline-separated list of items deleted
-- `KQ_EXCLUDE` : Comma-separated list of exclusion patterns (e.g., '*.txt','dir3','dir4')
-- `KQ_RENAMED` : Newline-separated list of items renamed
-- `KQ_MODIFIED` : Newline-separated list of items modified
+- `KQ_TIMESTAMP` : Timestamp of the event (format: YYYY-MM-DD HH:MM:SS)
+- `KQ_CHANGED` : Space-separated list of all changes
+- `KQ_CREATED` : Space-separated list of items created
+- `KQ_DELETED` : Space-separated list of items deleted
+- `KQ_EXCLUDE` : Comma-separated list of single-quoted exclusion patterns (e.g., `'*.txt','dir3','dir4'`)
+- `KQ_RENAMED` : Space-separated list of items renamed
+- `KQ_MODIFIED` : Space-separated list of items modified
 - `KQ_VAR_*` : Global variables from `[Variables]` section (e.g., `KQ_VAR_PROJECT_ROOT`)
 
 These environment variables make commands more powerful and reusable. For example:

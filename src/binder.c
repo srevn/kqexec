@@ -375,14 +375,14 @@ static placeholder_t resolve_array(binder_t *ctx, const char *array_spec) {
  * %b: Base path of the watch from the config
  * %w: Name of the watch from the config
  * %r: Event path relative to the watch path
- * %l: List of items (basenames) changed
- * %L: List of items changed (newline-separated)
+ * %l: List of changed item basenames (newline-separated)
+ * %L: List of changed item full paths (newline-separated)
  * %h: Size of the file in bytes (recursive for directories)
  * %H: Human-readable size (e.g., 1.2M, 512K)
  * %t: Time of the event (format: YYYY-MM-DD HH:MM:SS)
  * %u: User who triggered the event
  * %e: Event type which occurred
- * %x: Comma-separated list of exclusion patterns for this watch
+ * %x: Exclusion patterns as a comma-separated list of single-quoted strings
  * %[array:template]: Advanced template substitution where 'array' can be:
  *   - created, created_path: created items (basenames by default, or full paths with _path)
  *   - deleted, deleted_path: deleted items (basenames by default, or full paths with _path)
