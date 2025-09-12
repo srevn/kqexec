@@ -7,10 +7,10 @@
 typedef enum command {
 	CMD_DISABLE,                           /* Temporarily disable specified watches */
 	CMD_ENABLE,                            /* Re-enable previously disabled watches */
+	CMD_SUPPRESS,                          /* Suppress a watch for a given duration */
 	CMD_STATUS,                            /* Show status of current watches */
 	CMD_LIST,                              /* List all configured watches */
-	CMD_RELOAD,                            /* Reload configuration from file */
-	CMD_SUPPRESS                           /* Suppress a watch for a given duration */
+	CMD_RELOAD                             /* Reload configuration from file */
 } command_t;
 
 /* Client command-line options */

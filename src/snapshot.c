@@ -199,7 +199,7 @@ diff_list_t diff_list(const diff_t *diff, const char *change_type) {
 		};
 	} else {
 		/* "changed" is not supported as it's a compound list; consumer must handle it */
-		log_message(WARNING, "Unknown or unsupported change type requested from diff_list: %s", change_type);
+		log_message(WARNING, "Unsupported change type requested from diff_list: %s", change_type);
 		return (diff_list_t) {
 			.paths = NULL,
 			.count = 0

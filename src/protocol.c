@@ -403,6 +403,78 @@ static protocol_t protocol_enable(monitor_t *monitor, const char *command_text) 
 	return result;
 }
 
+/* Suppress events for a watch for a specified duration */
+static protocol_t protocol_suppress(monitor_t *monitor, const char *command_text) {
+	protocol_t result;
+	protocol_init(&result);
+
+	char *watch_name = kv_value(command_text, "watch");
+	char *duration = kv_value(command_text, "duration");
+
+	if (!watch_name || !duration) {
+		result.success = false;
+		result.message = strdup("Missing 'watch' or 'duration' for suppress command");
+		free(watch_name);
+		free(duration);
+		return result;
+	}
+
+	long duration_ms = protocol_duration(duration);
+	if (duration_ms < 0) {
+		result.success = false;
+		result.message = strdup("Invalid duration format for suppress command");
+		free(watch_name);
+		free(duration);
+		return result;
+	}
+
+	watchref_t watchref = registry_find(monitor->registry, watch_name);
+	if (!watchref_valid(watchref)) {
+		result.success = false;
+		size_t msg_len = strlen("Watch '' not found") + strlen(watch_name) + 1;
+		result.message = malloc(msg_len);
+		if (result.message) {
+			snprintf(result.message, msg_len, "Watch '%s' not found", watch_name);
+		}
+		free(watch_name);
+		free(duration);
+		return result;
+	}
+
+	watch_t *watch = registry_get(monitor->registry, watchref);
+	if (!watch) {
+		result.success = false;
+		size_t msg_len = strlen("Failed to get watch ''") + strlen(watch_name) + 1;
+		result.message = malloc(msg_len);
+		if (result.message) {
+			snprintf(result.message, msg_len, "Failed to get watch '%s'", watch_name);
+		}
+		free(watch_name);
+		free(duration);
+		return result;
+	}
+
+	/* Calculate suppression end time and apply it to the watch */
+	struct timespec current_time;
+	clock_gettime(CLOCK_MONOTONIC, &current_time);
+	watch->suppressed = current_time;
+	timespec_add(&watch->suppressed, duration_ms);
+
+	log_message(INFO, "Suppressing events for watch '%s' for %ld ms", watch->name, duration_ms);
+
+	result.success = true;
+	protocol_data(&result, "response_type", "suppress");
+	protocol_data(&result, "watch_name", watch_name);
+
+	char duration_ms_val[32];
+	snprintf(duration_ms_val, sizeof(duration_ms_val), "%ld", duration_ms);
+	protocol_data(&result, "duration_ms", duration_ms_val);
+
+	free(watch_name);
+	free(duration);
+	return result;
+}
+
 /* Report enhanced status with multi-line message format */
 static protocol_t protocol_status(monitor_t *monitor, const char *command_text) {
 	protocol_t result;
@@ -657,78 +729,6 @@ static protocol_t protocol_list(monitor_t *monitor, const char *command_text) {
 	return result;
 }
 
-/* Suppress events for a watch for a specified duration */
-static protocol_t protocol_suppress(monitor_t *monitor, const char *command_text) {
-	protocol_t result;
-	protocol_init(&result);
-
-	char *watch_name = kv_value(command_text, "watch");
-	char *duration = kv_value(command_text, "duration");
-
-	if (!watch_name || !duration) {
-		result.success = false;
-		result.message = strdup("Missing 'watch' or 'duration' for suppress command");
-		free(watch_name);
-		free(duration);
-		return result;
-	}
-
-	long duration_ms = protocol_duration(duration);
-	if (duration_ms < 0) {
-		result.success = false;
-		result.message = strdup("Invalid duration format for suppress command");
-		free(watch_name);
-		free(duration);
-		return result;
-	}
-
-	watchref_t watchref = registry_find(monitor->registry, watch_name);
-	if (!watchref_valid(watchref)) {
-		result.success = false;
-		size_t msg_len = strlen("Watch '' not found") + strlen(watch_name) + 1;
-		result.message = malloc(msg_len);
-		if (result.message) {
-			snprintf(result.message, msg_len, "Watch '%s' not found", watch_name);
-		}
-		free(watch_name);
-		free(duration);
-		return result;
-	}
-
-	watch_t *watch = registry_get(monitor->registry, watchref);
-	if (!watch) {
-		result.success = false;
-		size_t msg_len = strlen("Failed to get watch ''") + strlen(watch_name) + 1;
-		result.message = malloc(msg_len);
-		if (result.message) {
-			snprintf(result.message, msg_len, "Failed to get watch '%s'", watch_name);
-		}
-		free(watch_name);
-		free(duration);
-		return result;
-	}
-
-	/* Calculate suppression end time and apply it to the watch */
-	struct timespec current_time;
-	clock_gettime(CLOCK_MONOTONIC, &current_time);
-	watch->suppressed = current_time;
-	timespec_add(&watch->suppressed, duration_ms);
-
-	log_message(INFO, "Suppressing events for watch '%s' for %ld ms", watch->name, duration_ms);
-
-	result.success = true;
-	protocol_data(&result, "response_type", "suppress");
-	protocol_data(&result, "watch_name", watch_name);
-
-	char duration_ms_val[32];
-	snprintf(duration_ms_val, sizeof(duration_ms_val), "%ld", duration_ms);
-	protocol_data(&result, "duration_ms", duration_ms_val);
-
-	free(watch_name);
-	free(duration);
-	return result;
-}
-
 /* Process reload command */
 static protocol_t protocol_reload(monitor_t *monitor, const char *command_text) {
 	protocol_t result;
@@ -783,14 +783,14 @@ protocol_t protocol_process(monitor_t *monitor, const char *command_text) {
 		result = protocol_disable(monitor, command_text);
 	} else if (strcmp(command, "enable") == 0) {
 		result = protocol_enable(monitor, command_text);
+	} else if (strcmp(command, "suppress") == 0) {
+		result = protocol_suppress(monitor, command_text);
 	} else if (strcmp(command, "status") == 0) {
 		result = protocol_status(monitor, command_text);
 	} else if (strcmp(command, "list") == 0) {
 		result = protocol_list(monitor, command_text);
 	} else if (strcmp(command, "reload") == 0) {
 		result = protocol_reload(monitor, command_text);
-	} else if (strcmp(command, "suppress") == 0) {
-		result = protocol_suppress(monitor, command_text);
 	} else {
 		result.success = false;
 		size_t msg_len = strlen("Unknown command: ") + strlen(command) + 1;

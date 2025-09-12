@@ -337,19 +337,6 @@ cleanup:
 	free(error_counter);
 }
 
-/* Display formatted reload output */
-static void client_reload(const char *response) {
-	char *reload_requested = client_value(response, "reload_requested");
-
-	if (reload_requested && strcmp(reload_requested, "true") == 0) {
-		printf("Configuration reload requested\n");
-	} else {
-		printf("Reload operation completed\n");
-	}
-
-	free(reload_requested);
-}
-
 /* Display formatted suppress output */
 static void client_suppress(const char *response) {
 	char *watch_name = client_value(response, "watch_name");
@@ -363,6 +350,19 @@ static void client_suppress(const char *response) {
 
 	free(watch_name);
 	free(duration_ms);
+}
+
+/* Display formatted reload output */
+static void client_reload(const char *response) {
+	char *reload_requested = client_value(response, "reload_requested");
+
+	if (reload_requested && strcmp(reload_requested, "true") == 0) {
+		printf("Configuration reload requested\n");
+	} else {
+		printf("Reload operation completed\n");
+	}
+
+	free(reload_requested);
 }
 
 /* Display formatted status output */

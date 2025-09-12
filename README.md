@@ -8,7 +8,6 @@ A lightweight file and directory monitoring utility for FreeBSD and macOS that u
 - **Flexible Configuration**: Monitor specific files or entire directory trees
 - **Event Filtering**: Select which event types to monitor (content, structure, metadata)
 - **Custom Commands**: Execute arbitrary commands when events occur
-- **Recursive Monitoring**: Automatically monitor new files and directories
 - **Dynamic Directory Scanning**: Automatically detects and monitors new files and directories as they are created
 - **Event-Driven Parent Watching**: Monitors non-existent paths by watching parent directories and promoting watches as path components are created
 - **Glob Pattern Support**: Dynamic file and directory matching using wildcards (`*`, `?`, `[]`) with automatic watch promotion when patterns resolve
@@ -88,10 +87,10 @@ When running as a daemon, kqexec provides a control interface for runtime manage
 
 - `--disable=WATCHES` : Temporarily disable specified watches (comma-separated names)
 - `--enable=WATCHES` : Re-enable previously disabled watches (comma-separated names)
+- `--suppress=WATCH:DURATION` : Temporarily suppress events for a watch
 - `--status` : Display current daemon and watch status
 - `--list` : List all configured watches
 - `--reload` : Reload configuration from file
-- `--suppress=WATCH:DURATION` : Temporarily suppress events for a watch
 - `--socket=PATH` : Socket path to connect to (default: /tmp/kqexec.sock)
 
 Examples:
@@ -102,6 +101,9 @@ kqexec --disable "Web Content,Log File"
 # Enable specific disabled watches
 kqexec --enable "Web Content,Log File"
 
+# Suppress a watch for 30 seconds
+kqexec --suppress "Log File:30s"
+
 # Check daemon status
 kqexec --status
 
@@ -110,9 +112,6 @@ kqexec --list
 
 # Reload configuration
 kqexec --reload
-
-# Suppress a watch for 30 seconds
-kqexec --suppress "Log File:30s"
 ```
 
 ### Configuration File
@@ -458,7 +457,7 @@ The `batch_timeout`/`timeout` option defers events during active filesystem oper
 
 #### Buffered Command Output
 
-When `log_output` is enabled, command output is automatically buffered and flushed atomically once the command completes. This provides clean, non-interleaved log output even when multiple commands run concurrently, which is particularly helpful with verbose commands that produce extensive output.
+When `log_output`/`log` is enabled, command output is automatically buffered and flushed atomically once the command completes. This provides clean, non-interleaved log output even when multiple commands run concurrently, which is particularly helpful with verbose commands that produce extensive output.
 
 #### File and Directory Exclusion
 

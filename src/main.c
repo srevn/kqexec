@@ -13,16 +13,13 @@
 #include "registry.h"
 #include "threads.h"
 
-/* Default configuration file */
-#define DEFAULT_CONFIG "/usr/local/etc/kqexec.conf"
-
-/* Program name */
-static const char *program_name;
+#define DEFAULT_CONFIG "/usr/local/etc/kqexec.conf" /* Default configuration file */
+static const char *program_name;                    /* Program name */
 
 /* Application operation modes */
 typedef enum operation_mode {
-	MODE_DAEMON,                               /* Run as background daemon monitoring files */
-	MODE_CLIENT                                /* Run as client sending commands to daemon */
+	MODE_DAEMON,                                    /* Run as background daemon monitoring files */
+	MODE_CLIENT                                     /* Run as client sending commands to daemon */
 } operation_t;
 
 /* Print usage */
@@ -38,10 +35,10 @@ static void print_usage(void) {
 	fprintf(stderr, "\nClient mode options:\n");
 	fprintf(stderr, "  --disable=WATCHES        Temporarily disable specified watches (comma-separated)\n");
 	fprintf(stderr, "  --enable=WATCHES         Re-enable previously disabled watches (comma-separated)\n");
+	fprintf(stderr, "  --suppress=WATCH:DUR     Temporarily suppress watch events\n");
 	fprintf(stderr, "  --status                 Show status of current watches\n");
 	fprintf(stderr, "  --list                   List all configured watches\n");
 	fprintf(stderr, "  --reload                 Reload configuration from file\n");
-	fprintf(stderr, "  --suppress=WATCH:DUR     Temporarily suppress watch events\n");
 	fprintf(stderr, "  --socket=PATH            Socket path to connect to (default: %s)\n", DEFAULT_SOCKET);
 }
 
@@ -85,10 +82,10 @@ int main(int argc, char *argv[]) {
 		/* Client options */
 		{"disable", required_argument, 0, 1000},
 		{"enable", required_argument, 0, 1001},
-		{"status", no_argument, 0, 1002},
-		{"list", no_argument, 0, 1003},
-		{"reload", no_argument, 0, 1004},
-		{"suppress", required_argument, 0, 1005},
+		{"suppress", required_argument, 0, 1002},
+		{"status", no_argument, 0, 1003},
+		{"list", no_argument, 0, 1004},
+		{"reload", no_argument, 0, 1005},
 		{"socket", required_argument, 0, 1006},
 		{0, 0, 0, 0}};
 
@@ -144,22 +141,22 @@ int main(int argc, char *argv[]) {
 					options.num_watches = count;
 				}
 				break;
-			case 1002: /* --status */
-				mode = MODE_CLIENT;
-				options.command = CMD_STATUS;
-				break;
-			case 1003: /* --list */
-				mode = MODE_CLIENT;
-				options.command = CMD_LIST;
-				break;
-			case 1004: /* --reload */
-				mode = MODE_CLIENT;
-				options.command = CMD_RELOAD;
-				break;
-			case 1005: /* --suppress */
+			case 1002: /* --suppress */
 				mode = MODE_CLIENT;
 				options.command = CMD_SUPPRESS;
 				options.suppress = strdup(optarg);
+				break;
+			case 1003: /* --status */
+				mode = MODE_CLIENT;
+				options.command = CMD_STATUS;
+				break;
+			case 1004: /* --list */
+				mode = MODE_CLIENT;
+				options.command = CMD_LIST;
+				break;
+			case 1005: /* --reload */
+				mode = MODE_CLIENT;
+				options.command = CMD_RELOAD;
 				break;
 			case 1006: /* --socket */
 				options.socket_path = strdup(optarg);
