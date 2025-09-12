@@ -118,7 +118,8 @@ static bool pending_reasonable(const char *path) {
 	/* Check for potentially problematic system directories */
 	static const char *system_prefixes[] = {
 		"/proc/", "/sys/", "/dev/", "/tmp/",
-		NULL};
+		NULL
+	};
 
 	for (int i = 0; system_prefixes[i]; i++) {
 		if (strncmp(path, system_prefixes[i], strlen(system_prefixes[i])) == 0) {

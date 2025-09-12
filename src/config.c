@@ -842,7 +842,8 @@ bool config_snapshot(const watch_t *watch) {
 		"%renamed",
 		"%l", /* List of changed basenames */
 		"%L", /* List of changed full paths */
-		NULL};
+		NULL
+	};
 
 	for (int i = 0; snapshot_placeholders[i]; i++) {
 		if (strstr(watch->command, snapshot_placeholders[i])) {
@@ -852,19 +853,18 @@ bool config_snapshot(const watch_t *watch) {
 
 	/* Check for template-based diff array placeholders */
 	if (strstr(watch->command, "%[")) {
-		/* Look for diff array templates like %[created:%s], %[modified:%s], etc. */
+		/* Look for diff array templates like %[created:%s] */
 		const char *template_arrays[] = {
 			"%[created",
-			"%[deleted", 
+			"%[deleted",
 			"%[modified",
 			"%[renamed",
-			"%[changed",
-			"%[created_base",
-			"%[deleted_base",
-			"%[modified_base", 
-			"%[renamed_base",
-			"%[changed_base",
-			NULL};
+			"%[created_path",
+			"%[deleted_path",
+			"%[modified_path",
+			"%[renamed_path",
+			NULL
+		};
 
 		for (int i = 0; template_arrays[i]; i++) {
 			if (strstr(watch->command, template_arrays[i])) {
@@ -983,13 +983,14 @@ bool exclude_match(const watch_t *watch, const char *path) {
 				char path_copy[PATH_MAX];
 				strncpy(path_copy, relative_path, sizeof(path_copy) - 1);
 				path_copy[sizeof(path_copy) - 1] = '\0';
+				char *saveptr;
 
-				char *dir_component = strtok(path_copy, "/");
+				char *dir_component = strtok_r(path_copy, "/", &saveptr);
 				while (dir_component != NULL) {
 					if (fnmatch(pattern, dir_component, 0) == 0) {
 						return true; /* Path is within a directory that matches the pattern */
 					}
-					dir_component = strtok(NULL, "/");
+					dir_component = strtok_r(NULL, "/", &saveptr);
 				}
 			}
 
@@ -1239,10 +1240,10 @@ char *variable_resolve(const config_t *config, const char *value) {
 
 		free(current);
 		current = expanded;
-		log_message(DEBUG, "Expanded variables (pass %d): %s", depth + 1, current);
+		log_message(DEBUG, "Variable expansion (pass %d): %s", depth + 1, current);
 	}
 
-	log_message(ERROR, "Variable expansion exceeded maximum depth (%d), circular reference", max_depth);
+	log_message(ERROR, "Circular reference in variable expansion: max depth %d", max_depth);
 	free(current);
 	return NULL;
 }

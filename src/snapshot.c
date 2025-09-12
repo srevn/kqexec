@@ -178,17 +178,32 @@ diff_list_t diff_list(const diff_t *diff, const char *change_type) {
 	}
 
 	if (strcmp(change_type, "created") == 0) {
-		return (diff_list_t) {.paths = (const char *const *) diff->created, .count = diff->created_count};
+		return (diff_list_t) {
+			.paths = (const char *const *) diff->created,
+			.count = diff->created_count
+		};
 	} else if (strcmp(change_type, "deleted") == 0) {
-		return (diff_list_t) {.paths = (const char *const *) diff->deleted, .count = diff->deleted_count};
+		return (diff_list_t) {
+			.paths = (const char *const *) diff->deleted,
+			.count = diff->deleted_count
+		};
 	} else if (strcmp(change_type, "renamed") == 0) {
-		return (diff_list_t) {.paths = (const char *const *) diff->renamed, .count = diff->renamed_count};
+		return (diff_list_t) {
+			.paths = (const char *const *) diff->renamed,
+			.count = diff->renamed_count
+		};
 	} else if (strcmp(change_type, "modified") == 0) {
-		return (diff_list_t) {.paths = (const char *const *) diff->modified, .count = diff->modified_count};
+		return (diff_list_t) {
+			.paths = (const char *const *) diff->modified,
+			.count = diff->modified_count
+		};
 	} else {
 		/* "changed" is not supported as it's a compound list; consumer must handle it */
 		log_message(WARNING, "Unknown or unsupported change type requested from diff_list: %s", change_type);
-		return (diff_list_t) {.paths = NULL, .count = 0};
+		return (diff_list_t) {
+			.paths = NULL,
+			.count = 0
+		};
 	}
 }
 
