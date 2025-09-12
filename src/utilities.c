@@ -344,7 +344,7 @@ double complexity_temporary(double complexity) {
 }
 
 /* Shell-escape a single path by wrapping in single quotes */
-char *string_escape(const char *str) {
+char *escape_string(const char *str) {
 	if (!str) return NULL;
 
 	/* Calculate required buffer size */
@@ -380,39 +380,145 @@ char *string_escape(const char *str) {
 }
 
 /* Shell-escape a newline-separated list of paths */
-char *format_escaped_path_array(const char *const *paths, int count, const char *separator, bool basename_only) {
-    if (!paths || count == 0) {
-        return strdup("");
-    }
+char *escape_array(const char *const *paths, int count, const char *separator, bool basename_only) {
+	if (!paths || count == 0) {
+		return strdup("");
+	}
 
-    builder_t builder;
-    if (!builder_init(&builder, 4096)) {
-        return NULL;
-    }
+	builder_t builder;
+	if (!builder_init(&builder, 4096)) {
+		return NULL;
+	}
 
-    for (int i = 0; i < count; i++) {
-        const char *path = paths[i];
-        if (!path) continue;
+	for (int i = 0; i < count; i++) {
+		const char *path = paths[i];
+		if (!path) continue;
 
-        const char *path_to_use = path;
-        if (basename_only) {
-            const char *basename = strrchr(path, '/');
-            if (basename) {
-                path_to_use = basename + 1;
-            }
-        }
+		const char *path_to_use = path;
+		if (basename_only) {
+			const char *basename = strrchr(path, '/');
+			if (basename) {
+				path_to_use = basename + 1;
+			}
+		}
 
-        char *escaped = string_escape(path_to_use);
-        if (escaped) {
-            if (i > 0 && separator) {
-                builder_append(&builder, "%%s", separator);
-            }
-            builder_append(&builder, "%%s", escaped);
-            free(escaped);
-        }
-    }
+		char *escaped = escape_string(path_to_use);
+		if (escaped) {
+			if (i > 0 && separator) {
+				builder_append(&builder, "%s", separator);
+			}
+			builder_append(&builder, "%s", escaped);
+			free(escaped);
+		}
+	}
 
-    return builder_string(&builder);
+	return builder_string(&builder);
+}
+
+/* Format a string array by applying a template to each item with an optional separator */
+char *format_array(const char *const *strings, int count, const char *template, const char *separator, bool basename_only) {
+	if (!strings || count == 0) {
+		return strdup("");
+	}
+
+	builder_t builder;
+	if (!builder_init(&builder, 4096)) {
+		return NULL;
+	}
+
+	/* Efficiently pre-calculate prefix and suffix of the template */
+	const char *ph = "%s";
+	const char *template_start = strstr(template, ph);
+	size_t template_ph_len = strlen(ph);
+
+	char *prefix = NULL;
+	size_t prefix_len = 0;
+	const char *suffix = NULL;
+	size_t suffix_len = 0;
+
+	if (template_start) {
+		prefix_len = template_start - template;
+		if (prefix_len > 0) {
+			prefix = malloc(prefix_len + 1);
+			if (prefix) {
+				strncpy(prefix, template, prefix_len);
+				prefix[prefix_len] = '\0';
+			}
+		}
+		suffix = template_start + template_ph_len;
+		suffix_len = strlen(suffix);
+	} else {
+		/* If no placeholder, the template is static and repeated for each item */
+		for (int i = 0; i < count; i++) {
+			if (i > 0 && separator) {
+				builder_append(&builder, "%s", separator);
+			}
+			builder_append(&builder, "%s", template);
+		}
+		char *result = builder_string(&builder);
+		free(prefix);
+		return result;
+	}
+
+	for (int i = 0; i < count; i++) {
+		const char *string = strings[i];
+		if (!string) continue;
+
+		const char *string_to_use = string;
+		if (basename_only) {
+			const char *last_component = strrchr(string, '/');
+			if (last_component) {
+				string_to_use = last_component + 1;
+			}
+		}
+
+		if (i > 0 && separator) {
+			builder_append(&builder, "%s", separator);
+		}
+
+		/* Append prefix, value, and suffix for efficiency */
+		if (prefix_len > 0 && prefix) builder_append(&builder, "%s", prefix);
+		builder_append(&builder, "%s", string_to_use);
+		if (suffix_len > 0 && suffix) builder_append(&builder, "%s", suffix);
+	}
+
+	free(prefix);
+	return builder_string(&builder);
+}
+
+/* Format size in bytes to a human-readable string */
+const char *format_size(ssize_t size, bool show_sign) {
+	static __thread char buf[32];
+	const char *suffixes[] = {"B", "KB", "MB", "GB", "TB"};
+	size_t i = 0;
+	double d_size;
+	bool negative = false;
+
+	if (size == 0) {
+		return "0 B";
+	}
+
+	/* Handle negative sizes for size deltas */
+	if (size < 0) {
+		negative = true;
+		d_size = (double) (-size);
+	} else {
+		d_size = (double) size;
+	}
+
+	/* Determine the appropriate suffix */
+	while (d_size >= 1024 && i < (sizeof(suffixes) / sizeof(suffixes[0])) - 1) {
+		d_size /= 1024;
+		i++;
+	}
+
+	/* Format the string with proper sign handling */
+	if (show_sign && size > 0) {
+		snprintf(buf, sizeof(buf), "+%.2f %s", d_size, suffixes[i]);
+	} else {
+		snprintf(buf, sizeof(buf), "%s%.2f %s", negative ? "-" : "", d_size, suffixes[i]);
+	}
+	return buf;
 }
 
 /* Helper function to substitute a placeholder in a string with dynamic allocation */
@@ -462,169 +568,4 @@ char *string_substitute(const char *input, const char *placeholder, const char *
 	strcpy(dst, src);
 
 	return result;
-}
-
-/* Format string array by applying a template to each item with optional separator */
-char *format_array(const char *const *strings, int count, const char *template, const char *separator) {
-	if (!strings || count == 0) return strdup("");
-
-	/* Start with a reasonable buffer size */
-	size_t result_capacity = 4096;
-	char *result = malloc(result_capacity);
-	if (!result) return NULL;
-
-	result[0] = '\0';
-	size_t result_len = 0;
-	size_t separator_len = separator ? strlen(separator) : 0;
-	int items_added = 0;
-
-	for (int i = 0; i < count; i++) {
-		if (!strings[i]) continue;
-
-		/* Substitute the raw item into the template - template handles escaping */
-		char *formatted_item = string_substitute(template, "%s", strings[i]);
-
-		if (!formatted_item) {
-			free(result);
-			return NULL;
-		}
-
-		size_t formatted_len = strlen(formatted_item);
-		/* +separator_len if not first, +1 for null terminator */
-		size_t needed = result_len + (items_added > 0 ? separator_len : 0) + formatted_len + 1;
-
-		/* Grow buffer if needed */
-		if (needed > result_capacity) {
-			size_t new_capacity = needed * 2;
-			char *new_result = realloc(result, new_capacity);
-			if (!new_result) {
-				free(formatted_item);
-				free(result);
-				return NULL;
-			}
-			result = new_result;
-			result_capacity = new_capacity;
-		}
-
-		/* Add separator if not first and separator is specified */
-		if (items_added > 0 && separator) {
-			memcpy(result + result_len, separator, separator_len);
-			result_len += separator_len;
-		}
-
-		/* Copy formatted item */
-		strcpy(result + result_len, formatted_item);
-		result_len += formatted_len;
-
-		free(formatted_item);
-		items_added++;
-	}
-
-	return result;
-}
-
-/* Format a path array by applying a template to each item with an optional separator */
-char *format_path_array(const char *const *paths, int count, const char *template, const char *separator, bool basename_only) {
-    if (!paths || count == 0) {
-        return strdup("");
-    }
-
-    builder_t builder;
-    if (!builder_init(&builder, 4096)) {
-        return NULL;
-    }
-
-    /* Efficiently pre-calculate prefix and suffix of the template */
-    const char *ph = "%s";
-    const char *template_start = strstr(template, ph);
-    size_t template_ph_len = strlen(ph);
-
-    char *prefix = NULL;
-    size_t prefix_len = 0;
-    const char *suffix = NULL;
-    size_t suffix_len = 0;
-
-    if (template_start) {
-        prefix_len = template_start - template;
-        if (prefix_len > 0) {
-            prefix = malloc(prefix_len + 1);
-            if (prefix) {
-                strncpy(prefix, template, prefix_len);
-                prefix[prefix_len] = '\0';
-            }
-        }
-        suffix = template_start + template_ph_len;
-        suffix_len = strlen(suffix);
-    } else {
-        /* If no placeholder, the template is static and repeated for each item */
-        for (int i = 0; i < count; i++) {
-            if (i > 0 && separator) {
-                builder_append(&builder, "%s", separator);
-            }
-            builder_append(&builder, "%s", template);
-        }
-        char *result = builder_string(&builder);
-        free(prefix);
-        return result;
-    }
-
-    for (int i = 0; i < count; i++) {
-        const char *path = paths[i];
-        if (!path) continue;
-
-        const char *path_to_use = path;
-        if (basename_only) {
-            const char *basename = strrchr(path, '/');
-            if (basename) {
-                path_to_use = basename + 1;
-            }
-        }
-
-        if (i > 0 && separator) {
-            builder_append(&builder, "%s", separator);
-        }
-
-        /* Append prefix, value, and suffix for efficiency */
-        if (prefix_len > 0 && prefix) builder_append(&builder, "%s", prefix);
-        builder_append(&builder, "%s", path_to_use);
-        if (suffix_len > 0 && suffix) builder_append(&builder, "%s", suffix);
-    }
-
-    free(prefix);
-    return builder_string(&builder);
-}
-
-/* Format size in bytes to a human-readable string */
-const char *format_size(ssize_t size, bool show_sign) {
-	static __thread char buf[32];
-	const char *suffixes[] = {"B", "KB", "MB", "GB", "TB"};
-	size_t i = 0;
-	double d_size;
-	bool negative = false;
-
-	if (size == 0) {
-		return "0 B";
-	}
-
-	/* Handle negative sizes for size deltas */
-	if (size < 0) {
-		negative = true;
-		d_size = (double) (-size);
-	} else {
-		d_size = (double) size;
-	}
-
-	/* Determine the appropriate suffix */
-	while (d_size >= 1024 && i < (sizeof(suffixes) / sizeof(suffixes[0])) - 1) {
-		d_size /= 1024;
-		i++;
-	}
-
-	/* Format the string with proper sign handling */
-	if (show_sign && size > 0) {
-		snprintf(buf, sizeof(buf), "+%.2f %s", d_size, suffixes[i]);
-	} else {
-		snprintf(buf, sizeof(buf), "%s%.2f %s", negative ? "-" : "", d_size, suffixes[i]);
-	}
-	return buf;
 }

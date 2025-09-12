@@ -3,7 +3,6 @@
 
 #include <stdbool.h>
 #include <stddef.h>
-#include <string.h>
 #include <sys/types.h>
 #include <time.h>
 
@@ -47,14 +46,15 @@ double complexity_stability(double complexity);
 double complexity_sensitivity(double complexity, int change_level);
 double complexity_temporary(double complexity);
 
-/* String utilities */
-char *string_escape(const char *str);
-char *string_substitute(const char *input, const char *placeholder, const char *value);
+/* Shell escape utilities */
+char *escape_string(const char *str);
+char *escape_array(const char *const *paths, int count, const char *separator, bool basename_only);
 
 /* Formatting utilities */
 const char *format_size(ssize_t size, bool show_sign);
-char *format_array(const char *const *strings, int count, const char *template, const char *separator);
-char *format_path_array(const char *const *paths, int count, const char *template, const char *separator, bool basename_only);
-char *format_escaped_path_array(const char *const *paths, int count, const char *separator, bool basename_only);
+char *format_array(const char *const *strings, int count, const char *template, const char *separator, bool basename_only);
+
+/* String utilities */
+char *string_substitute(const char *input, const char *placeholder, const char *value);
 
 #endif /* UTILITIES_H */

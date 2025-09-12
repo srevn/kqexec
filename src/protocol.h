@@ -2,7 +2,6 @@
 #define PROTOCOL_H
 
 #include <stdbool.h>
-#include <stddef.h>
 
 #include "control.h"
 #include "utilities.h"

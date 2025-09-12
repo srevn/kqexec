@@ -11,7 +11,7 @@
 typedef struct placeholder {
 	char *value;                           /* The resolved value */
 	bool allocated;                        /* Should we free this value? */
-	bool pre_formatted;                    /* Is this already formatted? (use as-is) */
+	bool formatted;                        /* Is this already formatted? */
 } placeholder_t;
 
 /* Context for placeholder binding operations */
