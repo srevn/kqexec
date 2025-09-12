@@ -15,9 +15,11 @@ load_rc_config $name
 
 : ${kqexec_enable:="NO"}
 : ${kqexec_config:="/usr/local/etc/kqexec.conf"}
+: ${kqexec_env:=""}
 
 command="/usr/local/bin/kqexec"
 command_args="-d -c ${kqexec_config}"
+command_env="${kqexec_env}"
 extra_commands="reload"
 
 run_rc_command "$1"
