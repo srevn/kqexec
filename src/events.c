@@ -1025,7 +1025,7 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 	}
 
 	/* Check cooldown/deferral logic */
-	if (stability_ready(monitor, subscription, optype, command_get_cooldown_time(), filter_for_mask)) {
+	if (stability_ready(monitor, subscription, optype, cooldown_get(), filter_for_mask)) {
 		/* Execute command immediately (only for non-directory-content changes) */
 		event_t synthetic_event = {
 			.path = subscription->resource->path,

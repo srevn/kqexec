@@ -720,7 +720,7 @@ bool stability_execute(monitor_t *monitor, check_t *check, subscription_t *root,
 
 		/* Check cooldown before executing command */
 		long elapsed_command = (current_time->tv_sec - subscription->command_time) * 1000;
-		int cooldown_ms = command_get_cooldown_time();
+		int cooldown_ms = cooldown_get();
 		if (cooldown_ms > 0 && elapsed_command < cooldown_ms && subscription->command_time != 0) {
 			log_message(DEBUG, "Command execution blocked by cooldown for %s (watch: %s), resetting baseline",
 						check->path, watch->name);

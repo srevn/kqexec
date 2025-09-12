@@ -112,7 +112,7 @@ int main(int argc, char *argv[]) {
 				}
 				break;
 			case 'r':
-				command_cooldown_time(atoi(optarg));
+				cooldown_set(atoi(optarg));
 				break;
 			case 's':
 				socket_path = optarg;
