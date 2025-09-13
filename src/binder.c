@@ -377,8 +377,8 @@ static placeholder_t resolve_array(binder_t *ctx, const char *array_spec) {
  * %r: Event path relative to the watch path
  * %l: List of changed item basenames (newline-separated)
  * %L: List of changed item full paths (newline-separated)
- * %h: Size of the file in bytes (recursive for directories)
- * %H: Human-readable size (e.g., 1.2M, 512K)
+ * %q: Size of the file in bytes (recursive for directories)
+ * %Q: Human-readable size (e.g., 1.2M, 512K)
  * %t: Time of the event (format: YYYY-MM-DD HH:MM:SS)
  * %u: User who triggered the event
  * %e: Event type which occurred
@@ -466,9 +466,9 @@ char *binder_placeholders(binder_t *ctx, const char *template) {
 					result = resolve_user(ctx);
 				else if (strcmp(name_buffer, "e") == 0)
 					result = resolve_event_type(ctx);
-				else if (strcmp(name_buffer, "h") == 0)
+				else if (strcmp(name_buffer, "q") == 0)
 					result = resolve_size(ctx);
-				else if (strcmp(name_buffer, "H") == 0)
+				else if (strcmp(name_buffer, "Q") == 0)
 					result = resolve_human_size(ctx);
 				else if (strcmp(name_buffer, "x") == 0)
 					result = resolve_exclusion(ctx);

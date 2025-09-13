@@ -211,8 +211,8 @@ Commands can include the following placeholders that will be replaced at runtime
 - `%r` : Event path relative to the watch path
 - `%l` : Newline-separated list of changed item basenames
 - `%L` : Newline-separated list of changed item full paths
-- `%h` : Size of the file in bytes (recursive for directories)
-- `%H` : Human-readable size (e.g., 1.2M, 512K)
+- `%q` : Size of the file in bytes (recursive for directories)
+- `%Q` : Human-readable size (e.g., 1.2M, 512K)
 - `%t` : Time of the event (format: YYYY-MM-DD HH:MM:SS)
 - `%u` : User who triggered the event
 - `%e` : Event type which occurred
