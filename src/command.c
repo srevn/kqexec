@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/select.h>
+#include <sys/time.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -33,15 +34,6 @@ bool command_init(threads_t *threads) {
 
 	/* Store threads reference */
 	command_threads = threads;
-
-	/* Ignore SIGCHLD to prevent zombie processes, child processes are waited for explicitly */
-	struct sigaction sa;
-	memset(&sa, 0, sizeof(sa));
-	sa.sa_handler = SIG_IGN;
-	if (sigaction(SIGCHLD, &sa, NULL) == -1) {
-		log_message(ERROR, "Failed to set SIGCHLD to SIG_IGN: %s", strerror(errno));
-		return false;
-	}
 
 	return true;
 }
@@ -128,14 +120,96 @@ static void buffer_flush(const watch_t *watch, output_t *buf) {
 	}
 }
 
+/* Read only stderr for error logging with timeout and size limits */
+static bool command_stderr(const watch_t *watch, int stderr_pipe[2]) {
+	/* Close write end in parent */
+	close(stderr_pipe[1]);
+
+	fd_set read_fds;
+	struct timeval timeout;
+	char buffer[1024]; /* Smaller buffer for error messages */
+	ssize_t bytes_read;
+	size_t total_read = 0;
+	const size_t MAX_STDERR_SIZE = 16384; /* 16KB limit for stderr */
+	bool timed_out = false;
+
+	while (total_read < MAX_STDERR_SIZE) {
+		FD_ZERO(&read_fds);
+		FD_SET(stderr_pipe[0], &read_fds);
+
+		/* 5 second timeout to prevent hanging */
+		timeout.tv_sec = 5;
+		timeout.tv_usec = 0;
+
+		int select_result = select(stderr_pipe[0] + 1, &read_fds, NULL, NULL, &timeout);
+
+		if (select_result < 0) {
+			if (errno != EINTR) {
+				log_message(WARNING, "[%s] select() on stderr failed: %s",
+							watch->name, strerror(errno));
+			}
+			break;
+		}
+
+		if (select_result == 0) {
+			/* Timeout - child may be hanging */
+			log_message(WARNING, "[%s] stderr read timeout", watch->name);
+			timed_out = true;
+			break;
+		}
+
+		if (FD_ISSET(stderr_pipe[0], &read_fds)) {
+			bytes_read = read(stderr_pipe[0], buffer, sizeof(buffer) - 1);
+			if (bytes_read <= 0) {
+				break; /* EOF or error */
+			}
+
+			total_read += bytes_read;
+			buffer[bytes_read] = '\0';
+
+			/* Split by lines and log each non-empty line */
+			char *line_start = buffer;
+			char *newline;
+
+			while ((newline = strchr(line_start, '\n')) != NULL) {
+				*newline = '\0';
+				if (strlen(line_start) > 0) {
+					log_message(WARNING, "[%s] stderr: %s", watch->name, line_start);
+				}
+				line_start = newline + 1;
+			}
+
+			/* Log remaining partial line if any */
+			if (strlen(line_start) > 0) {
+				log_message(WARNING, "[%s] stderr: %s", watch->name, line_start);
+			}
+		}
+	}
+
+	if (total_read >= MAX_STDERR_SIZE) {
+		log_message(WARNING, "[%s] stderr output truncated (exceeded %zu bytes)",
+					watch->name, MAX_STDERR_SIZE);
+	}
+
+	/* Close read end */
+	close(stderr_pipe[0]);
+	return !timed_out;
+}
+
 /* Read command output using select() */
-static void command_read(const watch_t *watch, int stdout_pipe[2], int stderr_pipe[2], output_t *buf) {
+static bool command_read(const watch_t *watch, int stdout_pipe[2], int stderr_pipe[2], output_t *buf) {
 	/* Close write ends in parent */
 	close(stdout_pipe[1]);
 	close(stderr_pipe[1]);
 
 	int max_fd = (stdout_pipe[0] > stderr_pipe[0]) ? stdout_pipe[0] : stderr_pipe[0];
 	bool stdout_open = true, stderr_open = true;
+
+	/* Variables for stderr limiting */
+	size_t total_stderr_read = 0;
+	const size_t MAX_STDERR_SIZE = 16384; /* 16KB limit for stderr */
+	bool stderr_truncated = false;
+	bool timed_out = false;
 
 	while (stdout_open || stderr_open) {
 		fd_set read_fds;
@@ -144,12 +218,24 @@ static void command_read(const watch_t *watch, int stdout_pipe[2], int stderr_pi
 		if (stdout_open) FD_SET(stdout_pipe[0], &read_fds);
 		if (stderr_open) FD_SET(stderr_pipe[0], &read_fds);
 
-		int select_result = select(max_fd + 1, &read_fds, NULL, NULL, NULL);
-		if (select_result <= 0) {
-			if (select_result < 0 && errno != EINTR) {
-				log_message(WARNING, "select() failed: %s", strerror(errno));
+		struct timeval timeout;
+		timeout.tv_sec = 5;
+		timeout.tv_usec = 0;
+
+		int select_result = select(max_fd + 1, &read_fds, NULL, NULL, &timeout);
+		if (select_result < 0) {
+			if (errno != EINTR) {
+				log_message(WARNING, "[%s] select() on output pipes failed: %s", watch->name,
+							strerror(errno));
+				break;
 			}
 			continue;
+		}
+
+		if (select_result == 0) {
+			log_message(WARNING, "[%s] command read timeout", watch->name);
+			timed_out = true;
+			break;
 		}
 
 		/* Handle stdout - read raw chunks and append to buffer */
@@ -160,7 +246,15 @@ static void command_read(const watch_t *watch, int stdout_pipe[2], int stderr_pi
 				stdout_open = false;
 			} else {
 				if (!buffer_append(buf, buffer, bytes_read)) {
-					log_message(WARNING, "[%s] stdout buffer limit reached, output truncated", watch->name);
+					log_message(WARNING, "[%s] stdout buffer limit reached, output truncated",
+								watch->name);
+
+					/* Set pipe to non-blocking to drain it without blocking */
+					int flags = fcntl(stdout_pipe[0], F_GETFL, 0);
+					if (flags != -1) {
+						fcntl(stdout_pipe[0], F_SETFL, flags | O_NONBLOCK);
+					}
+
 					/* Keep reading to drain the pipe, but discard */
 					char discard_buffer[1024];
 					while (read(stdout_pipe[0], discard_buffer, sizeof(discard_buffer)) > 0);
@@ -169,15 +263,35 @@ static void command_read(const watch_t *watch, int stdout_pipe[2], int stderr_pi
 			}
 		}
 
-		/* Handle stderr - log immediately */
+		/* Handle stderr - log immediately with size limit */
 		if (stderr_open && FD_ISSET(stderr_pipe[0], &read_fds)) {
 			char buffer[8192];
 			ssize_t bytes_read = read(stderr_pipe[0], buffer, sizeof(buffer) - 1);
 			if (bytes_read <= 0) {
 				stderr_open = false;
 			} else {
-				buffer[bytes_read] = '\0';
-				log_message(WARNING, "[%s] stderr: %s", watch->name, buffer);
+				total_stderr_read += bytes_read;
+				if (total_stderr_read >= MAX_STDERR_SIZE && !stderr_truncated) {
+					log_message(WARNING, "[%s] stderr output truncated (exceeded %zu bytes)",
+								watch->name, MAX_STDERR_SIZE);
+					stderr_truncated = true;
+				}
+
+				if (!stderr_truncated) {
+					buffer[bytes_read] = '\0';
+					char *line_start = buffer;
+					char *newline;
+					while ((newline = strchr(line_start, '\n')) != NULL) {
+						*newline = '\0';
+						if (strlen(line_start) > 0) {
+							log_message(WARNING, "[%s] stderr: %s", watch->name, line_start);
+						}
+						line_start = newline + 1;
+					}
+					if (strlen(line_start) > 0) {
+						log_message(WARNING, "[%s] stderr: %s", watch->name, line_start);
+					}
+				}
 			}
 		}
 	}
@@ -185,6 +299,7 @@ static void command_read(const watch_t *watch, int stdout_pipe[2], int stderr_pi
 	/* Close read ends */
 	close(stdout_pipe[0]);
 	close(stderr_pipe[0]);
+	return !timed_out;
 }
 
 /* Command execution synchronous or asynchronous */
@@ -234,10 +349,20 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 
 	log_message(INFO, "Executing command: %s", command);
 
-	/* Create pipes for stdout and stderr if configured to capture output */
+	/* Always create stderr pipe for error logging */
+	if (pipe(stderr_pipe) < 0) {
+		log_message(ERROR, "Failed to create stderr pipe: %s", strerror(errno));
+		free(command);
+		binder_destroy(binder_ctx);
+		return false;
+	}
+
+	/* Create stdout pipe only if configured to capture output */
 	if (capture_output) {
-		if (pipe(stdout_pipe) < 0 || pipe(stderr_pipe) < 0) {
-			log_message(ERROR, "Failed to create pipes: %s", strerror(errno));
+		if (pipe(stdout_pipe) < 0) {
+			log_message(ERROR, "Failed to create stdout pipe: %s", strerror(errno));
+			close(stderr_pipe[0]);
+			close(stderr_pipe[1]);
 			free(command);
 			binder_destroy(binder_ctx);
 			return false;
@@ -248,11 +373,13 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 	pid = fork();
 	if (pid == -1) {
 		log_message(ERROR, "Failed to fork: %s", strerror(errno));
+		/* Always close stderr pipe */
+		close(stderr_pipe[0]);
+		close(stderr_pipe[1]);
+		/* Close stdout pipe if it was created */
 		if (capture_output) {
 			close(stdout_pipe[0]);
 			close(stdout_pipe[1]);
-			close(stderr_pipe[0]);
-			close(stderr_pipe[1]);
 		}
 		free(command);
 		binder_destroy(binder_ctx);
@@ -261,25 +388,28 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 
 	/* Child process */
 	if (pid == 0) {
-		/* Redirect stdout and stderr to pipes if configured */
+		/* Create a new process group to terminate the command and its children */
+		if (setpgid(0, 0) < 0) {
+			log_message(ERROR, "Failed to set new process group: %s", strerror(errno));
+			exit(EXIT_FAILURE);
+		}
+
+		/* Always redirect stderr to pipe for error logging */
+		close(stderr_pipe[0]);
+		dup2(stderr_pipe[1], STDERR_FILENO);
+		close(stderr_pipe[1]);
+
+		/* Handle stdout based on log_output setting */
 		if (capture_output) {
-			/* Close read ends of pipes */
+			/* Redirect stdout to pipe for output logging */
 			close(stdout_pipe[0]);
-			close(stderr_pipe[0]);
-
-			/* Redirect stdout and stderr to pipes */
 			dup2(stdout_pipe[1], STDOUT_FILENO);
-			dup2(stderr_pipe[1], STDERR_FILENO);
-
-			/* Close write ends after dup2 */
 			close(stdout_pipe[1]);
-			close(stderr_pipe[1]);
 		} else {
-			/* Suppress output by redirecting to /dev/null */
+			/* Suppress stdout by redirecting to /dev/null */
 			int dev_null = open("/dev/null", O_WRONLY);
 			if (dev_null >= 0) {
 				dup2(dev_null, STDOUT_FILENO);
-				dup2(dev_null, STDERR_FILENO);
 				close(dev_null);
 			}
 		}
@@ -304,14 +434,32 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 											  monitor->registry, event->path, watchref, ENTITY_UNKNOWN);
 	}
 
-	/* Read and log output if configured */
+	/* Always read stderr for error logging, read stdout only if configured */
+	bool read_ok;
 	if (capture_output) {
-		command_read(watch, stdout_pipe, stderr_pipe, &output_buf);
+		read_ok = command_read(watch, stdout_pipe, stderr_pipe, &output_buf);
+	} else {
+		/* Only read stderr for error logging when stdout capture is disabled */
+		read_ok = command_stderr(watch, stderr_pipe);
 	}
 
-	/* Wait for child process to complete */
+	/* If read timed out, the child process is unresponsive and must be killed */
+	if (!read_ok) {
+		log_message(ERROR, "[%s] Terminating unresponsive command (pid: %d)", watch->name, pid);
+		kill(-pid, SIGKILL); /* Kill the entire process group */
+	}
+
+	/* Wait for child process to complete with proper signal handling */
 	int status;
-	waitpid(pid, &status, 0);
+	pid_t wait_result;
+	do {
+		wait_result = waitpid(pid, &status, 0);
+	} while (wait_result == -1 && errno == EINTR);
+
+	if (wait_result == -1) {
+		log_message(ERROR, "[%s] waitpid() failed: %s", watch->name, strerror(errno));
+		status = -1; /* Mark as failed */
+	}
 
 	/* Record end time */
 	time(&end_time);
@@ -324,9 +472,20 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 		free(output_buf.data);
 	}
 
-	/* Log command completion */
-	log_message(INFO, "[%s] Finished execution (pid: %d, duration: %lds, exit: %d)",
-				watch->name, pid, end_time - start, WEXITSTATUS(status));
+	/* Log command completion with proper status interpretation */
+	if (wait_result == -1) {
+		log_message(INFO, "[%s] Finished execution (pid: %d, duration: %lds, wait failed)",
+					watch->name, pid, end_time - start);
+	} else if (WIFEXITED(status)) {
+		log_message(INFO, "[%s] Finished execution (pid: %d, duration: %lds, exit: %d)",
+					watch->name, pid, end_time - start, WEXITSTATUS(status));
+	} else if (WIFSIGNALED(status)) {
+		log_message(WARNING, "[%s] Killed by signal (pid: %d, duration: %lds, signal: %d)",
+					watch->name, pid, end_time - start, WTERMSIG(status));
+	} else {
+		log_message(WARNING, "[%s] Abnormal termination (pid: %d, duration: %lds, status: %d)",
+					watch->name, pid, end_time - start, status);
+	}
 
 	/* Clear command executing flag and reset baseline */
 	if (subscription) {
@@ -356,7 +515,12 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 
 	free(command);
 	binder_destroy(binder_ctx);
-	return true;
+
+	/* Return success only if command completed normally with exit code 0 */
+	if (wait_result != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+		return true;
+	}
+	return false;
 }
 
 /* Clean up command subsystem */
