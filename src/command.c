@@ -5,7 +5,6 @@
 #include <libgen.h>
 #include <pthread.h>
 #include <pwd.h>
-#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -120,41 +119,29 @@ static void buffer_flush(const watch_t *watch, output_t *buf) {
 	}
 }
 
-/* Read only stderr for error logging with timeout and size limits */
-static bool command_stderr(const watch_t *watch, int stderr_pipe[2]) {
+/* Read only stderr for error logging with size limits */
+static void command_stderr(const watch_t *watch, int stderr_pipe[2]) {
 	/* Close write end in parent */
 	close(stderr_pipe[1]);
 
 	fd_set read_fds;
-	struct timeval timeout;
 	char buffer[1024]; /* Smaller buffer for error messages */
 	ssize_t bytes_read;
 	size_t total_read = 0;
 	const size_t MAX_STDERR_SIZE = 16384; /* 16KB limit for stderr */
-	bool timed_out = false;
 
 	while (total_read < MAX_STDERR_SIZE) {
 		FD_ZERO(&read_fds);
 		FD_SET(stderr_pipe[0], &read_fds);
 
-		/* 5 second timeout to prevent hanging */
-		timeout.tv_sec = 5;
-		timeout.tv_usec = 0;
-
-		int select_result = select(stderr_pipe[0] + 1, &read_fds, NULL, NULL, &timeout);
+		/* Wait indefinitely for data or pipe closure */
+		int select_result = select(stderr_pipe[0] + 1, &read_fds, NULL, NULL, NULL);
 
 		if (select_result < 0) {
 			if (errno != EINTR) {
 				log_message(WARNING, "[%s] select() on stderr failed: %s",
 							watch->name, strerror(errno));
 			}
-			break;
-		}
-
-		if (select_result == 0) {
-			/* Timeout - child may be hanging */
-			log_message(WARNING, "[%s] stderr read timeout", watch->name);
-			timed_out = true;
 			break;
 		}
 
@@ -193,11 +180,10 @@ static bool command_stderr(const watch_t *watch, int stderr_pipe[2]) {
 
 	/* Close read end */
 	close(stderr_pipe[0]);
-	return !timed_out;
 }
 
 /* Read command output using select() */
-static bool command_read(const watch_t *watch, int stdout_pipe[2], int stderr_pipe[2], output_t *buf) {
+static void command_read(const watch_t *watch, int stdout_pipe[2], int stderr_pipe[2], output_t *buf) {
 	/* Close write ends in parent */
 	close(stdout_pipe[1]);
 	close(stderr_pipe[1]);
@@ -209,7 +195,6 @@ static bool command_read(const watch_t *watch, int stdout_pipe[2], int stderr_pi
 	size_t total_stderr_read = 0;
 	const size_t MAX_STDERR_SIZE = 16384; /* 16KB limit for stderr */
 	bool stderr_truncated = false;
-	bool timed_out = false;
 
 	while (stdout_open || stderr_open) {
 		fd_set read_fds;
@@ -218,11 +203,8 @@ static bool command_read(const watch_t *watch, int stdout_pipe[2], int stderr_pi
 		if (stdout_open) FD_SET(stdout_pipe[0], &read_fds);
 		if (stderr_open) FD_SET(stderr_pipe[0], &read_fds);
 
-		struct timeval timeout;
-		timeout.tv_sec = 5;
-		timeout.tv_usec = 0;
-
-		int select_result = select(max_fd + 1, &read_fds, NULL, NULL, &timeout);
+		/* Wait indefinitely for data or pipe closure */
+		int select_result = select(max_fd + 1, &read_fds, NULL, NULL, NULL);
 		if (select_result < 0) {
 			if (errno != EINTR) {
 				log_message(WARNING, "[%s] select() on output pipes failed: %s", watch->name,
@@ -230,12 +212,6 @@ static bool command_read(const watch_t *watch, int stdout_pipe[2], int stderr_pi
 				break;
 			}
 			continue;
-		}
-
-		if (select_result == 0) {
-			log_message(WARNING, "[%s] command read timeout", watch->name);
-			timed_out = true;
-			break;
 		}
 
 		/* Handle stdout - read raw chunks and append to buffer */
@@ -299,7 +275,6 @@ static bool command_read(const watch_t *watch, int stdout_pipe[2], int stderr_pi
 	/* Close read ends */
 	close(stdout_pipe[0]);
 	close(stderr_pipe[0]);
-	return !timed_out;
 }
 
 /* Command execution synchronous or asynchronous */
@@ -427,26 +402,12 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 		exit(EXIT_FAILURE);
 	}
 
-	/* Parent process - get a reference to the subscription for post-execution cleanup */
-	subscription_t *subscription = NULL;
-	if (watchref_valid(watchref)) {
-		subscription = resources_subscription(monitor->resources,
-											  monitor->registry, event->path, watchref, ENTITY_UNKNOWN);
-	}
-
 	/* Always read stderr for error logging, read stdout only if configured */
-	bool read_ok;
 	if (capture_output) {
-		read_ok = command_read(watch, stdout_pipe, stderr_pipe, &output_buf);
+		command_read(watch, stdout_pipe, stderr_pipe, &output_buf);
 	} else {
 		/* Only read stderr for error logging when stdout capture is disabled */
-		read_ok = command_stderr(watch, stderr_pipe);
-	}
-
-	/* If read timed out, the child process is unresponsive and must be killed */
-	if (!read_ok) {
-		log_message(ERROR, "[%s] Terminating unresponsive command (pid: %d)", watch->name, pid);
-		kill(-pid, SIGKILL); /* Kill the entire process group */
+		command_stderr(watch, stderr_pipe);
 	}
 
 	/* Wait for child process to complete with proper signal handling */
@@ -485,6 +446,13 @@ bool command_execute(monitor_t *monitor, watchref_t watchref, const event_t *eve
 	} else {
 		log_message(WARNING, "[%s] Abnormal termination (pid: %d, duration: %lds, status: %d)",
 					watch->name, pid, end_time - start, status);
+	}
+
+	/* Get a reference to the subscription for post-execution cleanup */
+	subscription_t *subscription = NULL;
+	if (watchref_valid(watchref)) {
+		subscription = resources_subscription(monitor->resources, monitor->registry, event->path,
+											  watchref, ENTITY_UNKNOWN);
 	}
 
 	/* Clear command executing flag and reset baseline */
