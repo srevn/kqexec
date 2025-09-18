@@ -277,9 +277,9 @@ int main(int argc, char *argv[]) {
 	/* Set up monitor */
 	if (!monitor_setup(monitor)) {
 		log_message(ERROR, "Failed to set up monitor");
-		monitor_destroy(monitor);
 		command_cleanup(threads);
 		threads_destroy(threads);
+		monitor_destroy(monitor);
 		log_close();
 		return EXIT_FAILURE;
 	}
@@ -290,18 +290,18 @@ int main(int argc, char *argv[]) {
 	/* Start monitor */
 	if (!monitor_start(monitor)) {
 		log_message(ERROR, "Failed to start monitor");
-		monitor_destroy(monitor);
 		command_cleanup(threads);
 		threads_destroy(threads);
+		monitor_destroy(monitor);
 		log_close();
 		return EXIT_FAILURE;
 	}
 
 	/* Clean up */
 	daemon_monitor(NULL);
-	monitor_destroy(monitor);
 	command_cleanup(threads);
 	threads_destroy(threads);
+	monitor_destroy(monitor);
 	log_close();
 
 	return EXIT_SUCCESS;
