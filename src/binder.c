@@ -369,9 +369,9 @@ static placeholder_t resolve_array(binder_t *ctx, const char *array_spec) {
  * %deleted: List of deleted items (newline-separated)
  * %renamed: List of renamed items (format: old -> new, newline-separated)
  * %modified: List of modified files (newline-separated)
- * %p: Path where the event occurred
- * %n: Filename (for files) or subdirectory name (for directories) which triggered the event
- * %d: Directory containing the path that triggered the event
+ * %p: Full directory path where the event occurred
+ * %n: Directory basename where the event occurred
+ * %d: Directory path containing the path that triggered the event
  * %b: Base path of the watch from the config
  * %w: Name of the watch from the config
  * %r: Event path relative to the watch path

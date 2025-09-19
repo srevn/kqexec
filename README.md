@@ -168,6 +168,12 @@ PROJECT_PATH=/home/user/myproject API_KEY=mysecretvalue kqexec
 
 When `kqexec` starts, it will look for `API_KEY` and `PROJECT_PATH` in the environment and substitute them.
 
+**Note:** On FreeBSD, when running as a service via rc script, environment variables are not inherited from the global environment. Set them in `/etc/rc.conf` using the `kqexec_env` variable:
+
+```sh
+kqexec_env="HOME=/home/user API_KEY=mysecretvalue PROJECT_PATH=/home/user/myproject"
+```
+
 ### Event Types
 
 Kqexec supports the following event types that can be specified in the configuration file:
@@ -203,9 +209,9 @@ Commands can include the following placeholders that will be replaced at runtime
 - `%deleted` : List of deleted items (newline-separated)
 - `%renamed` : List of renamed items (format: old -> new, newline-separated)
 - `%modified` : List of modified files (newline-separated)
-- `%p` : Path where the event occurred
-- `%n` : Filename (for files) or subdirectory name (for directories) which triggered the event
-- `%d` : Directory containing the path that triggered the event
+- `%p` : Full directory path where the event occurred
+- `%n` : Directory basename where the event occurred
+- `%d` : Directory path containing the path that triggered the event
 - `%b` : Base path of the watch from the config
 - `%w` : Name of the watch from the config
 - `%r` : Event path relative to the watch path
