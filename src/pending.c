@@ -885,9 +885,17 @@ void pending_cleanup(monitor_t *monitor, registry_t *registry) {
 		return;
 	}
 
-	/* Deactivate proxy watches and destroy pending entries */
-	for (int i = 0; i < monitor->num_pending; i++) {
-		pending_t *pending = monitor->pending[i];
+	/* Copy pending list to a temporary variable and clear monitor's list */
+	int num_pending_copy = monitor->num_pending;
+	pending_t **pending_copy = monitor->pending;
+
+	monitor->pending = NULL;
+	monitor->num_pending = 0;
+	monitor->pending_capacity = 0;
+
+	/* Deactivate proxy watches and destroy pending entries from the copy */
+	for (int i = 0; i < num_pending_copy; i++) {
+		pending_t *pending = pending_copy[i];
 		if (pending) {
 			if (watchref_valid(pending->proxyref)) {
 				registry_deactivate(registry, pending->proxyref);
@@ -896,10 +904,7 @@ void pending_cleanup(monitor_t *monitor, registry_t *registry) {
 		}
 	}
 
-	free(monitor->pending);
-	monitor->pending = NULL;
-	monitor->num_pending = 0;
-	monitor->pending_capacity = 0;
+	free(pending_copy);
 }
 
 /* Handle deletion of parent directories that affect pending watches */
