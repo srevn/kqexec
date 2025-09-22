@@ -114,9 +114,9 @@ static bool registry_expand(registry_t *registry) {
 	return true;
 }
 
-/* Check for duplicate watches in registry (must be called under write lock) */
-static bool registry_duplicate(registry_t *registry, const watch_t *watch) {
-	if (!watch->name) return false;
+/* Find duplicate watch in registry (must be called under write lock) */
+static watchref_t registry_duplicate(registry_t *registry, const watch_t *watch) {
+	if (!watch->name) return WATCHREF_INVALID;
 
 	for (uint32_t i = 1; i < registry->next_id && i < registry->capacity; i++) {
 		/* Skip inactive or NULL watches */
@@ -130,11 +130,10 @@ static bool registry_duplicate(registry_t *registry, const watch_t *watch) {
 		/* Found matching name - check for true duplicate based on type */
 		if (watch->is_dynamic) {
 			/* Dynamic watches - duplicate only if same name AND path */
-			if (existing->path && watch->path &&
-				strcmp(existing->path, watch->path) == 0) {
+			if (existing->path && watch->path && strcmp(existing->path, watch->path) == 0) {
 				log_message(INFO, "Duplicate dynamic watch '%s' for path '%s' already exists",
 							watch->name, watch->path);
-				return true;
+				return (watchref_t) {i, registry->generations[i]};
 			}
 			/* Same name but different path - not a duplicate */
 			continue;
@@ -142,10 +141,10 @@ static bool registry_duplicate(registry_t *registry, const watch_t *watch) {
 
 		/* Non-dynamic watches - duplicate if same name */
 		log_message(ERROR, "Duplicate watch name '%s' found in registry", watch->name);
-		return true;
+		return (watchref_t) {i, registry->generations[i]};
 	}
 
-	return false;
+	return WATCHREF_INVALID;
 }
 
 /* Add a watch to the registry */
@@ -154,10 +153,19 @@ watchref_t registry_add(registry_t *registry, struct watch *watch) {
 
 	pthread_rwlock_wrlock(&registry->lock);
 
-	/* Atomic duplicate check using helper function */
-	if (registry_duplicate(registry, watch)) {
+	/* Atomic duplicate check */
+	watchref_t existing_ref = registry_duplicate(registry, watch);
+	if (watchref_valid(existing_ref)) {
+		/* If duplicate is not dynamic, it's a config error */
+		if (!watch->is_dynamic) {
+			pthread_rwlock_unlock(&registry->lock);
+			return WATCHREF_INVALID;
+		}
+
+		/* For dynamic watches, returning the existing one is not an error */
+		watch_destroy(watch); /* Clean up the new, unused watch */
 		pthread_rwlock_unlock(&registry->lock);
-		return WATCHREF_INVALID;
+		return existing_ref;
 	}
 
 	/* Check if we need to expand capacity */
@@ -223,6 +231,24 @@ watchref_t registry_find(registry_t *registry, const char *watch_name) {
 
 	pthread_rwlock_unlock(&registry->lock);
 	return WATCHREF_INVALID;
+}
+
+/* Check if a watch exists for a specific path */
+bool registry_exists(registry_t *registry, const char *path) {
+	if (!registry || !path) return false;
+
+	pthread_rwlock_rdlock(&registry->lock);
+
+	for (uint32_t i = 1; i < registry->next_id && i < registry->capacity; i++) {
+		if (registry->states[i] == WATCH_STATE_ACTIVE && registry->watches[i] &&
+			registry->watches[i]->path && strcmp(registry->watches[i]->path, path) == 0) {
+			pthread_rwlock_unlock(&registry->lock);
+			return true;
+		}
+	}
+
+	pthread_rwlock_unlock(&registry->lock);
+	return false;
 }
 
 /* Check if a watch reference is valid */
