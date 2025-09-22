@@ -224,78 +224,85 @@ static bool glob_matches(const char *created_path, const char *glob_pattern) {
 	return fnmatch(glob_pattern, created_path, FNM_PATHNAME) == 0;
 }
 
-/* Find matching files in a directory for a glob component */
+/* Find matching files in a directory for a glob component using glob() */
 static bool glob_find(const char *parent_path, const watch_t *watch, const char *glob_component, char ***matches, int *match_count) {
 	if (!parent_path || !glob_component || !matches || !match_count) return false;
 
 	*matches = NULL;
 	*match_count = 0;
 
-	DIR *dir = opendir(parent_path);
-	if (!dir) {
+	/* Construct full pattern path - combining parent directory with glob component */
+	char *full_pattern = pending_join(parent_path, glob_component);
+	if (!full_pattern) {
 		return false;
 	}
 
-	/* First pass: count matches */
-	struct dirent *dirent;
-	int count = 0;
-	while ((dirent = readdir(dir)) != NULL) {
-		/* Skip . and .. */
-		if (strcmp(dirent->d_name, ".") == 0 || strcmp(dirent->d_name, "..") == 0) {
-			continue;
-		}
+	/* Use glob() for pattern matching - functionally equivalent to fnmatch() on filename */
+	glob_t glob_results;
+	int glob_return = glob(full_pattern, 0, NULL, &glob_results);
+	free(full_pattern);
 
-		/* Check if filename matches glob pattern */
-		if (fnmatch(glob_component, dirent->d_name, 0) == 0) {
-			/* Check against exclude patterns */
-			char *full_path = pending_join(parent_path, dirent->d_name);
-			if (full_path) {
-				if (!watch || !exclude_match(watch, full_path)) {
-					count++;
+	/* Handle glob() error conditions */
+	if (glob_return != 0) {
+		if (glob_return != GLOB_NOMATCH) {
+			log_message(WARNING, "glob() failed with return value %d for pattern %s/%s",
+						glob_return, parent_path, glob_component);
+		}
+		globfree(&glob_results);
+		return glob_return == GLOB_NOMATCH; /* true if no match, false for other errors */
+	}
+
+	/* No matches found - not an error condition */
+	if (glob_results.gl_pathc == 0) {
+		globfree(&glob_results);
+		return true;
+	}
+
+	/* Allocate result array for filtered matches */
+	char **matches_array = malloc(glob_results.gl_pathc * sizeof(char *));
+	if (!matches_array) {
+		globfree(&glob_results);
+		return false;
+	}
+
+	/* Filter matches through exclude patterns and collect valid paths */
+	int valid_count = 0;
+	for (size_t glob_index = 0; glob_index < glob_results.gl_pathc; glob_index++) {
+		const char *matched_path = glob_results.gl_pathv[glob_index];
+
+		/* Skip paths that match exclude patterns */
+		if (!watch || !exclude_match(watch, matched_path)) {
+			matches_array[valid_count] = strdup(matched_path);
+			if (!matches_array[valid_count]) {
+				/* strdup() failed - cleanup allocated strings and return error */
+				log_message(ERROR, "Failed to allocate memory for matched path: %s", matched_path);
+				for (int cleanup_index = 0; cleanup_index < valid_count; cleanup_index++) {
+					free(matches_array[cleanup_index]);
 				}
-				free(full_path);
+				free(matches_array);
+				globfree(&glob_results);
+				return false;
 			}
+			valid_count++;
 		}
 	}
 
-	if (count == 0) {
-		closedir(dir);
+	globfree(&glob_results);
+
+	/* No valid matches after filtering */
+	if (valid_count == 0) {
+		free(matches_array);
 		return true; /* No matches, but not an error */
 	}
 
-	/* Allocate array for matches */
-	*matches = malloc(count * sizeof(char *));
-	if (!*matches) {
-		closedir(dir);
-		return false;
+	/* Optimize memory usage by shrinking array to actual count */
+	char **optimized_matches = realloc(matches_array, valid_count * sizeof(char *));
+	if (optimized_matches) {
+		matches_array = optimized_matches;
 	}
 
-	/* Second pass: collect matches */
-	rewinddir(dir);
-	int index = 0;
-	while ((dirent = readdir(dir)) != NULL && index < count) {
-		/* Skip . and .. */
-		if (strcmp(dirent->d_name, ".") == 0 || strcmp(dirent->d_name, "..") == 0) {
-			continue;
-		}
-
-		/* Check if filename matches glob pattern */
-		if (fnmatch(glob_component, dirent->d_name, 0) == 0) {
-			/* Create full path */
-			char *full_path = pending_join(parent_path, dirent->d_name);
-			if (full_path) {
-				/* Check against exclude patterns */
-				if (!watch || !exclude_match(watch, full_path)) {
-					(*matches)[index++] = full_path;
-				} else {
-					free(full_path); /* Free excluded path */
-				}
-			}
-		}
-	}
-
-	closedir(dir);
-	*match_count = index;
+	*matches = matches_array;
+	*match_count = valid_count;
 	return true;
 }
 
