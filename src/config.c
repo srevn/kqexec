@@ -932,18 +932,10 @@ bool exclude_match(const watch_t *watch, const char *path) {
 				strncpy(dir_pattern, pattern, pattern_len - 1);
 				dir_pattern[pattern_len - 1] = '\0';
 
-				/* Check if it matches the directory itself */
-				if (fnmatch(dir_pattern, relative_path, FNM_PATHNAME) == 0) {
+				/* Check if it matches the directory itself or is inside the directory */
+				if (fnmatch(dir_pattern, relative_path, FNM_PATHNAME) == 0 ||
+					fnmatch(dir_pattern, relative_path, FNM_PATHNAME | FNM_LEADING_DIR) == 0) {
 					return true;
-				}
-
-				/* Check if relative_path is within this directory */
-				size_t dir_len = strlen(dir_pattern);
-				if (strncmp(relative_path, dir_pattern, dir_len) == 0) {
-					/* Path starts with directory name */
-					if (relative_path[dir_len] == '/') {
-						return true;
-					}
 				}
 			}
 
@@ -954,13 +946,10 @@ bool exclude_match(const watch_t *watch, const char *path) {
 				strncpy(base_pattern, pattern, pattern_len - 3);
 				base_pattern[pattern_len - 3] = '\0';
 
-				/* Check if path starts with the base pattern */
-				if (strncmp(relative_path, base_pattern, strlen(base_pattern)) == 0) {
-					/* Path starts with base pattern - check if it's exactly the directory or under it */
-					size_t base_len = strlen(base_pattern);
-					if (relative_path[base_len] == '\0' || relative_path[base_len] == '/') {
-						return true;
-					}
+				/* Check if path is the base directory itself or a descendant */
+				if (fnmatch(base_pattern, relative_path, FNM_PATHNAME) == 0 ||
+					fnmatch(base_pattern, relative_path, FNM_PATHNAME | FNM_LEADING_DIR) == 0) {
+					return true;
 				}
 			}
 		} else {
