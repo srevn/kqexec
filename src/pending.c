@@ -184,7 +184,7 @@ static char *pending_parent(const char *target_path) {
 	return deepest_valid;
 }
 
-/* Extract next path component */
+/* Extracts the next path component from a full path, given a parent path */
 static char *pending_component(const char *full_path, const char *parent_path, bool resolve_path) {
 	if (!full_path || !parent_path) return NULL;
 
@@ -224,6 +224,57 @@ static bool glob_matches(const char *created_path, const char *glob_pattern) {
 	return fnmatch(glob_pattern, created_path, FNM_PATHNAME) == 0;
 }
 
+/* Filter glob() results against exclude patterns from the watch configuration */
+static char **glob_exclude(const glob_t *glob_results, const watch_t *watch, int *match_count) {
+	*match_count = 0;
+	if (glob_results->gl_pathc == 0) {
+		return NULL;
+	}
+
+	/* Allocate result array for filtered matches */
+	char **matches_array = malloc(glob_results->gl_pathc * sizeof(char *));
+	if (!matches_array) {
+		log_message(ERROR, "Failed to allocate memory for filtered glob matches");
+		return NULL;
+	}
+
+	/* Filter matches through exclude patterns and collect valid paths */
+	int valid_count = 0;
+	for (size_t glob_index = 0; glob_index < glob_results->gl_pathc; glob_index++) {
+		const char *matched_path = glob_results->gl_pathv[glob_index];
+
+		/* Skip paths that match exclude patterns */
+		if (!watch || !exclude_match(watch, matched_path)) {
+			matches_array[valid_count] = strdup(matched_path);
+			if (!matches_array[valid_count]) {
+				/* strdup() failed - cleanup allocated strings and return error */
+				log_message(ERROR, "Failed to allocate memory for matched path: %s", matched_path);
+				for (int cleanup_index = 0; cleanup_index < valid_count; cleanup_index++) {
+					free(matches_array[cleanup_index]);
+				}
+				free(matches_array);
+				return NULL;
+			}
+			valid_count++;
+		}
+	}
+
+	/* No valid matches after filtering */
+	if (valid_count == 0) {
+		free(matches_array);
+		return NULL;
+	}
+
+	/* Optimize memory usage by shrinking array to actual count */
+	char **optimized_matches = realloc(matches_array, valid_count * sizeof(char *));
+	if (optimized_matches) {
+		matches_array = optimized_matches;
+	}
+
+	*match_count = valid_count;
+	return matches_array;
+}
+
 /* Find matching files in a directory for a glob component using glob() */
 static bool glob_find(const char *parent_path, const watch_t *watch, const char *glob_component, char ***matches, int *match_count) {
 	if (!parent_path || !glob_component || !matches || !match_count) return false;
@@ -237,7 +288,7 @@ static bool glob_find(const char *parent_path, const watch_t *watch, const char 
 		return false;
 	}
 
-	/* Use glob() for pattern matching - functionally equivalent to fnmatch() on filename */
+	/* Use glob() to find paths matching the current component of the pattern */
 	glob_t glob_results;
 	int glob_return = glob(full_pattern, 0, NULL, &glob_results);
 	free(full_pattern);
@@ -252,57 +303,11 @@ static bool glob_find(const char *parent_path, const watch_t *watch, const char 
 		return glob_return == GLOB_NOMATCH; /* true if no match, false for other errors */
 	}
 
-	/* No matches found - not an error condition */
-	if (glob_results.gl_pathc == 0) {
-		globfree(&glob_results);
-		return true;
-	}
-
-	/* Allocate result array for filtered matches */
-	char **matches_array = malloc(glob_results.gl_pathc * sizeof(char *));
-	if (!matches_array) {
-		globfree(&glob_results);
-		return false;
-	}
-
-	/* Filter matches through exclude patterns and collect valid paths */
-	int valid_count = 0;
-	for (size_t glob_index = 0; glob_index < glob_results.gl_pathc; glob_index++) {
-		const char *matched_path = glob_results.gl_pathv[glob_index];
-
-		/* Skip paths that match exclude patterns */
-		if (!watch || !exclude_match(watch, matched_path)) {
-			matches_array[valid_count] = strdup(matched_path);
-			if (!matches_array[valid_count]) {
-				/* strdup() failed - cleanup allocated strings and return error */
-				log_message(ERROR, "Failed to allocate memory for matched path: %s", matched_path);
-				for (int cleanup_index = 0; cleanup_index < valid_count; cleanup_index++) {
-					free(matches_array[cleanup_index]);
-				}
-				free(matches_array);
-				globfree(&glob_results);
-				return false;
-			}
-			valid_count++;
-		}
-	}
+	/* Filter matches and update the output parameters */
+	*matches = glob_exclude(&glob_results, watch, match_count);
 
 	globfree(&glob_results);
 
-	/* No valid matches after filtering */
-	if (valid_count == 0) {
-		free(matches_array);
-		return true; /* No matches, but not an error */
-	}
-
-	/* Optimize memory usage by shrinking array to actual count */
-	char **optimized_matches = realloc(matches_array, valid_count * sizeof(char *));
-	if (optimized_matches) {
-		matches_array = optimized_matches;
-	}
-
-	*matches = matches_array;
-	*match_count = valid_count;
 	return true;
 }
 
@@ -365,8 +370,7 @@ void pending_destroy(pending_t *pending) {
 	free(pending->target_path);
 	free(pending->current_parent);
 	free(pending->next_component);
-	free(pending->unresolved_path);
-	free(pending->glob_pattern);
+	free(pending->resolved_prefix);
 	free(pending);
 }
 
@@ -459,38 +463,20 @@ bool pending_add(monitor_t *monitor, const char *target_path, watchref_t watchre
 
 	/* Check if this is a glob pattern */
 	bool is_glob = pending_pattern(target_path);
-	char *parent_path = NULL;
-	char *next_component = NULL;
 
-	if (is_glob) {
-		/* Handle glob pattern */
-		parent_path = pending_parent(target_path);
-		if (!parent_path) {
-			log_message(ERROR, "No existing parent found for glob pattern: %s", target_path);
-			return false;
-		}
+	/* Handle glob pattern */
+	char *parent_path = pending_parent(target_path);
+	if (!parent_path) {
+		log_message(ERROR, "No existing parent found for path: %s", target_path);
+		return false;
+	}
 
-		/* Get the glob component to match */
-		next_component = pending_component(target_path, parent_path, false);
-		if (!next_component) {
-			log_message(ERROR, "Unable to determine glob component for pattern: %s", target_path);
-			free(parent_path);
-			return false;
-		}
-	} else {
-		/* Handle exact path */
-		parent_path = pending_parent(target_path);
-		if (!parent_path) {
-			log_message(ERROR, "No existing parent found for path: %s", target_path);
-			return false;
-		}
-
-		next_component = pending_component(target_path, parent_path, true);
-		if (!next_component) {
-			log_message(ERROR, "Unable to determine next component for path: %s", target_path);
-			free(parent_path);
-			return false;
-		}
+	/* Get the glob component to match */
+	char *next_component = pending_component(target_path, parent_path, !is_glob);
+	if (!next_component) {
+		log_message(ERROR, "Unable to determine next component for path: %s", target_path);
+		free(parent_path);
+		return false;
 	}
 
 	/* Create pending watch entry */
@@ -506,7 +492,7 @@ bool pending_add(monitor_t *monitor, const char *target_path, watchref_t watchre
 	pending->current_parent = parent_path;
 	pending->next_component = next_component;
 	pending->is_glob = is_glob;
-	pending->unresolved_path = is_glob ? strdup(parent_path) : NULL;
+	pending->resolved_prefix = is_glob ? strdup(parent_path) : NULL;
 	pending->glob_pattern = is_glob ? strdup(target_path) : NULL;
 	pending->watchref = watchref;
 	pending->proxy_watcher = NULL;
@@ -596,6 +582,12 @@ static void pending_event(monitor_t *monitor, watchref_t watchref, const char *p
 static void pending_promote(monitor_t *monitor, pending_t *pending, const char *matched_path) {
 	if (!monitor || !pending || !matched_path) return;
 
+	/* Check if a watch for this path already exists to avoid duplicates */
+	if (registry_exists(monitor->registry, matched_path)) {
+		log_message(DEBUG, "Watch for path '%s' already exists, skipping promotion", matched_path);
+		return;
+	}
+
 	log_message(DEBUG, "Promoting glob match: %s from pattern %s", matched_path,
 				pending->glob_pattern ? pending->glob_pattern : "unknown");
 
@@ -678,10 +670,10 @@ static void pending_proxy(monitor_t *monitor, pending_t *pending, const char *pr
 	new_pending->current_parent = strdup(proxy_path); /* The resolved path */
 
 	/* Construct the new unresolved path by appending the component that just matched */
-	new_pending->unresolved_path = pending_join(pending->unresolved_path, pending->next_component);
+	new_pending->resolved_prefix = pending_join(pending->resolved_prefix, pending->next_component);
 
-	if (new_pending->unresolved_path) {
-		new_pending->next_component = pending_component(pending->glob_pattern, new_pending->unresolved_path, false);
+	if (new_pending->resolved_prefix) {
+		new_pending->next_component = pending_component(pending->glob_pattern, new_pending->resolved_prefix, false);
 	} else {
 		new_pending->next_component = NULL;
 	}

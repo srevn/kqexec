@@ -22,7 +22,7 @@ typedef struct pending {
 	/* Path resolution state */
 	char *current_parent;                  /* Current parent directory being watched */
 	char *next_component;                  /* Next path component we're waiting for */
-	char *unresolved_path;                 /* The unresolved glob path up to the current parent */
+	char *resolved_prefix;                 /* The resolved portion of the glob pattern */
 	
 	/* Watch references */
 	watchref_t watchref;                   /* Reference to the original watch configuration */
