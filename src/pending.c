@@ -91,8 +91,9 @@ static bool pending_reasonable(const char *path) {
 	}
 
 	/* Reject excessively long paths */
-	if (path_len > 4096) { /* PATH_MAX is typically 4096 */
-		log_message(WARNING, "Path validation failed: path too long (%zu bytes): %s", path_len, path);
+	if (path_len >= MAX_PATH_LEN) {
+		log_message(WARNING, "Path validation failed: path too long (%zu bytes, max: %d): %s",
+					path_len, MAX_PATH_LEN, path);
 		return false;
 	}
 
