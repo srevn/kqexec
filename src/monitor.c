@@ -792,8 +792,6 @@ bool monitor_add(monitor_t *monitor, watchref_t watchref, bool skip_pending) {
 			if (!pending_add(monitor, watch->path, watchref)) {
 				return false;
 			}
-			/* Immediately process the parent to catch existing paths */
-			pending_process(monitor, monitor->pending[monitor->num_pending - 1]->current_parent);
 			return true;
 		}
 

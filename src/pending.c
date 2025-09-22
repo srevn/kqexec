@@ -537,6 +537,10 @@ bool pending_add(monitor_t *monitor, const char *target_path, watchref_t watchre
 
 	log_message(DEBUG, "Added pending watch (%s): target=%s, parent=%s, next=%s",
 				is_glob ? "glob" : "exact", target_path, parent_path, next_component);
+
+	/* Immediately process the parent to catch any pre-existing paths that match */
+	pending_process(monitor, parent_path);
+
 	return true;
 }
 
