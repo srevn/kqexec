@@ -1,5 +1,6 @@
 #include "utilities.h"
 
+#include <ctype.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -489,7 +490,7 @@ char *format_array(const char *const *strings, int count, const char *template, 
 /* Format size in bytes to a human-readable string */
 const char *format_size(ssize_t size, bool show_sign) {
 	static __thread char buf[32];
-	const char *suffixes[] = {"B", "KB", "MB", "GB", "TB"};
+	const char *suffixes[] = { "B", "KB", "MB", "GB", "TB" };
 	size_t i = 0;
 	double d_size;
 	bool negative = false;
@@ -519,6 +520,36 @@ const char *format_size(ssize_t size, bool show_sign) {
 		snprintf(buf, sizeof(buf), "%s%.2f %s", negative ? "-" : "", d_size, suffixes[i]);
 	}
 	return buf;
+}
+
+/* Trim whitespace from a string */
+char *string_trim(char *string) {
+	if (string == NULL) {
+		return NULL;
+	}
+
+	char *end;
+
+	/* Trim leading space */
+	while (isspace((unsigned char) *string)) {
+		string++;
+	}
+
+	if (*string == 0) {
+		/* All spaces */
+		return string;
+	}
+
+	/* Trim trailing space */
+	end = string + strlen(string) - 1;
+	while (end > string && isspace((unsigned char) *end)) {
+		end--;
+	}
+
+	/* Write new null terminator */
+	*(end + 1) = 0;
+
+	return string;
 }
 
 /* Helper function to substitute a placeholder in a string with dynamic allocation */

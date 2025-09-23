@@ -11,12 +11,9 @@
 #include "logger.h"
 #include "monitor.h"
 
-/* Global monitor reference for signal handler */
-static monitor_t *g_monitor = NULL;
-
-/* Signal handling state */
-static volatile sig_atomic_t running = 1;
-static volatile sig_atomic_t reload = 0;
+static monitor_t *g_monitor = NULL;          /* Global monitor reference for signal handler */
+static volatile sig_atomic_t running = 1;    /* Flag indicating daemon should continue running */
+static volatile sig_atomic_t reload = 0;     /* Flag indicating configuration should be reloaded */
 
 /* Signal handler */
 static void signal_handler(int sig) {

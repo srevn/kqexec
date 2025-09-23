@@ -209,7 +209,7 @@ static void client_list(const char *response) {
 
 		if (name && path && events && status) {
 			/* Truncate long paths for display */
-			char display_path[45] = {0};
+			char display_path[45] = { 0 };
 			if (strlen(path) > 44) {
 				const char *filename = strrchr(path, '/');
 				if (filename && (strlen(path) - strlen(filename) < 40)) {

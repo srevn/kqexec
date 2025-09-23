@@ -564,10 +564,11 @@ static void pending_event(monitor_t *monitor, watchref_t watchref, const char *p
 		.path = (char *) promoted_path,
 		.type = EVENT_STRUCTURE | EVENT_CONTENT, /* Both structure and content for creation */
 		.time = current_time,
-		.wall_time = {0},
+		.wall_time = { 0 },
 		.user_id = getuid(),
 		.diff = NULL,
-		.baseline_snapshot = NULL};
+		.baseline_snapshot = NULL
+	};
 
 	clock_gettime(CLOCK_REALTIME, &promotion_event.wall_time);
 

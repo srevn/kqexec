@@ -174,7 +174,7 @@ static bool string_copy(char ***dest_array, int *dest_count, char **source_array
 /* Get a read-only view of a list of paths from a diff based on change type */
 diff_list_t diff_list(const diff_t *diff, const char *change_type) {
 	if (!diff || !change_type) {
-		return (diff_list_t) {.paths = NULL, .count = 0};
+		return (diff_list_t) { .paths = NULL, .count = 0 };
 	}
 
 	if (strcmp(change_type, "created") == 0) {

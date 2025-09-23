@@ -5,13 +5,11 @@
 #include <stdio.h>
 #include <time.h>
 
-/* Global flags */
-static loglevel_t current_loglevel = NOTICE;
-static int syslog_initialized = 0;
-static int console_output = 0;
+static loglevel_t current_loglevel = NOTICE;     /* Current logging verbosity level */
+static int syslog_initialized = 0;               /* Flag indicating syslog connection is active */
+static int console_output = 0;                   /* Flag indicating console output is enabled */
 
-/* Mutex for thread-safe logging */
-static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER; /* Mutex for thread-safe logging */
 
 /* Initialize logging */
 void log_init(const char *ident, int facility, loglevel_t loglevel, int use_console) {

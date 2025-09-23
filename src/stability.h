@@ -7,8 +7,7 @@
 #include "resource.h"
 #include "scanner.h"
 
-/* Maximum allowed failures before giving up */
-#define MAX_CHECKS_FAILED 3
+#define MAX_CHECKS_FAILED 3                /* Maximum allowed failures before giving up */
 
 /* Scan failure handling */
 typedef enum failure {

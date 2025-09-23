@@ -133,7 +133,7 @@ static watchref_t registry_duplicate(registry_t *registry, const watch_t *watch)
 			if (existing->path && watch->path && strcmp(existing->path, watch->path) == 0) {
 				log_message(INFO, "Duplicate dynamic watch '%s' for path '%s' already exists",
 							watch->name, watch->path);
-				return (watchref_t) {i, registry->generations[i]};
+				return (watchref_t) { i, registry->generations[i] };
 			}
 			/* Same name but different path - not a duplicate */
 			continue;
@@ -141,7 +141,7 @@ static watchref_t registry_duplicate(registry_t *registry, const watch_t *watch)
 
 		/* Non-dynamic watches - duplicate if same name */
 		log_message(ERROR, "Duplicate watch name '%s' found in registry", watch->name);
-		return (watchref_t) {i, registry->generations[i]};
+		return (watchref_t) { i, registry->generations[i] };
 	}
 
 	return WATCHREF_INVALID;
@@ -186,7 +186,7 @@ watchref_t registry_add(registry_t *registry, struct watch *watch) {
 	registry->states[watch_id] = WATCH_STATE_ACTIVE;
 	registry->count++;
 
-	watchref_t watchref = {watch_id, generation};
+	watchref_t watchref = { watch_id, generation };
 
 	pthread_rwlock_unlock(&registry->lock);
 
@@ -221,7 +221,7 @@ watchref_t registry_find(registry_t *registry, const char *watch_name) {
 	for (uint32_t i = 1; i < registry->next_id && i < registry->capacity; i++) {
 		if (registry->watches[i] && registry->watches[i]->name &&
 			strcmp(registry->watches[i]->name, watch_name) == 0) {
-			watchref_t watchref = {i, registry->generations[i]};
+			watchref_t watchref = { i, registry->generations[i] };
 			pthread_rwlock_unlock(&registry->lock);
 			log_message(DEBUG, "Found watch '%s' (watch_id=%u, gen=%u, state=%d)", watch_name, i,
 						registry->generations[i], registry->states[i]);

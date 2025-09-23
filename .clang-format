@@ -50,6 +50,7 @@ BreakStringLiterals: true
 ColumnLimit: 0
 ConstructorInitializerAllOnOneLineOrOnePerLine: false
 ContinuationIndentWidth: 4
+Cpp11BracedListStyle: false
 EmptyLineAfterAccessModifier: Never
 EmptyLineBeforeAccessModifier: Leave
 ExperimentalAutoDetectBinPacking: true

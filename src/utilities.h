@@ -55,6 +55,7 @@ const char *format_size(ssize_t size, bool show_sign);
 char *format_array(const char *const *strings, int count, const char *template, const char *separator, bool basename_only);
 
 /* String utilities */
+char *string_trim(char *string);
 char *string_substitute(const char *input, const char *placeholder, const char *value);
 
 #endif /* UTILITIES_H */

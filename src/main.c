@@ -13,8 +13,8 @@
 #include "registry.h"
 #include "threads.h"
 
-#define DEFAULT_CONFIG "/usr/local/etc/kqexec.conf" /* Default configuration file */
-static const char *program_name;                    /* Program name */
+#define DEFAULT_CONFIG "/usr/local/etc/kqexec.conf" /* Default configuration file path */
+static const char *program_name;                    /* Program name extracted from argv[0] */
 
 /* Application operation modes */
 typedef enum operation_mode {
@@ -72,26 +72,27 @@ int main(int argc, char *argv[]) {
 	/* Parse command line options */
 	static struct option long_options[] = {
 		/* Daemon options */
-		{"config", required_argument, 0, 'c'},
-		{"daemon", no_argument, 0, 'd'},
-		{"loglevel", required_argument, 0, 'l'},
-		{"cooldown", required_argument, 0, 'r'},
-		{"socket-path", required_argument, 0, 's'},
-		{"help", no_argument, 0, 'h'},
+		{ "config", required_argument, 0, 'c' },
+		{ "daemon", no_argument, 0, 'd' },
+		{ "loglevel", required_argument, 0, 'l' },
+		{ "cooldown", required_argument, 0, 'r' },
+		{ "socket-path", required_argument, 0, 's' },
+		{ "help", no_argument, 0, 'h' },
 
 		/* Client options */
-		{"disable", required_argument, 0, 1000},
-		{"enable", required_argument, 0, 1001},
-		{"suppress", required_argument, 0, 1002},
-		{"status", no_argument, 0, 1003},
-		{"list", no_argument, 0, 1004},
-		{"reload", no_argument, 0, 1005},
-		{"socket", required_argument, 0, 1006},
-		{0, 0, 0, 0}};
+		{ "disable", required_argument, 0, 1000 },
+		{ "enable", required_argument, 0, 1001 },
+		{ "suppress", required_argument, 0, 1002 },
+		{ "status", no_argument, 0, 1003 },
+		{ "list", no_argument, 0, 1004 },
+		{ "reload", no_argument, 0, 1005 },
+		{ "socket", required_argument, 0, 1006 },
+		{ 0, 0, 0, 0 }
+	};
 
 	/* Client options */
 	operation_t mode = MODE_DAEMON;
-	options_t options = {0};
+	options_t options = { 0 };
 
 	while ((c = getopt_long(argc, argv, "c:dl:r:s:h", long_options, &option_index)) != -1) {
 		switch (c) {

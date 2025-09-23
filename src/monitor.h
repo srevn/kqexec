@@ -106,7 +106,7 @@ bool monitor_path(monitor_t *monitor, const char *path, watchref_t watchref);
 void monitor_graveyard(monitor_t *monitor);
 
 /* Dynamic watch control */
-bool monitor_activate(monitor_t *monitor, watchref_t watchref);
+bool monitor_enable(monitor_t *monitor, watchref_t watchref);
 bool monitor_disable(monitor_t *monitor, watchref_t watchref);
 
 /* Path synchronization */

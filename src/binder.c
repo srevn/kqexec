@@ -296,7 +296,7 @@ static placeholder_t resolve_human_size(binder_t *ctx) {
 /* Exclusion patterns placeholder */
 static placeholder_t resolve_exclusion(binder_t *ctx) {
 	if (!ctx->watch->exclude || ctx->watch->num_exclude == 0) {
-		return (placeholder_t) {.value = "", .allocated = false, .formatted = true};
+		return (placeholder_t) { .value = "", .allocated = false, .formatted = true };
 	}
 
 	char *result = format_array((const char *const *) ctx->watch->exclude,
@@ -312,13 +312,13 @@ static placeholder_t resolve_exclusion(binder_t *ctx) {
 static placeholder_t resolve_array(binder_t *ctx, const char *array_spec) {
 	char *spec_copy = strdup(array_spec);
 	if (!spec_copy) {
-		return (placeholder_t) {.value = "", .allocated = false, .formatted = true};
+		return (placeholder_t) { .value = "", .allocated = false, .formatted = true };
 	}
 
 	char *colon = strchr(spec_copy, ':');
 	if (!colon) {
 		free(spec_copy);
-		return (placeholder_t) {.value = "", .allocated = false, .formatted = true};
+		return (placeholder_t) { .value = "", .allocated = false, .formatted = true };
 	}
 
 	*colon = '\0';
@@ -414,7 +414,7 @@ char *binder_placeholders(binder_t *ctx, const char *template) {
 
 		const char *placeholder_start = next_placeholder + 1;
 		const char *placeholder_end = placeholder_start;
-		placeholder_t result = {.value = NULL};
+		placeholder_t result = { .value = NULL };
 
 		if (*placeholder_start == '%') { /* Escaped percent "%%" */
 			builder_append(&builder, "%%");
@@ -477,7 +477,7 @@ char *binder_placeholders(binder_t *ctx, const char *template) {
 					if (ctx->watch->target == WATCH_DIRECTORY && ctx->event->diff) {
 						builder_t list_builder;
 						builder_init(&list_builder, 1024);
-						const char *types[] = {"created", "deleted", "modified", "renamed"};
+						const char *types[] = { "created", "deleted", "modified", "renamed" };
 						for (int i = 0; i < 4; i++) {
 							diff_list_t list = diff_list(ctx->event->diff, types[i]);
 							if (list.count > 0) {
@@ -586,7 +586,7 @@ void binder_environment(binder_t *ctx) {
 
 	/* Handle list-based variables */
 	if (ctx->watch->target == WATCH_DIRECTORY && ctx->event->diff) {
-		const char *types[] = {"created", "deleted", "renamed", "modified"};
+		const char *types[] = { "created", "deleted", "renamed", "modified" };
 		builder_t changed_builder;
 		bool builder_inited = builder_init(&changed_builder, 1024);
 

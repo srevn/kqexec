@@ -1,7 +1,6 @@
 #ifndef LOGGER_H
 #define LOGGER_H
 
-#include <stdbool.h>
 #include <string.h>
 #include <sys/select.h>
 #include <syslog.h>

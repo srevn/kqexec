@@ -11,36 +11,7 @@
 
 #include "logger.h"
 #include "registry.h"
-
-/* Trim whitespace from a string */
-static char *config_trim(char *str) {
-	if (str == NULL) {
-		return NULL;
-	}
-
-	char *end;
-
-	/* Trim leading space */
-	while (isspace((unsigned char) *str)) {
-		str++;
-	}
-
-	if (*str == 0) {
-		/* All spaces */
-		return str;
-	}
-
-	/* Trim trailing space */
-	end = str + strlen(str) - 1;
-	while (end > str && isspace((unsigned char) *end)) {
-		end--;
-	}
-
-	/* Write new null terminator */
-	*(end + 1) = 0;
-
-	return str;
-}
+#include "utilities.h"
 
 /* Canonize a file path using realpath(), with graceful fallback */
 static char *config_canonize(const char *path, int line_number) {
@@ -117,7 +88,7 @@ bool config_events(const char *events_str, filter_t *events) {
 
 	token = strtok_r(events_copy, ",", &saveptr);
 	while (token != NULL) {
-		char *trimmed_token = config_trim(token);
+		char *trimmed_token = string_trim(token);
 
 		if (strcasecmp(trimmed_token, "STRUCTURE") == 0) {
 			*events |= EVENT_STRUCTURE;
@@ -363,7 +334,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 	/* Parse variables and watches */
 	while (fgets(line, sizeof(line), fp) != NULL) {
 		char *str;
-		char continued_line[MAX_LINE_LEN * 10] = {0}; /* Buffer for continued lines */
+		char continued_line[MAX_LINE_LEN * 10] = { 0 }; /* Buffer for continued lines */
 
 		line_number++;
 
@@ -374,7 +345,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 		}
 
 		/* Trim whitespace */
-		str = config_trim(line);
+		str = string_trim(line);
 
 		/* Skip empty lines */
 		if (*str == '\0') {
@@ -406,7 +377,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 			}
 
 			/* Trim whitespace from next line */
-			next_str = config_trim(next_line);
+			next_str = string_trim(next_line);
 
 			/* Skip empty continuation lines */
 			if (*next_str == '\0') {
@@ -439,7 +410,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 			*end = '\0';
 
 			/* Check section type for inline processing */
-			char *section_name = config_trim(str + 1);
+			char *section_name = string_trim(str + 1);
 			if (strcasecmp(section_name, "Variables") == 0) {
 				state = SECTION_VARIABLES;
 				log_message(DEBUG, "Entering [Variables] section for inline processing");
@@ -487,15 +458,15 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 			}
 
 			current_watch->name = strdup(str + 1);
-			current_watch->enabled = true;					   /* Default to enabled */
-			current_watch->log_output = false;				   /* Default to not logging command output */
-			current_watch->recursive = true;				   /* Default to recursive for directories */
-			current_watch->hidden = false;					   /* Default to not including hidden files */
-			current_watch->complexity = 1.0;				   /* Default complexity multiplier */
-			current_watch->environment = false;				   /* Default to not injecting environment variables */
-			current_watch->batch_timeout = 0;				   /* Default to disabled */
-			current_watch->processing_delay = 0;			   /* Default to no delay */
-			current_watch->suppressed = (struct timespec) {0}; /* Default to not suppressed */
+			current_watch->enabled = true;						 /* Default to enabled */
+			current_watch->log_output = false;					 /* Default to not logging command output */
+			current_watch->recursive = true;					 /* Default to recursive for directories */
+			current_watch->hidden = false;						 /* Default to not including hidden files */
+			current_watch->complexity = 1.0;					 /* Default complexity multiplier */
+			current_watch->environment = false;					 /* Default to not injecting environment variables */
+			current_watch->batch_timeout = 0;					 /* Default to disabled */
+			current_watch->processing_delay = 0;				 /* Default to no delay */
+			current_watch->suppressed = (struct timespec) { 0 }; /* Default to not suppressed */
 
 			/* Initialize exclude patterns */
 			current_watch->exclude = NULL;
@@ -528,8 +499,8 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 				return false;
 			}
 
-			key = config_trim(key);
-			value = config_trim(value);
+			key = string_trim(key);
+			value = string_trim(value);
 
 			/* Add variable to configuration */
 			if (!variable_add(config, key, value)) {
@@ -556,8 +527,8 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 				return false;
 			}
 
-			key = config_trim(key);
-			value = config_trim(value);
+			key = string_trim(key);
+			value = string_trim(value);
 
 			if (strcasecmp(key, "file") == 0) {
 				/* Expand variables in file path */
@@ -716,7 +687,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 				char *token, *saveptr;
 				token = strtok_r(patterns, ",", &saveptr);
 				while (token != NULL) {
-					char *trimmed_pattern = config_trim(token);
+					char *trimmed_pattern = string_trim(token);
 					if (strlen(trimmed_pattern) > 0) {
 						if (!exclude_add(current_watch, trimmed_pattern)) {
 							log_message(ERROR, "Failed to add exclude pattern '%s' at line %d",

@@ -243,7 +243,8 @@ void events_deferred(monitor_t *monitor, resource_t *resource) {
 			.wall_time = deferred_group->latest_wall,
 			.user_id = deferred_group->user_id,
 			.diff = NULL,
-			.baseline_snapshot = NULL};
+			.baseline_snapshot = NULL
+		};
 
 		/* Delegate to events_process() for consistent handling */
 		events_process(monitor, deferred_group->watchref, &aggregated_event, deferred_group->kind, true);
@@ -538,7 +539,7 @@ int events_timeout(monitor_t *monitor, struct timespec *current_time) {
 
 	/* Check batch timeout expiration for deferred events */
 	if (monitor->resources && monitor->resources->buckets) {
-		struct timespec earliest_batch = {0};
+		struct timespec earliest_batch = { 0 };
 		bool has_batches = false;
 
 		/* Iterate through resources with active batch timeouts */
@@ -1034,7 +1035,8 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 			.wall_time = subscription->resource->wall_time,
 			.user_id = event->user_id,
 			.diff = NULL,
-			.baseline_snapshot = NULL};
+			.baseline_snapshot = NULL
+		};
 
 		/* Check if the watch is suppressed */
 		if (watch->suppressed.tv_sec > 0) {
@@ -1045,7 +1047,7 @@ bool events_process(monitor_t *monitor, watchref_t watchref, event_t *event, kin
 				return false; /* Do not execute command */
 			} else {
 				log_message(INFO, "Suppression for watch '%s' expired", watch->name);
-				watch->suppressed = (struct timespec) {0};
+				watch->suppressed = (struct timespec) { 0 };
 			}
 		}
 

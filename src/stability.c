@@ -650,7 +650,8 @@ bool stability_execute(monitor_t *monitor, check_t *check, subscription_t *root,
 		.wall_time = root->resource->wall_time,
 		.user_id = getuid(),
 		.diff = diff,
-		.baseline_snapshot = current_snapshot};
+		.baseline_snapshot = current_snapshot
+	};
 
 	/* Set the executing flag for the root resource before starting any commands */
 	root->resource->executing = true;
@@ -664,7 +665,7 @@ bool stability_execute(monitor_t *monitor, check_t *check, subscription_t *root,
 			clock_gettime(CLOCK_MONOTONIC, &current_time);
 			if (!timespec_before(&current_time, &watch->suppressed)) {
 				log_message(INFO, "Suppression for watch '%s' expired.", watch->name);
-				watch->suppressed = (struct timespec){0};
+				watch->suppressed = (struct timespec) { 0 };
 				need_stability_reset = true;
 			}
 		}

@@ -5,10 +5,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* Registry configuration */
-#define REGISTRY_INITIAL_CAPACITY 256
-#define REGISTRY_GROWTH_FACTOR 2
-#define WATCHREF_INVALID ((watchref_t){0, 0})
+#define REGISTRY_INITIAL_CAPACITY 256         /* Initial number of watch slots in registry */
+#define REGISTRY_GROWTH_FACTOR 2              /* Multiplier for expanding registry capacity */
+#define WATCHREF_INVALID ((watchref_t){0, 0}) /* Invalid watch reference constant */
 
 /* Watch lifecycle states */
 typedef enum {

@@ -351,7 +351,7 @@ static protocol_t protocol_enable(monitor_t *monitor, const char *command_text) 
 		if (was_enabled) {
 			array_add(error_watches, strdup(watch_names->items[i]));
 			array_add(error_messages, strdup("already enabled"));
-		} else if (monitor_activate(monitor, watchref)) {
+		} else if (monitor_enable(monitor, watchref)) {
 			array_add(enabled_names, strdup(watch_names->items[i]));
 		} else {
 			array_add(error_watches, strdup(watch_names->items[i]));

@@ -1620,7 +1620,7 @@ void monitor_stop(monitor_t *monitor) {
 }
 
 /* Activate a watch dynamically */
-bool monitor_activate(monitor_t *monitor, watchref_t watchref) {
+bool monitor_enable(monitor_t *monitor, watchref_t watchref) {
 	if (!monitor || !watchref_valid(watchref)) return false;
 
 	/* Try to acquire reload mutex to avoid interference with reload operations */
@@ -1638,10 +1638,10 @@ bool monitor_activate(monitor_t *monitor, watchref_t watchref) {
 		return true;
 	}
 
-	/* Watch might be inactive, try to transition it */
+	/* Watch might be disabled, try to transition it */
 	if (!watch) {
 		pthread_rwlock_wrlock(&monitor->registry->lock);
-		bool was_inactive = false;
+		bool was_disabled = false;
 
 		/* Defensive validation: bounds check, generation check, and state check */
 		if (watchref.watch_id < monitor->registry->capacity &&
@@ -1650,7 +1650,7 @@ bool monitor_activate(monitor_t *monitor, watchref_t watchref) {
 
 			monitor->registry->states[watchref.watch_id] = WATCH_STATE_ACTIVE;
 			monitor->registry->count++;
-			was_inactive = true;
+			was_disabled = true;
 
 			log_message(DEBUG, "Transitioned watch (watch_id=%u, gen=%u) from INACTIVE to ACTIVE",
 						watchref.watch_id, watchref.generation);
@@ -1658,7 +1658,7 @@ bool monitor_activate(monitor_t *monitor, watchref_t watchref) {
 		pthread_rwlock_unlock(&monitor->registry->lock);
 
 		/* Invalid reference, neither inactive nor active */
-		if (!was_inactive) {
+		if (!was_disabled) {
 			log_message(WARNING, "Cannot activate watch, invalid reference (watch_id=%u, gen=%u)",
 						watchref.watch_id, watchref.generation);
 			pthread_mutex_unlock(&monitor->reload_mutex);
