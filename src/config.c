@@ -4,72 +4,186 @@
 #include <errno.h>
 #include <fnmatch.h>
 #include <limits.h>
+#include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 #include "logger.h"
 #include "registry.h"
 #include "utilities.h"
 
-/* Canonize a file path using realpath(), with graceful fallback */
-static char *config_canonize(const char *path, int line_number) {
-	if (path == NULL) {
+/* Normalizes a path by resolving '.' and '..' components */
+static char *path_normalize(const char *path) {
+	if (path == NULL || path[0] != '/') return NULL;
+
+	char *path_copy = strdup(path);
+	if (path_copy == NULL) {
+		log_message(ERROR, "Failed to allocate memory for path normalization");
 		return NULL;
 	}
 
-	char resolved_path[PATH_MAX];
-	char absolute_path[PATH_MAX];
-	char *result;
+	size_t path_len = strlen(path);
+	/* Allocate enough space for worst case, each char could be a separate component */
+	char **components = malloc((path_len / 2 + 2) * sizeof(char *));
+	if (components == NULL) {
+		log_message(ERROR, "Failed to allocate memory for path components");
+		free(path_copy);
+		return NULL;
+	}
 
-	/* First try realpath on the original path (handles both absolute and relative) */
-	if (realpath(path, resolved_path) != NULL) {
-		/* Success - path exists and was canonicalized */
-		log_message(DEBUG, "Canonized path '%s' -> '%s' at line %d", path,
-					resolved_path, line_number);
-		result = strdup(resolved_path);
-	} else {
-		/* realpath() failed - need to construct absolute path if relative */
-		if (path[0] == '/') {
-			/* Already absolute, just use it */
-			log_message(DEBUG, "Failed to canonicalize absolute path '%s' at line %d: %s",
-						path, line_number, strerror(errno));
-			result = strdup(path);
+	int component_count = 0;
+	char *strtok_saveptr;
+	/* Skip the leading '/' and tokenize path components */
+	char *path_token = strtok_r(path_copy + 1, "/", &strtok_saveptr);
+
+	while (path_token != NULL) {
+		if (strcmp(path_token, ".") == 0) {
+			/* Ignore current directory references */
+		} else if (strcmp(path_token, "..") == 0) {
+			/* Handle parent directory - remove last component if any */
+			if (component_count > 0) {
+				component_count--; /* Remove last component from stack */
+			}
 		} else {
-			/* Relative path - make it absolute based on current working directory */
-			if (getcwd(absolute_path, sizeof(absolute_path)) == NULL) {
-				log_message(ERROR, "Failed to get current working directory at line %d: %s",
-							line_number, strerror(errno));
+			/* Regular path component */
+			components[component_count++] = path_token;
+		}
+		path_token = strtok_r(NULL, "/", &strtok_saveptr);
+	}
+
+	/* Calculate required buffer size for result */
+	size_t result_size = 2; /* Start with "/\0" */
+	for (int i = 0; i < component_count; i++) {
+		result_size += strlen(components[i]);		/* Add component length */
+		if (i < component_count - 1) result_size++; /* Add separator */
+	}
+
+	char *result = malloc(result_size);
+	if (result == NULL) {
+		log_message(ERROR, "Failed to allocate memory for normalized path");
+		free(path_copy);
+		free(components);
+		return NULL;
+	}
+
+	/* Build the normalized path */
+	char *write_ptr = result;
+	*write_ptr++ = '/';
+	for (int i = 0; i < component_count; i++) {
+		size_t component_len = strlen(components[i]);
+		memcpy(write_ptr, components[i], component_len);
+		write_ptr += component_len;
+		if (i < component_count - 1) *write_ptr++ = '/';
+	}
+	*write_ptr = '\0';
+
+	free(path_copy);
+	free(components);
+
+	return result;
+}
+
+/* Canonize a file path using realpath(), with graceful, normalizing fallback */
+static char *path_canonize(const char *path, int line_number) {
+	if (path == NULL) return NULL;
+
+	char expanded_path[PATH_MAX];
+	const char *effective_path = path;
+
+	/* Handle tilde expansion for paths starting with '~/' or just '~' */
+	if (path[0] == '~' && (path[1] == '/' || path[1] == '\0')) {
+		const char *home_path = NULL;
+		struct passwd *passwd_entry = getpwuid(getuid());
+
+		if (passwd_entry != NULL) {
+			home_path = passwd_entry->pw_dir;
+		}
+
+		if (home_path == NULL || *home_path == '\0') {
+			log_message(WARNING, "Failed to expand tilde in path '%s' at line %d, home directory not found",
+						path, line_number);
+			/* Proceed with the literal path, which is the best we can do */
+		} else {
+			/* Concatenate home_path with remainder of path (skip the '~') */
+			int result = snprintf(expanded_path, sizeof(expanded_path), "%s%s", home_path, path + 1);
+			if (result < 0 || result >= (int) sizeof(expanded_path)) {
+				log_message(ERROR, "Path with expanded tilde is too long for '%s' at line %d",
+							path, line_number);
 				return NULL;
 			}
-
-			/* Construct absolute path */
-			int ret = snprintf(resolved_path, sizeof(resolved_path), "%s/%s", absolute_path, path);
-			if (ret >= (int) sizeof(resolved_path)) {
-				log_message(ERROR, "Constructed path too long at line %d", line_number);
-				return NULL;
-			}
-
-			/* Try to canonicalize the constructed absolute path */
-			if (realpath(resolved_path, absolute_path) != NULL) {
-				log_message(DEBUG, "Canonized relative path '%s' -> '%s' at line %d", path,
-							absolute_path, line_number);
-				result = strdup(absolute_path);
-			} else {
-				/* Use the constructed absolute path anyway */
-				log_message(DEBUG, "Failed to canonicalize constructed path '%s' at line %d: %s",
-							resolved_path, line_number, strerror(errno));
-				result = strdup(resolved_path);
-			}
+			effective_path = expanded_path;
+			log_message(DEBUG, "Expanded tilde in path '%s' -> '%s' at line %d", path, effective_path,
+						line_number);
 		}
 	}
 
-	if (result == NULL) {
-		log_message(ERROR, "Memory allocation failed for path at line %d", line_number);
+	char canon_path[PATH_MAX];
+
+	/* Handle existing paths (relative or absolute) with realpath() */
+	if (realpath(effective_path, canon_path) != NULL) {
+		log_message(DEBUG, "Canonized path '%s' -> '%s' at line %d", path, canon_path, line_number);
+		char *result = strdup(canon_path);
+		if (result == NULL) {
+			log_message(ERROR, "Memory allocation failed for path at line %d", line_number);
+		}
+		return result;
 	}
 
-	return result;
+	/* realpath() failed, construct an absolute path and normalize manually */
+	log_message(DEBUG, "realpath for '%s' failed at line %d: %s, attempting manual normalization",
+				effective_path, line_number, strerror(errno));
+
+	char temp_path[PATH_MAX];
+
+	if (effective_path[0] != '/') {
+		/* Path is relative, so construct an absolute path */
+		char absolute_path[PATH_MAX];
+		if (getcwd(absolute_path, sizeof(absolute_path)) == NULL) {
+			log_message(ERROR, "Failed to get current working directory at line %d: %s", line_number,
+						strerror(errno));
+			return NULL;
+		}
+
+		int result = snprintf(temp_path, sizeof(temp_path), "%s/%s", absolute_path, effective_path);
+		if (result < 0 || result >= (int) sizeof(temp_path)) {
+			log_message(ERROR, "Constructed path for '%s' is too long at line %d", effective_path,
+						line_number);
+			return NULL;
+		}
+	} else {
+		/* Path is already absolute */
+		snprintf(temp_path, sizeof(temp_path), "%s", effective_path);
+	}
+
+	/* Try realpath() again on the constructed absolute path */
+	if (realpath(temp_path, canon_path) != NULL) {
+		log_message(DEBUG, "Canonized constructed path '%s' -> '%s' at line %d", temp_path, canon_path,
+					line_number);
+		char *result = strdup(canon_path);
+		if (result == NULL) {
+			log_message(ERROR, "Memory allocation failed for path at line %d", line_number);
+		}
+		return result;
+	}
+
+	/* Normalize the constructed path manually without filesystem access */
+	log_message(DEBUG, "Second realpath for '%s' failed, manually normalizing", temp_path);
+	char *normalized_path = path_normalize(temp_path);
+	if (normalized_path == NULL) {
+		log_message(ERROR, "Failed to normalize path '%s' at line %d", temp_path, line_number);
+		/* Fallback to the non-normalized constructed path if normalization fails */
+		char *result = strdup(temp_path);
+		if (result == NULL) {
+			log_message(ERROR, "Memory allocation failed for path at line %d", line_number);
+		}
+		return result;
+	}
+
+	log_message(DEBUG, "Normalized path '%s' -> '%s' at line %d", path, normalized_path, line_number);
+	return normalized_path;
 }
 
 /* Parse event type string */
@@ -540,7 +654,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 					return false;
 				}
 				current_watch->target = WATCH_FILE;
-				current_watch->path = config_canonize(expanded_value, line_number);
+				current_watch->path = path_canonize(expanded_value, line_number);
 				free(expanded_value);
 				if (current_watch->path == NULL) {
 					watch_destroy(current_watch);
@@ -557,7 +671,7 @@ bool config_parse(config_t *config, registry_t *registry, const char *filename) 
 					return false;
 				}
 				current_watch->target = WATCH_DIRECTORY;
-				current_watch->path = config_canonize(expanded_value, line_number);
+				current_watch->path = path_canonize(expanded_value, line_number);
 				free(expanded_value);
 				if (current_watch->path == NULL) {
 					watch_destroy(current_watch);
