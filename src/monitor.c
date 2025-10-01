@@ -1456,6 +1456,22 @@ bool monitor_sync(monitor_t *monitor, const char *path) {
 	bool path_exists = (stat(path, &info) == 0);
 	bool list_modified = false;
 
+	/* Handle atomic file save race: retry only if file doesn't exist and we have a watcher */
+	watcher_t *existing = (!path_exists && errno == ENOENT) ? watcher_find(monitor, path) : NULL;
+	watch_t *watch = existing ? registry_get(monitor->registry, existing->watchref) : NULL;
+
+	if (watch && watch->target == WATCH_FILE) {
+		/* Retry up to 3 times with exponential backoff for atomic saves */
+		for (int retry = 0; retry < 3; retry++) {
+			usleep(5000 * (1 << retry)); /* 5ms, 10ms, 20ms */
+			path_exists = (stat(path, &info) == 0);
+			if (path_exists) {
+				log_message(DEBUG, "File appeared after retry %d for atomic save: %s", retry + 1, path);
+				break;
+			}
+		}
+	}
+
 	if (!path_exists) {
 		/* Path does not exist, clean up only if it was being watched */
 		if (!watcher_find(monitor, path)) {
