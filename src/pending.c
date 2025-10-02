@@ -434,11 +434,11 @@ static watchref_t proxy_create(monitor_t *monitor, const watch_t *watch, watchre
 	proxy_watch->filter = EVENT_STRUCTURE;
 	proxy_watch->enabled = true;
 	proxy_watch->command = NULL;
+	proxy_watch->recursive = false;
 	proxy_watch->is_dynamic = false;
 	proxy_watch->source_pattern = NULL;
 
 	/* Copy relevant properties from source watch */
-	proxy_watch->recursive = watch->recursive;
 	proxy_watch->hidden = watch->hidden;
 
 	/* Add to registry */
