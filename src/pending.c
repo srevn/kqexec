@@ -156,6 +156,10 @@ static char *pending_parent(const char *target_path) {
 
 	/* Walk up the directory tree to find the deepest existing directory */
 	while (strlen(test_path) > 1) {
+		char *last_slash = strrchr(test_path, '/');
+		if (!last_slash || last_slash == test_path) break;
+		*last_slash = '\0';
+
 		if (pending_directory(test_path)) {
 			/* Found an existing directory - validate if it's reasonable for monitoring */
 			if (pending_reasonable(test_path)) {
@@ -167,10 +171,6 @@ static char *pending_parent(const char *target_path) {
 							test_path, target_path);
 			}
 		}
-
-		char *last_slash = strrchr(test_path, '/');
-		if (!last_slash || last_slash == test_path) break;
-		*last_slash = '\0';
 	}
 
 	free(test_path);
